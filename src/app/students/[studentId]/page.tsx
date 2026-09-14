@@ -212,9 +212,11 @@ export default function StudentWorkspacePage() {
             </div>
           </div>
           <div className="flex gap-3">
-            <Link href={`/personal?studentId=${studentId}`}>
-              <SecondaryButton>Edit Profile</SecondaryButton>
-            </Link>
+            {applications.length > 0 && (
+              <Link href={`/students/${studentId}/applications/${applications[0].id}/intake/student-details`}>
+                <SecondaryButton>Edit / Complete Profile</SecondaryButton>
+              </Link>
+            )}
             <PrimaryButton onClick={() => setShowNewAppForm(!showNewAppForm)}>
               + New Application
             </PrimaryButton>

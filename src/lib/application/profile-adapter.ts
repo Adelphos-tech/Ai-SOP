@@ -23,9 +23,14 @@ export function adaptProfile(
   const anyProfile = (profileData || {}) as any;
 
   // Extract fields from the persistent profile format
+  // Canonical (intake) keys are primary; legacy keys are fallbacks
+  // for compatibility with profiles created before the 9-section intake.
+  // Legacy data is only used where canonical data is absent — never overwrites.
   const personalData = anyProfile.personalData || {};
+  const legacyPersonalDetails = anyProfile.personalDetails || {};
   const education = anyProfile.education || [];
   const englishTesting = anyProfile.englishTesting || {};
+  const legacyEnglishProficiency = anyProfile.englishProficiency || {};
   const experience = anyProfile.experience || [];
   const projects = anyProfile.projects || [];
   const achievements = anyProfile.achievements || [];
@@ -38,15 +43,15 @@ export function adaptProfile(
   // with optional fields that the pipeline doesn't require
   const profile: any = {
     personalDetails: {
-      firstName: personalData.firstName || student?.firstName || "",
-      middleName: personalData.middleName || "",
-      lastName: personalData.lastName || student?.lastName || "",
-      dateOfBirth: personalData.dateOfBirth || "",
-      gender: personalData.gender || "",
-      nationality: personalData.nationality || "",
-      currentCity: personalData.currentCity || "",
-      currentCountry: personalData.currentCountry || "",
-      languages: personalData.languages || "",
+      firstName: personalData.firstName || legacyPersonalDetails.firstName || student?.firstName || "",
+      middleName: personalData.middleName || legacyPersonalDetails.middleName || "",
+      lastName: personalData.lastName || legacyPersonalDetails.lastName || student?.lastName || "",
+      dateOfBirth: personalData.dateOfBirth || legacyPersonalDetails.dateOfBirth || "",
+      gender: personalData.gender || legacyPersonalDetails.gender || "",
+      nationality: personalData.nationality || legacyPersonalDetails.nationality || "",
+      currentCity: personalData.currentCity || legacyPersonalDetails.currentCity || "",
+      currentCountry: personalData.currentCountry || legacyPersonalDetails.currentCountry || "",
+      languages: personalData.languages || legacyPersonalDetails.languages || "",
     },
     education: education.map((e: any) => ({
       id: e.id || "",
@@ -62,23 +67,23 @@ export function adaptProfile(
       status: e.status || "",
     })),
     englishProficiency: {
-      testType: englishTesting.testType || "",
-      status: englishTesting.status || "",
-      overallScore: englishTesting.overallScore || "",
-      listening: englishTesting.listening || "",
-      reading: englishTesting.reading || "",
-      writing: englishTesting.writing || "",
-      speaking: englishTesting.speaking || "",
+      testType: englishTesting.testType || legacyEnglishProficiency.testType || "",
+      status: englishTesting.status || legacyEnglishProficiency.status || "",
+      overallScore: englishTesting.overallScore || legacyEnglishProficiency.overallScore || "",
+      listening: englishTesting.listening || legacyEnglishProficiency.listening || "",
+      reading: englishTesting.reading || legacyEnglishProficiency.reading || "",
+      writing: englishTesting.writing || legacyEnglishProficiency.writing || "",
+      speaking: englishTesting.speaking || legacyEnglishProficiency.speaking || "",
     },
     writingPreferences: {
       actualEnglishProficiency: {
-        testType: englishTesting.testType || "",
-        status: englishTesting.status || "",
-        overallScore: englishTesting.overallScore || "",
-        listening: englishTesting.listening || "",
-        reading: englishTesting.reading || "",
-        writing: englishTesting.writing || "",
-        speaking: englishTesting.speaking || "",
+        testType: englishTesting.testType || legacyEnglishProficiency.testType || "",
+        status: englishTesting.status || legacyEnglishProficiency.status || "",
+        overallScore: englishTesting.overallScore || legacyEnglishProficiency.overallScore || "",
+        listening: englishTesting.listening || legacyEnglishProficiency.listening || "",
+        reading: englishTesting.reading || legacyEnglishProficiency.reading || "",
+        writing: englishTesting.writing || legacyEnglishProficiency.writing || "",
+        speaking: englishTesting.speaking || legacyEnglishProficiency.speaking || "",
       },
       sopWritingProfile: {
         level: writingPreferences.level || preferences.level || "Natural Professional",
