@@ -46,7 +46,7 @@ function extractStudentFacts(profile: any): StudentFact[] {
       facts.push({
         factId: `experience-${i}`,
         factType: "experience",
-        content: [e.role, e.organization, e.responsibilities, e.keyAchievements, e.skillsLearned].filter(Boolean).join(" "),
+        content: [e.role, e.organization, e.responsibilities, e.keyAchievements, e.skillsLearned, (e as any).keyLearning, (e as any).relevanceToMasters].filter(Boolean).join(" "),
       });
     });
   }
@@ -57,7 +57,7 @@ function extractStudentFacts(profile: any): StudentFact[] {
       facts.push({
         factId: `project-${i}`,
         factType: "project",
-        content: [p.name, p.description, p.studentRole, p.technologies, p.outcome, p.whatLearned].filter(Boolean).join(" "),
+        content: [p.name, p.description, p.studentRole, p.technologies, p.outcome, p.whatLearned, (p as any).objective, (p as any).methods, (p as any).challenges, (p as any).whyChosen].filter(Boolean).join(" "),
       });
     });
   }
@@ -98,11 +98,32 @@ function extractStudentFacts(profile: any): StudentFact[] {
   // Career goals
   if (profile?.careerGoals) {
     const cg = profile.careerGoals;
+    const cgStructured = (profile as any).careerGoalsStructured;
     facts.push({
       factId: "career-goals",
       factType: "careerGoals",
-      content: [cg.whyField, cg.whyProgram, cg.shortTermGoals, cg.longTermGoals, cg.desiredRole, cg.industries].filter(Boolean).join(" "),
+      content: [
+        cg.whyField, cg.whyProgram, cg.shortTermGoals, cg.longTermGoals, cg.desiredRole, cg.industries,
+        cgStructured?.shortTerm?.role, cgStructured?.shortTerm?.industry, cgStructured?.shortTerm?.responsibilities,
+        cgStructured?.longTerm?.vision, cgStructured?.longTerm?.goals, cgStructured?.longTerm?.impact,
+      ].filter(Boolean).join(" "),
     });
+  }
+
+  // Skills
+  if ((profile as any)?.skills) {
+    const sk = (profile as any).skills;
+    const allSkills = [
+      ...(sk.technical || []), ...(sk.tools || []), ...(sk.software || []),
+      ...(sk.programming || []), ...(sk.domain || []), ...(sk.soft || []),
+    ];
+    if (allSkills.length > 0) {
+      facts.push({
+        factId: "skills",
+        factType: "skills",
+        content: allSkills.join(", "),
+      });
+    }
   }
 
   // Personal story

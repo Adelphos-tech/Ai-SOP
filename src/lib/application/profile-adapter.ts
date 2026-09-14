@@ -106,18 +106,24 @@ export function adaptProfile(
       currentlyWorking: e.currentlyWorking || false,
       location: e.location || "",
       responsibilities: e.responsibilities || "",
-      keyAchievements: e.keyAchievements || "",
-      skillsLearned: e.skillsLearned || "",
+      keyAchievements: e.keyAchievements || e.achievements || "",
+      skillsLearned: e.skillsLearned || e.skillsUsed || "",
+      keyLearning: e.keyLearning || "",
+      relevanceToMasters: e.relevanceToMasters || "",
     })),
     projects: projects.map((p: any) => ({
       id: p.id || "",
       name: p.name || "",
       type: p.type || "",
       description: p.description || "",
-      studentRole: p.studentRole || "",
+      studentRole: p.studentRole || p.role || "",
       technologies: p.technologies || "",
+      objective: p.objective || "",
+      methods: p.methods || "",
       outcome: p.outcome || "",
+      challenges: p.challenges || "",
       whatLearned: p.whatLearned || "",
+      whyChosen: p.whyChosen || "",
     })),
     research: (anyProfile.research || []).map((r: any) => ({
       topic: r.topic || "",
@@ -229,6 +235,12 @@ export function adaptProfile(
       profile.careerGoals.returnPlans = cg.longTerm.homeCountryPlans || "";
     }
   }
+
+  // Preserve structured career goals for the pipeline (separate short-term/long-term)
+  (profile as any).careerGoalsStructured = {
+    shortTerm: cg.shortTerm || {},
+    longTerm: cg.longTerm || {},
+  };
 
   return profile as StudentProfile;
 }

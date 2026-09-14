@@ -101,9 +101,10 @@ export function buildEvidenceLedger(args: {
     const singletons = [
       ["personalDetails", "PERSONAL"], ["careerGoals", "CAREER"],
       ["personalStory", "STORY"], ["englishProficiency", "ENGLISH"],
+      ["skills", "SKILLS"],
     ] as const;
     for (const [field, suffix] of singletons) {
-      appendEntry(studentEntries, `SF-${suffix}`, sf[field], "student", `studentFacts.${field}`);
+      appendEntry(studentEntries, `SF-${suffix}`, (sf as any)[field], "student", `studentFacts.${field}`);
     }
     // Phase 17: Project-specific clarifications (student-approved, benchmark-only)
     // Phase 23: Use the fact's own ID (e.g., SF-CHALLENGE-PROJECT-001, SF-PROJECT-MOTIVATION-001)

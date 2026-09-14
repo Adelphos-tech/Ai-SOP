@@ -41,6 +41,8 @@ export interface AiInput {
     responsibilities: string;
     keyAchievements: string;
     skillsLearned: string;
+    keyLearning: string;
+    relevanceToMasters: string;
   }>;
   projects: Array<{
     name: string;
@@ -48,9 +50,21 @@ export interface AiInput {
     description: string;
     studentRole: string;
     technologies: string;
+    objective: string;
+    methods: string;
     outcome: string;
+    challenges: string;
     whatLearned: string;
+    whyChosen: string;
   }>;
+  skills: {
+    technical: string[];
+    tools: string[];
+    software: string[];
+    programming: string[];
+    domain: string[];
+    soft: string[];
+  };
   research: Array<{
     topic: string;
     institution: string;
@@ -161,12 +175,19 @@ export function buildAiInput(profile: StudentProfile): AiInput {
       startDate: e.startDate, endDate: e.endDate, currentlyWorking: e.currentlyWorking,
       location: e.location, responsibilities: e.responsibilities,
       keyAchievements: e.keyAchievements, skillsLearned: e.skillsLearned,
+      keyLearning: (e as any).keyLearning || "",
+      relevanceToMasters: (e as any).relevanceToMasters || "",
     })),
     projects: (p.projects || []).map(pr => ({
       name: pr.name, type: pr.type, description: pr.description,
       studentRole: pr.studentRole, technologies: pr.technologies,
       outcome: pr.outcome, whatLearned: pr.whatLearned,
+      objective: (pr as any).objective || "",
+      methods: (pr as any).methods || "",
+      challenges: (pr as any).challenges || "",
+      whyChosen: (pr as any).whyChosen || "",
     })),
+    skills: (p as any).skills || { technical: [], tools: [], software: [], programming: [], domain: [], soft: [] },
     research: (p.research || []).map(r => ({
       topic: r.topic, institution: r.institution, role: r.role,
       description: r.description, outcome: r.outcome,
