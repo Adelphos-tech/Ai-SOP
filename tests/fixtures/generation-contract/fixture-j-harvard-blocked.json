@@ -1,0 +1,50 @@
+{
+  "fixtureId": "J",
+  "description": "Harvard saved case → AI writing BLOCKED",
+  "profile": {
+    "factSheetApproval": { "approved": true, "requirementsConfirmed": true },
+    "personalDetails": { "firstName": "Test", "lastName": "Student", "nationality": "Indian", "currentCity": "Mumbai", "currentCountry": "India", "languages": "English" },
+    "education": [{ "level": "Bachelor's", "institution": "IIT", "degree": "BTech", "specialization": "CS", "startYear": "2019", "endYear": "2023", "percentage": "85", "cgpa": "8.5", "cgpaScale": "10", "status": "Completed" }],
+    "experience": [{ "type": "Internship", "organization": "Google", "role": "SWE", "startDate": "2022-05", "endDate": "2022-08", "currentlyWorking": false, "location": "Bangalore", "responsibilities": "ML", "keyAchievements": "15%", "skillsLearned": "Python" }],
+    "projects": [], "research": [], "publications": [], "achievements": [],
+    "careerGoals": { "whyField": "Data", "whyProgram": "Best", "shortTermGoals": "DS", "longTermGoals": "Lead", "desiredRole": "DS", "industries": "Tech", "returnHomeCountry": "Yes", "returnPlans": "Work" },
+    "personalStory": { "motivation": "Passion", "influencingExperience": "Intern", "challenges": "None", "proudOf": "Project", "qualities": "Hardworking", "leadershipExample": "Lead", "teamworkExample": "Team", "outsideAcademics": "Volunteer", "communityService": "Teaching", "familyBackground": "Middle" },
+    "englishProficiency": { "testType": "IELTS", "status": "Completed", "overallScore": "7", "listening": "7", "reading": "7", "writing": "7", "speaking": "7" },
+    "writingPreferences": { "sopWritingProfile": { "level": "Natural Professional", "tone": "Professional", "personalization": "Balanced", "technicalDetail": "Medium", "openingStyle": "Let AI Choose", "sopLength": "900-1100" } }
+  },
+  "brief": {
+    "applicationIdentity": { "country": "USA", "university": "Harvard University", "program": "Data Science", "degreeLevel": "Master's", "intake": "Fall", "intakeYear": "2027" },
+    "documents": [{
+      "documentType": "STATEMENT_OF_PURPOSE",
+      "documentTypeLabel": "Statement of Purpose",
+      "required": true,
+      "officialPrompt": { "rawText": "This is your chance to tell the Admissions Committee about your experiences, interests, future goals, etc.", "status": "VERIFIED", "provenance": { "sourceId": "SRC-HDS-002", "value": "experiences, interests, future goals", "status": "VERIFIED", "sourceUrl": "https://seas.harvard.edu/masters-data-science/how-apply", "sourceQuote": "experiences, interests, future goals", "verifiedAt": "2026-09-09T17:20:00Z" } },
+      "wordLimit": { "min": null, "max": 1000, "status": "VERIFIED", "provenance": { "sourceId": "SRC-HDS-002", "value": "1000", "status": "VERIFIED", "sourceUrl": "https://seas.harvard.edu/masters-data-science/how-apply", "sourceQuote": "about 1,000 words", "verifiedAt": "2026-09-09T17:20:00Z" } },
+      "characterLimit": { "min": null, "max": null, "status": "NOT_SPECIFIED_BY_OFFICIAL_SOURCE", "provenance": null },
+      "requiredTopics": [
+        { "field": "requiredTopics", "value": "experiences", "status": "VERIFIED", "sourceId": "SRC-HDS-002", "sourceUrl": "https://seas.harvard.edu/masters-data-science/how-apply", "sourceQuote": "experiences", "verifiedAt": "2026-09-09T17:20:00Z" },
+        { "field": "requiredTopics", "value": "interests", "status": "VERIFIED", "sourceId": "SRC-HDS-002", "sourceUrl": "https://seas.harvard.edu/masters-data-science/how-apply", "sourceQuote": "interests", "verifiedAt": "2026-09-09T17:20:00Z" },
+        { "field": "requiredTopics", "value": "future goals", "status": "VERIFIED", "sourceId": "SRC-HDS-002", "sourceUrl": "https://seas.harvard.edu/masters-data-science/how-apply", "sourceQuote": "future goals", "verifiedAt": "2026-09-09T17:20:00Z" }
+      ],
+      "formatInstructions": [], "additionalQuestions": []
+    }],
+    "countryGuidance": { "items": [], "priority": "SECONDARY", "sourceId": null },
+    "sources": [{ "sourceId": "SRC-HDS-002", "title": "How to Apply", "url": "https://seas.harvard.edu/masters-data-science/how-apply", "officialDomain": "seas.harvard.edu", "domainVerified": true, "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE", "httpStatus": 200, "retrievedAt": "2026-09-09T17:20:00Z", "priority": "PRIMARY", "status": "ACTIVE" }],
+    "verification": { "status": "VERIFIED", "verifiedAt": "2026-09-09T17:20:00Z", "conflicts": [], "blockingIssues": [] },
+    "cacheKey": "harvard-ds-fall-2027", "createdAt": "2026-09-09T17:20:00Z", "expiresAt": null
+  },
+  "aiPolicy": {
+    "status": "AI_GENERATION_PROHIBITED",
+    "generationAllowed": false,
+    "editingAllowed": "UNKNOWN", "proofreadingAllowed": "UNKNOWN", "brainstormingAllowed": "UNKNOWN", "translationAllowed": "UNKNOWN",
+    "applicationAiMode": "AI_WRITING_BLOCKED",
+    "sources": [{ "sourceId": "AIPOL-HDS-001", "title": "Applying to Degree Programs — GSAS", "url": "https://gsas.harvard.edu/apply/applying-degree-programs", "officialDomain": "gsas.harvard.edu", "domainVerified": true, "sourceType": "OFFICIAL_APPLICATION_INSTRUCTIONS", "exactPolicyText": "Work may not be that of a third party nor that created by generative artificial intelligence.", "retrievedAt": "2026-09-09T17:25:00Z", "applicableScope": "All GSAS programs", "priority": "PRIMARY", "httpStatus": 200 }],
+    "verifiedAt": "2026-09-09T17:35:00Z", "cacheKey": "aipol-harvard", "expiresAt": "2026-09-16T17:35:00Z",
+    "blockingReasons": ["OFFICIAL_AI_POLICY_PROHIBITS_GENERATED_APPLICATION_CONTENT: Official policy prohibits AI-generated application materials."]
+  },
+  "expected": {
+    "status": "APPLICATION_AI_POLICY_BLOCK",
+    "clearedForWriting": false,
+    "blockingReasonCount": 1
+  }
+}

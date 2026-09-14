@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+.next-new/
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Private CV storage
+uploads/
+
+# Logs
+logs/
+*.log
+pm2-*.log
+
+# Backups and baselines
+backups/
+baselines/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+test-output/
+coverage/
+
+# Private data directory
+/opt/sop-ai-data/

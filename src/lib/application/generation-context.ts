@@ -1,0 +1,397 @@
+// ============================================================
+// DOCUMENT GENERATION CONTEXT LOADER
+// Phase SOP-AI-33
+// ============================================================
+// Loads all authoritative generation context from the persistent
+// database model using only IDs. The browser sends:
+//   { studentId, applicationId, documentId }
+//
+// The backend reconstructs:
+//   - Student profile
+//   - Application
+//   - Document
+//   - Writing requirement (if linked)
+//   - Requirement set (if linked)
+//   - Resolved prompt
+//   - Document type configuration
+//   - Merged official + default instructions
+// ============================================================
+
+import {
+  getStudent,
+  getStudentProfile,
+  getApplication,
+  getDocument,
+} from "./application-repository";
+import {
+  getWritingRequirement,
+  getRequirementSet,
+  getApplicationRequirementSet,
+} from "./requirements-repository";
+import {
+  DocumentType,
+  PromptSource,
+} from "./application-types";
+import {
+  getDefaultTemplate,
+} from "./default-templates";
+import {
+  getDocumentTypeConfig,
+  DocumentTypeConfig,
+  buildWritingInstructions,
+} from "./document-type-config";
+import { StudentProfileData } from "./application-types";
+
+export interface MergedPrompt {
+  promptText: string;
+  promptSource: PromptSource;
+  wordMin?: number;
+  wordMax?: number;
+  characterLimit?: number;
+  pageLimit?: number;
+  specialInstructions?: string;
+  facultyInstructions?: string;
+  formattingInstructions?: string;
+  writingRequirementId?: string;
+  requirementSetId?: string;
+  /** How the prompt was resolved */
+  resolutionPath: "OFFICIAL_VERIFIED" | "MANUAL" | "DEFAULT_TEMPLATE";
+  /** Whether official values were merged with default template */
+  mergedWithDefault: boolean;
+}
+
+export interface DocumentGenerationContext {
+  student: any;
+  profile: StudentProfileData | null;
+  application: any;
+  document: any;
+  documentTypeConfig: DocumentTypeConfig;
+  mergedPrompt: MergedPrompt;
+  /** Whether fact sheet is approved */
+  factSheetApproved: boolean;
+  /** Pre-generation completeness issues */
+  completenessIssues: string[];
+  /** Whether generation should be blocked */
+  blocked: boolean;
+  blockReasons: string[];
+}
+
+export interface LoadContextResult {
+  ok: boolean;
+  context?: DocumentGenerationContext;
+  error?: string;
+  statusCode?: number;
+}
+
+/**
+ * Load all generation context from the persistent DB model.
+ * Validates relationships and checks pre-generation completeness.
+ */
+export async function loadDocumentGenerationContext(
+  studentId: string,
+  applicationId: string,
+  documentId: string,
+): Promise<LoadContextResult> {
+  // ===== LOAD STUDENT =====
+  const student = await getStudent(studentId);
+  if (!student) {
+    return { ok: false, error: "Student not found", statusCode: 404 };
+  }
+
+  // ===== LOAD APPLICATION =====
+  const application = await getApplication(applicationId);
+  if (!application) {
+    return { ok: false, error: "Application not found", statusCode: 404 };
+  }
+
+  // ===== RELATIONSHIP VALIDATION =====
+  if (application.studentId !== studentId) {
+    return { ok: false, error: "Application does not belong to this student", statusCode: 403 };
+  }
+
+  // ===== LOAD DOCUMENT =====
+  const document = await getDocument(documentId);
+  if (!document) {
+    return { ok: false, error: "Document not found", statusCode: 404 };
+  }
+
+  // ===== RELATIONSHIP VALIDATION =====
+  if (document.applicationId !== applicationId) {
+    return { ok: false, error: "Document does not belong to this application", statusCode: 403 };
+  }
+
+  // ===== LOAD STUDENT PROFILE =====
+  const profile = await getStudentProfile(studentId);
+
+  // ===== LOAD WRITING REQUIREMENT (if linked) =====
+  let writingRequirement: any = null;
+  let requirementSet: any = null;
+
+  // Check if document has writingRequirementId (from DB column)
+  const pool = (await import("./db")).getDbPool();
+  const [docRows] = await pool.execute(
+    "SELECT writing_requirement_id FROM application_documents WHERE id = ?",
+    [documentId],
+  );
+  const writingRequirementId = (docRows as any[])[0]?.writing_requirement_id;
+
+  if (writingRequirementId) {
+    writingRequirement = await getWritingRequirement(writingRequirementId);
+    if (writingRequirement) {
+      // Verify writing requirement belongs to the application's requirement set
+      const appReqSet = await getApplicationRequirementSet(applicationId);
+      if (appReqSet?.requirementSet) {
+        requirementSet = appReqSet.requirementSet;
+        if (writingRequirement.requirementSetId !== requirementSet.id) {
+          return {
+            ok: false,
+            error: "Writing requirement does not belong to the application's requirement set",
+            statusCode: 403,
+          };
+        }
+      }
+    }
+  }
+
+  // ===== RESOLVE AND MERGE PROMPT =====
+  const mergedPrompt = resolveAndMergePrompt(document, writingRequirement);
+
+  // ===== LOAD DOCUMENT TYPE CONFIG =====
+  const documentTypeConfig = getDocumentTypeConfig(document.documentType);
+
+  // ===== CHECK FACT SHEET APPROVAL =====
+  let factSheetApproved = false;
+  if (profile) {
+    const anyProfile = profile as any;
+    factSheetApproved = anyProfile.factSheetApproval?.approved === true;
+  }
+
+  // ===== PRE-GENERATION COMPLETENESS CHECKS =====
+  const completenessIssues: string[] = [];
+  const blockReasons: string[] = [];
+
+  if (!factSheetApproved) {
+    blockReasons.push("FACT_SHEET_NOT_APPROVED: Student facts must be approved before generation.");
+  }
+
+  // Document-type-specific completeness
+  if (documentTypeConfig.recommenderPerspectiveRequired) {
+    // LOR requires recommender context
+    const hasRecommenderContext = checkRecommenderContext(profile);
+    if (!hasRecommenderContext) {
+      completenessIssues.push("MISSING_RECOMMENDER_CONTEXT: LOR requires recommender relationship context and specific examples.");
+      blockReasons.push("MISSING_REQUIRED_STUDENT_INFORMATION: Recommender context is required for LOR generation.");
+    }
+  }
+
+  if (documentTypeConfig.visaSpecificEvidence) {
+    // Visa SOP requires study rationale and home-country ties
+    const hasVisaEvidence = checkVisaEvidence(profile);
+    if (!hasVisaEvidence) {
+      completenessIssues.push("MISSING_VISA_EVIDENCE: Visa SOP requires study rationale and home-country/future plans evidence.");
+      blockReasons.push("MISSING_REQUIRED_STUDENT_INFORMATION: Visa-specific evidence is required for Visa SOP generation.");
+    }
+  }
+
+  // Check if profile has any meaningful data
+  if (profile) {
+    const hasPersonalData = profile.personalData && Object.keys(profile.personalData).length > 0;
+    const hasEducation = profile.education && profile.education.length > 0;
+    if (!hasPersonalData && !hasEducation) {
+      blockReasons.push("MISSING_REQUIRED_STUDENT_INFORMATION: Student profile has no meaningful data.");
+    }
+  } else {
+    blockReasons.push("MISSING_REQUIRED_STUDENT_INFORMATION: No student profile found.");
+  }
+
+  const blocked = blockReasons.length > 0;
+
+  return {
+    ok: true,
+    context: {
+      student,
+      profile,
+      application,
+      document,
+      documentTypeConfig,
+      mergedPrompt,
+      factSheetApproved,
+      completenessIssues,
+      blocked,
+      blockReasons,
+    },
+  };
+}
+
+/**
+ * Resolve and merge the prompt from the document and writing requirement.
+ *
+ * Priority:
+ * 1. If document has a writing requirement linked (OFFICIAL_VERIFIED), use official values
+ * 2. If document has a manual prompt (USER_PROVIDED_PORTAL_PROMPT, CONSULTANT_PROVIDED, CUSTOM), use it
+ * 3. If no prompt, fall back to D-Vivid default template
+ *
+ * When official information is partial (e.g., only word limit, no exact question),
+ * merge official constraints with D-Vivid default template structure.
+ */
+function resolveAndMergePrompt(document: any, writingRequirement: any): MergedPrompt {
+  const documentType = document.documentType as DocumentType;
+  const defaultTemplate = getDefaultTemplate(documentType);
+
+  // Case 1: Document has OFFICIAL_VERIFIED prompt source (linked to writing requirement)
+  if (document.promptSource === "OFFICIAL_VERIFIED" && writingRequirement) {
+    const officialPrompt = writingRequirement.promptText || document.promptText;
+    const officialWordMin = writingRequirement.wordMin || undefined;
+    const officialWordMax = writingRequirement.wordMax || undefined;
+    const officialCharLimit = writingRequirement.characterLimit || undefined;
+    const officialPageLimit = writingRequirement.pageLimit || undefined;
+    const officialSpecial = writingRequirement.specialInstructions || undefined;
+    const officialFaculty = writingRequirement.facultyInstructions || undefined;
+    const officialFormatting = writingRequirement.formattingInstructions || undefined;
+
+    // Check if official info is partial (has constraints but no exact question)
+    const hasOfficialQuestion = officialPrompt && officialPrompt.trim().length > 20;
+    const hasOfficialConstraints = !!(officialWordMax || officialCharLimit || officialPageLimit);
+
+    if (hasOfficialQuestion) {
+      // Full official prompt — use as-is, but add default structure guidance if no special instructions
+      const mergedSpecial = officialSpecial || (!hasOfficialConstraints ? defaultTemplate.specialInstructions : undefined);
+      return {
+        promptText: officialPrompt,
+        promptSource: "OFFICIAL_VERIFIED",
+        wordMin: officialWordMin,
+        wordMax: officialWordMax,
+        characterLimit: officialCharLimit,
+        pageLimit: officialPageLimit,
+        specialInstructions: mergedSpecial,
+        facultyInstructions: officialFaculty,
+        formattingInstructions: officialFormatting || defaultTemplate.formattingInstructions,
+        writingRequirementId: writingRequirement.id,
+        requirementSetId: writingRequirement.requirementSetId,
+        resolutionPath: "OFFICIAL_VERIFIED",
+        mergedWithDefault: !!(mergedSpecial && !officialSpecial),
+      };
+    } else if (hasOfficialConstraints) {
+      // Partial official: constraints but no question — merge with default template
+      return {
+        promptText: defaultTemplate.promptText,
+        promptSource: "OFFICIAL_VERIFIED",
+        wordMin: officialWordMin,
+        wordMax: officialWordMax,
+        characterLimit: officialCharLimit,
+        pageLimit: officialPageLimit,
+        specialInstructions: officialSpecial || defaultTemplate.specialInstructions,
+        facultyInstructions: officialFaculty,
+        formattingInstructions: officialFormatting || defaultTemplate.formattingInstructions,
+        writingRequirementId: writingRequirement.id,
+        requirementSetId: writingRequirement.requirementSetId,
+        resolutionPath: "OFFICIAL_VERIFIED",
+        mergedWithDefault: true,
+      };
+    } else {
+      // Official but no useful info — use default template
+      return {
+        promptText: defaultTemplate.promptText,
+        promptSource: "OFFICIAL_VERIFIED",
+        wordMin: defaultTemplate.wordMin,
+        wordMax: defaultTemplate.wordMax,
+        characterLimit: undefined,
+        pageLimit: defaultTemplate.pageLimit,
+        specialInstructions: defaultTemplate.specialInstructions,
+        formattingInstructions: defaultTemplate.formattingInstructions,
+        writingRequirementId: writingRequirement.id,
+        requirementSetId: writingRequirement.requirementSetId,
+        resolutionPath: "OFFICIAL_VERIFIED",
+        mergedWithDefault: true,
+      };
+    }
+  }
+
+  // Case 2: Document has DVIVID_DEFAULT_TEMPLATE
+  if (document.promptSource === "DVIVID_DEFAULT_TEMPLATE") {
+    return {
+      promptText: document.promptText || defaultTemplate.promptText,
+      promptSource: "DVIVID_DEFAULT_TEMPLATE",
+      wordMin: document.wordMin || defaultTemplate.wordMin,
+      wordMax: document.wordMax || defaultTemplate.wordMax,
+      characterLimit: document.characterLimit || undefined,
+      pageLimit: document.pageLimit || defaultTemplate.pageLimit,
+      specialInstructions: document.specialInstructions || defaultTemplate.specialInstructions,
+      formattingInstructions: document.formattingInstructions || defaultTemplate.formattingInstructions,
+      resolutionPath: "DEFAULT_TEMPLATE",
+      mergedWithDefault: false,
+    };
+  }
+
+  // Case 3: Document has a manual prompt (USER_PROVIDED_PORTAL_PROMPT, CONSULTANT_PROVIDED, CUSTOM)
+  return {
+    promptText: document.promptText,
+    promptSource: document.promptSource,
+    wordMin: document.wordMin || undefined,
+    wordMax: document.wordMax || undefined,
+    characterLimit: document.characterLimit || undefined,
+    pageLimit: document.pageLimit || undefined,
+    specialInstructions: document.specialInstructions || undefined,
+    facultyInstructions: document.facultyInstructions || undefined,
+    formattingInstructions: document.formattingInstructions || undefined,
+    resolutionPath: "MANUAL",
+    mergedWithDefault: false,
+  };
+}
+
+/**
+ * Check if the profile has recommender context for LOR.
+ */
+function checkRecommenderContext(profile: StudentProfileData | null): boolean {
+  if (!profile) return false;
+  // Check for recommender-related fields in the profile
+  const anyProfile = profile as any;
+  return !!(
+    anyProfile.recommenderContext ||
+    anyProfile.recommender ||
+    (anyProfile.experience && anyProfile.experience.length > 0)
+  );
+}
+
+/**
+ * Check if the profile has visa-specific evidence.
+ */
+function checkVisaEvidence(profile: StudentProfileData | null): boolean {
+  if (!profile) return false;
+  const anyProfile = profile as any;
+  const careerGoals = anyProfile.careerGoals;
+  return !!(
+    careerGoals &&
+    (careerGoals.whyField || careerGoals.whyProgram || careerGoals.returnHomeCountry || careerGoals.returnPlans)
+  );
+}
+
+/**
+ * Build the writing instructions string for the pipeline.
+ * Combines document-type config with merged prompt.
+ */
+export function buildPipelineWritingInstructions(ctx: DocumentGenerationContext): string {
+  const config = ctx.documentTypeConfig;
+  const merged = ctx.mergedPrompt;
+
+  const parts: string[] = [];
+  parts.push(buildWritingInstructions(config));
+
+  if (merged.mergedWithDefault) {
+    parts.push("\nNOTE: Official constraints are combined with D-Vivid default structural guidance. Official values take precedence. D-Vivid guidance is NOT university requirement.");
+  }
+
+  if (merged.specialInstructions) {
+    parts.push(`\nSPECIAL INSTRUCTIONS: ${merged.specialInstructions}`);
+  }
+
+  if (merged.facultyInstructions) {
+    parts.push(`\nFACULTY/RESEARCH INSTRUCTIONS: ${merged.facultyInstructions}`);
+  }
+
+  if (merged.formattingInstructions) {
+    parts.push(`\nFORMATTING INSTRUCTIONS: ${merged.formattingInstructions}`);
+  }
+
+  return parts.join("\n");
+}

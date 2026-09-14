@@ -1,0 +1,262 @@
+# ============================================================
+# CI/CD Pipeline for D-Vivid SOP AI Application
+# ============================================================
+# Triggers on push to main branch.
+#
+# Pipeline:
+#   1. Install dependencies
+#   2. Run all tests (must pass to proceed)
+#   3. Build Next.js production bundle
+#   4. Deploy to production server via SSH
+#   5. Health check — auto-rollback on failure
+# ============================================================
+
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual trigger
+
+env:
+  NODE_VERSION: "20"
+  APP_DIR: /opt/sop-ai-app
+  PM2_NAME: sop-app
+  HEALTH_URL: https://sop.adelphostech.com
+
+jobs:
+  # ============================================================
+  # Job 1: Test — all tests must pass
+  # ============================================================
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    env:
+      # Test database credentials (from GitHub Secrets)
+      SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+      SOP_TEST_DB_HOST: 127.0.0.1
+      SOP_TEST_DB_USER: sop_test
+      SOP_TEST_DB_NAME: sop_ai_app_test
+      SOP_DB_HOST: 127.0.0.1
+      SOP_DB_USER: sop_test
+      SOP_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+      SOP_DB_NAME: sop_ai_app_test
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: sop_ai_app_test
+          MYSQL_USER: sop_test
+          MYSQL_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize test database schema
+        run: npx tsx scripts/init-test-db.ts
+        env:
+          SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Run Phase 33 tests
+        run: npx tsx tests/phase-33-document-generation-integration-tests.ts
+
+      - name: Run Phase 33B tests
+        run: npx tsx tests/phase-33b-finalizer-provenance-tests.ts
+
+      - name: Run Phase 34 tests
+        run: npx tsx tests/phase-34-consultant-review-workflow-tests.ts
+
+      - name: Run Phase 34A tests
+        run: npx tsx tests/phase-34a-test-isolation-and-export-tests.ts
+
+      - name: Run Phase 34C tests
+        run: npx tsx tests/phase-34c-finalizer-claim-metadata-retry-tests.ts
+
+      - name: Run Phase 34D tests
+        run: npx tsx tests/phase-34d-remove-component-ids-from-output-tests.ts
+
+      - name: Run Phase 38 tests
+        run: npx tsx tests/phase-38-prompt-contract-tests.ts
+
+      - name: Run CV parse classification tests
+        run: npx tsx tests/phase-cv-parse-classification-tests.ts
+
+  # ============================================================
+  # Job 2: Build — production bundle
+  # ============================================================
+  build:
+    name: Build Production
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build
+          path: .next/
+          retention-days: 7
+
+  # ============================================================
+  # Job 3: Deploy — SSH to production, swap, health check
+  # ============================================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js (for rsync)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
+
+      # ============================================================
+      # SSH setup
+      # ============================================================
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      # ============================================================
+      # Deploy: rsync code + build, then run safe deploy script
+      # ============================================================
+      - name: Deploy to server
+        id: deploy
+        run: |
+          BUILD_ID="ci-${{ github.sha }}-${{ github.run_number }}"
+          echo "Deploying BUILD_ID=$BUILD_ID"
+
+          # Sync source code (excluding secrets, node_modules, .next)
+          rsync -avz --delete \
+            --exclude node_modules \
+            --exclude .next \
+            --exclude .git \
+            --exclude .env.local \
+            --exclude uploads \
+            --exclude logs \
+            --exclude backups \
+            --exclude baselines \
+            ./ root@${{ secrets.DEPLOY_HOST }}:${{ env.APP_DIR }}/
+
+          # Sync the build output
+          rsync -avz --delete \
+            .next/ \
+            root@${{ secrets.DEPLOY_HOST }}:${{ env.APP_DIR }}/.next/
+
+          # Run safe deploy script on server
+          ssh root@${{ secrets.DEPLOY_HOST }} \
+            "cd ${{ env.APP_DIR }} && NEXT_PUBLIC_BUILD_ID=$BUILD_ID bash scripts/ci-deploy.sh"
+
+          echo "deploy_done=true" >> $GITHUB_OUTPUT
+
+      # ============================================================
+      # Health check — verify production is responding
+      # ============================================================
+      - name: Health check
+        id: health
+        run: |
+          echo "Waiting for PM2 to stabilize..."
+          sleep 5
+
+          MAX_RETRIES=5
+          RETRY=0
+          HEALTHY=false
+
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            RETRY=$((RETRY + 1))
+            echo "Health check attempt $RETRY/$MAX_RETRIES..."
+
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.HEALTH_URL }} || echo "000")
+            echo "HTTP status: $STATUS"
+
+            if [ "$STATUS" = "200" ]; then
+              HEALTHY=true
+              echo "healthy=true" >> $GITHUB_OUTPUT
+              break
+            fi
+
+            sleep 5
+          done
+
+          if [ "$HEALTHY" != "true" ]; then
+            echo "::error::Health check failed after $MAX_RETRIES attempts"
+            exit 1
+          fi
+
+          echo "Production is healthy!"
+
+      # ============================================================
+      # Rollback on failure — restore previous build
+      # ============================================================
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outputs.deploy_done == 'true'
+        run: |
+          echo "::warning::Deploy failed — attempting rollback..."
+          ssh root@${{ secrets.DEPLOY_HOST }} \
+            "cd ${{ env.APP_DIR }} && bash scripts/ci-rollback.sh || echo 'Rollback script not found — manual intervention required'"
+
+      # ============================================================
+      # Summary
+      # ============================================================
+      - name: Deploy summary
+        if: always()
+        run: |
+          echo "## Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ steps.deploy.outputs.deploy_done == 'true' && '✅ Done' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Health | ${{ steps.health.outputs.healthy == 'true' && '✅ 200 OK' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build ID:** ci-${{ github.sha }}-${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,58 @@
+{
+  "fixtureId": "A",
+  "description": "Verified official webpage with clear word limit",
+  "input": {
+    "applicationIdentity": {
+      "country": "USA",
+      "university": "Arizona State University",
+      "program": "MS in Computer Science",
+      "degreeLevel": "Master's",
+      "intake": "Fall",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [
+    {
+      "sourceId": "SRC-A-001",
+      "sourceClass": "OFFICIAL_UNIVERSITY_WEBPAGE",
+      "title": "MS in Computer Science — Admission Requirements",
+      "officialOrganization": "Arizona State University",
+      "officialDomain": "asu.edu",
+      "url": "https://scai.engineering.asu.edu/graduate/admission-requirements/",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-08-15",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "abc123",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "documentType": "STATEMENT_OF_PURPOSE",
+        "officialPrompt": {
+          "rawText": "Please submit a Statement of Purpose (500-750 words) describing your academic background, research interests, and career goals.",
+          "status": "VERIFIED"
+        },
+        "wordLimit": {
+          "min": 500,
+          "max": 750,
+          "status": "VERIFIED",
+          "sourceQuote": "500-750 words"
+        },
+        "characterLimit": {
+          "min": null,
+          "max": null,
+          "status": "NOT_SPECIFIED_BY_OFFICIAL_SOURCE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "verificationStatus": "VERIFIED",
+    "wordLimit": { "min": 500, "max": 750, "status": "VERIFIED" },
+    "officialPromptStatus": "VERIFIED",
+    "blockingIssues": 0
+  }
+}

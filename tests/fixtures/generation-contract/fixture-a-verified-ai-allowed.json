@@ -1,0 +1,55 @@
+{
+  "fixtureId": "A",
+  "description": "Verified requirements + AI allowed → Generation Contract creation PASS",
+  "profile": {
+    "factSheetApproval": { "approved": true, "requirementsConfirmed": true },
+    "personalDetails": { "firstName": "Test", "lastName": "Student", "nationality": "Indian", "currentCity": "Mumbai", "currentCountry": "India", "languages": "English, Hindi" },
+    "education": [{ "level": "Bachelor's", "institution": "IIT Bombay", "degree": "BTech", "specialization": "Computer Science", "startYear": "2019", "endYear": "2023", "percentage": "85", "cgpa": "8.5", "cgpaScale": "10", "status": "Completed" }],
+    "experience": [{ "type": "Internship", "organization": "Google", "role": "SWE Intern", "startDate": "2022-05", "endDate": "2022-08", "currentlyWorking": false, "location": "Bangalore", "responsibilities": "Built ML pipelines", "keyAchievements": "Improved model accuracy by 15%", "skillsLearned": "Python, TensorFlow" }],
+    "projects": [{ "name": "Data Pipeline", "type": "Academic", "description": "Built a data pipeline for sentiment analysis", "studentRole": "Lead", "technologies": "Python, NLTK", "outcome": "95% accuracy", "whatLearned": "NLP, data engineering" }],
+    "research": [{ "topic": "Machine Learning", "institution": "IIT Bombay", "role": "Research Assistant", "description": "Worked on deep learning models", "outcome": "Published paper" }],
+    "publications": [], "achievements": [],
+    "careerGoals": { "whyField": "Love data", "whyProgram": "Best program", "shortTermGoals": "Data Scientist", "longTermGoals": "Lead ML team", "desiredRole": "Data Scientist", "industries": "Tech", "returnHomeCountry": "Yes", "returnPlans": "Work in India" },
+    "personalStory": { "motivation": "Passion for data", "influencingExperience": "Internship at Google", "challenges": "Limited resources", "proudOf": "Published paper", "qualities": "Determined", "leadershipExample": "Led project team", "teamworkExample": "Collaborated on research", "outsideAcademics": "Volunteer teaching", "communityService": "Teaching kids", "familyBackground": "Middle class" },
+    "englishProficiency": { "testType": "IELTS", "status": "Completed", "overallScore": "7.5", "listening": "8", "reading": "7.5", "writing": "7", "speaking": "7.5" },
+    "writingPreferences": { "sopWritingProfile": { "level": "Natural Professional", "tone": "Professional & Personal", "personalization": "Balanced", "technicalDetail": "Medium", "openingStyle": "Let AI Choose Best Opening", "sopLength": "900-1100" } }
+  },
+  "brief": {
+    "applicationIdentity": { "country": "USA", "university": "Test University A", "program": "MS Data Science", "degreeLevel": "Master's", "intake": "Fall", "intakeYear": "2027" },
+    "documents": [{
+      "documentType": "STATEMENT_OF_PURPOSE",
+      "documentTypeLabel": "Statement of Purpose",
+      "required": true,
+      "officialPrompt": { "rawText": "Describe your research interests and career goals.", "status": "VERIFIED", "provenance": { "sourceId": "SRC-A-001", "value": "Describe your research interests and career goals.", "status": "VERIFIED", "sourceUrl": "https://test-a.edu", "sourceQuote": "Describe your research interests and career goals.", "verifiedAt": "2026-09-09T18:00:00Z" } },
+      "wordLimit": { "min": null, "max": 1000, "status": "VERIFIED", "provenance": { "sourceId": "SRC-A-001", "value": "1000", "status": "VERIFIED", "sourceUrl": "https://test-a.edu", "sourceQuote": "1000 words", "verifiedAt": "2026-09-09T18:00:00Z" } },
+      "characterLimit": { "min": null, "max": null, "status": "NOT_SPECIFIED_BY_OFFICIAL_SOURCE", "provenance": null },
+      "requiredTopics": [
+        { "field": "requiredTopics", "value": "research interests", "status": "VERIFIED", "sourceId": "SRC-A-001", "sourceUrl": "https://test-a.edu", "sourceQuote": "research interests", "verifiedAt": "2026-09-09T18:00:00Z" },
+        { "field": "requiredTopics", "value": "career goals", "status": "VERIFIED", "sourceId": "SRC-A-001", "sourceUrl": "https://test-a.edu", "sourceQuote": "career goals", "verifiedAt": "2026-09-09T18:00:00Z" },
+        { "field": "requiredTopics", "value": "academic preparation", "status": "VERIFIED", "sourceId": "SRC-A-001", "sourceUrl": "https://test-a.edu", "sourceQuote": "academic preparation", "verifiedAt": "2026-09-09T18:00:00Z" }
+      ],
+      "formatInstructions": [],
+      "additionalQuestions": []
+    }],
+    "countryGuidance": { "items": [], "priority": "SECONDARY", "sourceId": null },
+    "sources": [{ "sourceId": "SRC-A-001", "title": "Test Admissions", "url": "https://test-a.edu", "officialDomain": "test-a.edu", "domainVerified": true, "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE", "httpStatus": 200, "retrievedAt": "2026-09-09T18:00:00Z", "priority": "PRIMARY", "status": "ACTIVE" }],
+    "verification": { "status": "VERIFIED", "verifiedAt": "2026-09-09T18:00:00Z", "conflicts": [], "blockingIssues": [] },
+    "cacheKey": "test-a", "createdAt": "2026-09-09T18:00:00Z", "expiresAt": null
+  },
+  "aiPolicy": {
+    "status": "AI_GENERATION_ALLOWED",
+    "generationAllowed": true,
+    "editingAllowed": "ALLOWED",
+    "proofreadingAllowed": "ALLOWED",
+    "brainstormingAllowed": "ALLOWED",
+    "translationAllowed": "ALLOWED",
+    "applicationAiMode": "FULL_AI_WRITING_ALLOWED",
+    "sources": [{ "sourceId": "AIPOL-A-001", "title": "AI Policy", "url": "https://test-a.edu/ai-policy", "officialDomain": "test-a.edu", "domainVerified": true, "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE", "exactPolicyText": "Applicants may use AI tools to assist with writing. AI-generated content is permitted.", "retrievedAt": "2026-09-09T18:00:00Z", "applicableScope": "All programs", "priority": "PRIMARY", "httpStatus": 200 }],
+    "verifiedAt": "2026-09-09T18:00:00Z", "cacheKey": "aipol-a", "expiresAt": "2026-09-16T18:00:00Z", "blockingReasons": []
+  },
+  "expected": {
+    "status": "CLEARED",
+    "clearedForWriting": true,
+    "blockingReasonCount": 0
+  }
+}

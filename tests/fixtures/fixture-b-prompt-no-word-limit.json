@@ -1,0 +1,52 @@
+{
+  "fixtureId": "B",
+  "description": "Official page with explicit prompt but no word limit",
+  "input": {
+    "applicationIdentity": {
+      "country": "UK",
+      "university": "University of Oxford",
+      "program": "MSc Computer Science",
+      "degreeLevel": "Master's",
+      "intake": "Michaelmas",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [
+    {
+      "sourceId": "SRC-B-001",
+      "sourceClass": "OFFICIAL_UNIVERSITY_WEBPAGE",
+      "title": "MSc Computer Science — Application Requirements",
+      "officialOrganization": "University of Oxford",
+      "officialDomain": "ox.ac.uk",
+      "url": "https://www.ox.ac.uk/admissions/graduate/courses/msc-computer-science",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-07-01",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "def456",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "documentType": "STATEMENT_OF_PURPOSE",
+        "officialPrompt": {
+          "rawText": "Write a personal statement explaining why you wish to study this course and what you hope to gain from it.",
+          "status": "VERIFIED"
+        },
+        "wordLimit": {
+          "min": null,
+          "max": null,
+          "status": "NOT_SPECIFIED_BY_OFFICIAL_SOURCE"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "verificationStatus": "VERIFIED",
+    "wordLimitStatus": "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+    "officialPromptStatus": "VERIFIED",
+    "blockingIssues": 0
+  }
+}

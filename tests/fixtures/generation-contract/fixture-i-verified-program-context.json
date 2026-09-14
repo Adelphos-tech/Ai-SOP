@@ -1,0 +1,65 @@
+{
+  "fixtureId": "I",
+  "description": "Verified program context → may enter writing contract",
+  "profile": {
+    "factSheetApproval": { "approved": true, "requirementsConfirmed": true },
+    "personalDetails": { "firstName": "Test", "lastName": "Student", "nationality": "Indian", "currentCity": "Mumbai", "currentCountry": "India", "languages": "English" },
+    "education": [{ "level": "Bachelor's", "institution": "IIT", "degree": "BTech", "specialization": "CS", "startYear": "2019", "endYear": "2023", "percentage": "85", "cgpa": "8.5", "cgpaScale": "10", "status": "Completed" }],
+    "experience": [{ "type": "Internship", "organization": "Google", "role": "SWE", "startDate": "2022-05", "endDate": "2022-08", "currentlyWorking": false, "location": "Bangalore", "responsibilities": "ML", "keyAchievements": "15%", "skillsLearned": "Python" }],
+    "projects": [], "research": [], "publications": [], "achievements": [],
+    "careerGoals": { "whyField": "Data", "whyProgram": "Best", "shortTermGoals": "DS", "longTermGoals": "Lead", "desiredRole": "DS", "industries": "Tech", "returnHomeCountry": "Yes", "returnPlans": "Work" },
+    "personalStory": { "motivation": "Passion", "influencingExperience": "Intern", "challenges": "None", "proudOf": "Project", "qualities": "Hardworking", "leadershipExample": "Lead", "teamworkExample": "Team", "outsideAcademics": "Volunteer", "communityService": "Teaching", "familyBackground": "Middle" },
+    "englishProficiency": { "testType": "IELTS", "status": "Completed", "overallScore": "7", "listening": "7", "reading": "7", "writing": "7", "speaking": "7" },
+    "writingPreferences": { "sopWritingProfile": { "level": "Natural Professional", "tone": "Professional", "personalization": "Balanced", "technicalDetail": "Medium", "openingStyle": "Let AI Choose", "sopLength": "900-1100" } }
+  },
+  "brief": {
+    "applicationIdentity": { "country": "USA", "university": "Test University I", "program": "MS Data Science", "degreeLevel": "Master's", "intake": "Fall", "intakeYear": "2027" },
+    "documents": [{
+      "documentType": "STATEMENT_OF_PURPOSE",
+      "documentTypeLabel": "Statement of Purpose",
+      "required": true,
+      "officialPrompt": { "rawText": "Describe your academic preparation and career goals.", "status": "VERIFIED", "provenance": { "sourceId": "SRC-I-001", "value": "Describe", "status": "VERIFIED", "sourceUrl": "https://test-i.edu", "sourceQuote": "Describe", "verifiedAt": "2026-09-09T18:00:00Z" } },
+      "wordLimit": { "min": null, "max": 1000, "status": "VERIFIED", "provenance": { "sourceId": "SRC-I-001", "value": "1000", "status": "VERIFIED", "sourceUrl": "https://test-i.edu", "sourceQuote": "1000", "verifiedAt": "2026-09-09T18:00:00Z" } },
+      "characterLimit": { "min": null, "max": null, "status": "NOT_SPECIFIED_BY_OFFICIAL_SOURCE", "provenance": null },
+      "requiredTopics": [
+        { "field": "requiredTopics", "value": "academic preparation", "status": "VERIFIED", "sourceId": "SRC-I-001", "sourceUrl": "https://test-i.edu", "sourceQuote": "academic preparation", "verifiedAt": "2026-09-09T18:00:00Z" },
+        { "field": "requiredTopics", "value": "career goals", "status": "VERIFIED", "sourceId": "SRC-I-001", "sourceUrl": "https://test-i.edu", "sourceQuote": "career goals", "verifiedAt": "2026-09-09T18:00:00Z" }
+      ],
+      "formatInstructions": [], "additionalQuestions": []
+    }],
+    "countryGuidance": { "items": [], "priority": "SECONDARY", "sourceId": null },
+    "sources": [{ "sourceId": "SRC-I-001", "title": "Test", "url": "https://test-i.edu", "officialDomain": "test-i.edu", "domainVerified": true, "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE", "httpStatus": 200, "retrievedAt": "2026-09-09T18:00:00Z", "priority": "PRIMARY", "status": "ACTIVE" }],
+    "verification": { "status": "VERIFIED", "verifiedAt": "2026-09-09T18:00:00Z", "conflicts": [], "blockingIssues": [] },
+    "cacheKey": "test-i", "createdAt": "2026-09-09T18:00:00Z", "expiresAt": null
+  },
+  "aiPolicy": {
+    "status": "AI_GENERATION_ALLOWED",
+    "generationAllowed": true,
+    "editingAllowed": "ALLOWED", "proofreadingAllowed": "ALLOWED", "brainstormingAllowed": "ALLOWED", "translationAllowed": "ALLOWED",
+    "applicationAiMode": "FULL_AI_WRITING_ALLOWED",
+    "sources": [{ "sourceId": "AIPOL-I-001", "title": "AI Policy", "url": "https://test-i.edu/ai", "officialDomain": "test-i.edu", "domainVerified": true, "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE", "exactPolicyText": "Applicants may use AI tools to assist with writing. AI-generated content is permitted.", "retrievedAt": "2026-09-09T18:00:00Z", "applicableScope": "All", "priority": "PRIMARY", "httpStatus": 200 }],
+    "verifiedAt": "2026-09-09T18:00:00Z", "cacheKey": "aipol-i", "expiresAt": "2026-09-16T18:00:00Z", "blockingReasons": []
+  },
+  "programContext": {
+    "programOfficialName": { "value": "Master of Science in Data Science", "sourceId": "SRC-I-001", "sourceUrl": "https://test-i.edu", "sourceQuote": "Master of Science in Data Science", "verifiedAt": "2026-09-09T18:00:00Z" },
+    "school": { "value": "School of Engineering", "sourceId": "SRC-I-001", "sourceUrl": "https://test-i.edu", "sourceQuote": "School of Engineering", "verifiedAt": "2026-09-09T18:00:00Z" },
+    "department": null,
+    "programDescription": null,
+    "academicFocusAreas": null,
+    "curriculumThemes": { "value": ["Machine Learning", "Statistics", "Data Engineering"], "sourceId": "SRC-I-001", "sourceUrl": "https://test-i.edu", "sourceQuote": "ML, Statistics, Data Engineering", "verifiedAt": "2026-09-09T18:00:00Z" },
+    "specializationsOrTracks": null,
+    "officiallyListedResearchAreas": null,
+    "officiallyListedLabs": null,
+    "officiallyListedFacilities": null,
+    "officiallyListedFaculty": null,
+    "otherRelevantProgramFacts": null,
+    "sources": [{ "sourceId": "SRC-I-001", "title": "Test", "url": "https://test-i.edu", "officialDomain": "test-i.edu", "domainVerified": true, "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE", "httpStatus": 200, "retrievedAt": "2026-09-09T18:00:00Z", "priority": "PRIMARY", "status": "ACTIVE" }],
+    "verifiedAt": "2026-09-09T18:00:00Z"
+  },
+  "expected": {
+    "status": "CLEARED",
+    "clearedForWriting": true,
+    "programContextNotNull": true,
+    "programContextHasCurriculumThemes": true
+  }
+}

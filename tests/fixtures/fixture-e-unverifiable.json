@@ -1,0 +1,21 @@
+{
+  "fixtureId": "E",
+  "description": "Unknown/unverifiable requirement",
+  "input": {
+    "applicationIdentity": {
+      "country": "Germany",
+      "university": "Technical University of Munich",
+      "program": "MS in Aerospace",
+      "degreeLevel": "Master's",
+      "intake": "Winter",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [],
+  "expected": {
+    "verificationStatus": "BLOCKED",
+    "wordLimitStatus": "UNKNOWN",
+    "officialPromptStatus": "UNKNOWN",
+    "blockingIssues": 2
+  }
+}

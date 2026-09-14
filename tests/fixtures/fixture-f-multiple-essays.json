@@ -1,0 +1,59 @@
+{
+  "fixtureId": "F",
+  "description": "Multiple essay questions",
+  "input": {
+    "applicationIdentity": {
+      "country": "USA",
+      "university": "UC Berkeley",
+      "program": "MS in Information and Data Science",
+      "degreeLevel": "Master's",
+      "intake": "Fall",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [
+    {
+      "sourceId": "SRC-F-001",
+      "sourceClass": "OFFICIAL_UNIVERSITY_WEBPAGE",
+      "title": "MIDS Application Requirements",
+      "officialOrganization": "UC Berkeley",
+      "officialDomain": "berkeley.edu",
+      "url": "https://ischool.berkeley.edu/programs/mids/admissions",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-07-15",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "pqr678",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "documents": [
+          {
+            "documentType": "STATEMENT_OF_PURPOSE",
+            "officialPrompt": {
+              "rawText": "Statement of Purpose: Why is the MIDS program the right fit for you? (300 words max)",
+              "status": "VERIFIED"
+            },
+            "wordLimit": { "min": null, "max": 300, "status": "VERIFIED" }
+          },
+          {
+            "documentType": "PERSONAL_HISTORY_STATEMENT",
+            "officialPrompt": {
+              "rawText": "Personal History Statement: Describe how your personal background informs your decision to pursue a graduate degree. (500 words max)",
+              "status": "VERIFIED"
+            },
+            "wordLimit": { "min": null, "max": 500, "status": "VERIFIED" }
+          }
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "verificationStatus": "VERIFIED",
+    "documentCount": 2,
+    "blockingIssues": 0
+  }
+}

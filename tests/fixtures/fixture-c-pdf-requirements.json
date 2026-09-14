@@ -1,0 +1,53 @@
+{
+  "fixtureId": "C",
+  "description": "Official PDF requirements",
+  "input": {
+    "applicationIdentity": {
+      "country": "USA",
+      "university": "Stanford University",
+      "program": "MS in Electrical Engineering",
+      "degreeLevel": "Master's",
+      "intake": "Fall",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [
+    {
+      "sourceId": "SRC-C-001",
+      "sourceClass": "OFFICIAL_UNIVERSITY_DOCUMENT",
+      "title": "Graduate Admissions Guide 2027-28 (PDF)",
+      "officialOrganization": "Stanford University",
+      "officialDomain": "stanford.edu",
+      "url": "https://ee.stanford.edu/sites/g/files/sbiybj2161/files/f/media_document/grad-admissions-guide-2027.pdf",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-06-01",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "ghi789",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "documentType": "STATEMENT_OF_PURPOSE",
+        "officialPrompt": {
+          "rawText": "Statement of Purpose: Describe your academic and research background, your reasons for applying to this program, and your future career plans. Maximum 1000 words.",
+          "status": "VERIFIED"
+        },
+        "wordLimit": {
+          "min": null,
+          "max": 1000,
+          "status": "VERIFIED",
+          "sourceQuote": "Maximum 1000 words"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "verificationStatus": "VERIFIED",
+    "wordLimit": { "min": null, "max": 1000, "status": "VERIFIED" },
+    "officialPromptStatus": "VERIFIED",
+    "blockingIssues": 0
+  }
+}

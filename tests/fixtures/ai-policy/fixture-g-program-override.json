@@ -1,0 +1,48 @@
+{
+  "fixtureId": "G",
+  "description": "Program-specific policy overrides university-wide policy",
+  "identity": {
+    "country": "USA",
+    "university": "Test University G",
+    "program": "MS Data Science",
+    "degreeLevel": "Master's",
+    "intake": "Fall",
+    "intakeYear": "2027"
+  },
+  "policySources": [
+    {
+      "sourceId": "AIPOL-G-001",
+      "title": "University-Wide AI Policy",
+      "url": "https://test-g.edu/ai-policy",
+      "officialDomain": "test-g.edu",
+      "domainVerified": true,
+      "sourceType": "OFFICIAL_UNIVERSITY_WEBPAGE",
+      "exactPolicyText": "Applicants may use AI tools to assist with writing their application essays. AI-generated content is permitted.",
+      "retrievedAt": "2026-09-09T18:00:00Z",
+      "applicableScope": "All programs",
+      "priority": "SECONDARY",
+      "httpStatus": 200
+    },
+    {
+      "sourceId": "AIPOL-G-002",
+      "title": "Data Science Program Admissions",
+      "url": "https://test-g.edu/ds/admissions",
+      "officialDomain": "test-g.edu",
+      "domainVerified": true,
+      "sourceType": "OFFICIAL_APPLICATION_INSTRUCTIONS",
+      "exactPolicyText": "Work submitted for the Data Science program application may not be that of a third party nor that created by generative artificial intelligence.",
+      "retrievedAt": "2026-09-09T18:00:00Z",
+      "applicableScope": "MS Data Science program",
+      "priority": "PRIMARY",
+      "httpStatus": 200
+    }
+  ],
+  "expected": {
+    "status": "AI_POLICY_CONFLICT",
+    "generationAllowed": false,
+    "applicationAiMode": "POLICY_REVIEW_REQUIRED",
+    "finalGenerationEligible": false,
+    "blockingReasonCount": 1,
+    "note": "Both sources detected — conflict between PRIMARY (prohibited) and SECONDARY (allowed). Without explicit precedence resolution in the detector, this is a CONFLICT. The program-specific source should take precedence, but the current detector flags conflict when statuses differ."
+  }
+}

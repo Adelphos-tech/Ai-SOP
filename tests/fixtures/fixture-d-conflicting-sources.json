@@ -1,0 +1,73 @@
+{
+  "fixtureId": "D",
+  "description": "Conflicting official sources",
+  "input": {
+    "applicationIdentity": {
+      "country": "USA",
+      "university": "MIT",
+      "program": "MS in Data Science",
+      "degreeLevel": "Master's",
+      "intake": "Fall",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [
+    {
+      "sourceId": "SRC-D-001",
+      "sourceClass": "OFFICIAL_UNIVERSITY_WEBPAGE",
+      "title": "Program-Specific Requirements \u2014 MS Data Science",
+      "officialOrganization": "MIT",
+      "officialDomain": "mit.edu",
+      "url": "https://datascience.mit.edu/graduate/requirements",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-08-01",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "jkl012",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "wordLimit": {
+          "min": null,
+          "max": 750,
+          "status": "VERIFIED",
+          "sourceQuote": "750 words maximum"
+        }
+      }
+    },
+    {
+      "sourceId": "SRC-D-002",
+      "sourceClass": "OFFICIAL_UNIVERSITY_DOCUMENT",
+      "title": "Program-Specific Requirements \u2014 MS Data Science (Alternative Page)",
+      "officialOrganization": "MIT",
+      "officialDomain": "mit.edu",
+      "url": "https://odge.mit.edu/files/grad-guide-2026.pdf",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2025-12-01",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "mno345",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "wordLimit": {
+          "min": null,
+          "max": 1000,
+          "status": "VERIFIED",
+          "sourceQuote": "1000 words maximum"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "verificationStatus": "CONFLICT",
+    "conflicts": 1,
+    "blockingIssues": 1
+  }
+}

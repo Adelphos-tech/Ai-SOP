@@ -1,0 +1,73 @@
+{
+  "fixtureId": "G",
+  "description": "Country guidance + program-specific override",
+  "input": {
+    "applicationIdentity": {
+      "country": "Australia",
+      "university": "University of Melbourne",
+      "program": "Master of Data Science",
+      "degreeLevel": "Master's",
+      "intake": "Semester 1",
+      "intakeYear": "2027"
+    }
+  },
+  "mockSources": [
+    {
+      "sourceId": "SRC-G-001",
+      "sourceClass": "OFFICIAL_UNIVERSITY_WEBPAGE",
+      "title": "Master of Data Science — Coursework Requirements",
+      "officialOrganization": "University of Melbourne",
+      "officialDomain": "unimelb.edu.au",
+      "url": "https://study.unimelb.edu.au/find/courses/graduate/master-of-data-science/",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-06-01",
+      "programMatch": true,
+      "degreeLevelMatch": true,
+      "intakeMatch": true,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "stu901",
+      "status": "ACTIVE",
+      "priority": "PRIMARY",
+      "extractedContent": {
+        "documentType": "STATEMENT_OF_PURPOSE",
+        "officialPrompt": {
+          "rawText": "Provide a statement of purpose (maximum 500 words) outlining your interest in data science.",
+          "status": "VERIFIED"
+        },
+        "wordLimit": { "min": null, "max": 500, "status": "VERIFIED" }
+      }
+    },
+    {
+      "sourceId": "SRC-G-002",
+      "sourceClass": "OFFICIAL_COUNTRY_SOURCE",
+      "title": "Study in Australia — Genuine Temporary Entrant Requirements",
+      "officialOrganization": "Australian Government",
+      "officialDomain": "studyinaustralia.gov.au",
+      "url": "https://www.studyinaustralia.gov.au/english/australian-education/visa-requirements",
+      "retrievedAt": "2026-09-09T16:00:00Z",
+      "publishedOrUpdatedAt": "2026-03-01",
+      "programMatch": false,
+      "degreeLevelMatch": false,
+      "intakeMatch": false,
+      "countryMatch": true,
+      "httpStatus": 200,
+      "contentHash": "vwx234",
+      "status": "ACTIVE",
+      "priority": "SECONDARY",
+      "extractedContent": {
+        "countryGuidance": [
+          "Applicants should demonstrate genuine intention to study in Australia",
+          "Statement should address temporary entrant requirements"
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "verificationStatus": "VERIFIED",
+    "wordLimit": { "min": null, "max": 500, "status": "VERIFIED" },
+    "countryGuidancePresent": true,
+    "programOverride": true,
+    "blockingIssues": 0
+  }
+}
