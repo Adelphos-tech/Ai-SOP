@@ -2,8 +2,15 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { LogoutButton } from "@/components/auth/AuthGuard";
+import { useState } from "react";
+
+// ============================================================
+// LOGIN NOT REQUIRED — temporary bypass
+// ============================================================
+// The consultant profile / sign-out button is hidden while the
+// login module is disabled. To re-enable auth, restore the
+// /api/auth/me fetch and the <LogoutButton /> import below.
+// ============================================================
 
 const navLinks = [
   { href: "/students", label: "Students" },
@@ -13,22 +20,8 @@ const navLinks = [
 export function AppHeader() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [consultant, setConsultant] = useState<{ name: string; email: string } | null>(null);
 
-  useEffect(() => {
-    fetch("/api/auth/me")
-      .then(res => res.ok ? res.json() : null)
-      .then(data => {
-        if (data?.consultant) {
-          setConsultant({ name: data.consultant.name, email: data.consultant.email });
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const initials = consultant?.name
-    ? consultant.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()
-    : "DC";
+  const initials = "DC";
 
   return (
     <header className="bg-white border-b border-dvivid-border sticky top-0 z-30" style={{ height: "72px" }}>
@@ -58,12 +51,8 @@ export function AppHeader() {
           })}
         </nav>
 
-        {/* Right: Profile */}
+        {/* Right: Profile (login disabled — showing brand mark only) */}
         <div className="flex items-center gap-3">
-          <div className="hidden md:block text-right">
-            <p className="text-sm font-medium text-dvivid-text-primary">{consultant?.name || ""}</p>
-            <LogoutButton />
-          </div>
           <div className="w-9 h-9 rounded-full bg-dvivid-primary-light flex items-center justify-center">
             <span className="text-sm font-semibold text-dvivid-primary">{initials}</span>
           </div>
