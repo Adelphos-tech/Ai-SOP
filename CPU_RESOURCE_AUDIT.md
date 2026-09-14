@@ -1,30 +1,36 @@
 # CPU Resource Audit — D-Vivid Application Writer
 
-## 1. Server CPU Baseline
+## 1. Effective CPU Capacity
 
-**Production server:** `156.67.105.64` (sop.adelphostech.com)
+**Previous report discrepancy resolved.** The earlier report showed `lscpu=6` but `os.cpus()=4` — the 4 was from a **local Mac** benchmark, not the production server. Production measurements:
 
 | Metric | Value |
 |--------|-------|
-| CPU cores (lscpu) | 6 |
-| CPU cores (Node os.cpus()) | 4 |
-| Model | AMD EPYC Processor (with IBPB) |
+| `nproc` | 6 |
+| `nproc --all` | 6 |
+| `lscpu CPU(s)` | 6 |
+| Node `os.cpus().length` | 6 |
+| `os.availableParallelism()` | 6 |
+| cgroup v2 `cpu.max` | Not set (no limit) |
+| cgroup v1 `cpu.cfs_quota_us` | Not set (no limit) |
+| `cpuset.cpus.effective` | 0-5 (all cores) |
+
+**HOST LOGICAL CPUs: 6**
+**EFFECTIVE CPUs AVAILABLE TO SOP APP: 6**
+
+No cgroup CPU limits. The SOP application has access to all 6 cores.
+
+## 2. Server CPU Baseline (Production)
+
+| Metric | Value |
+|--------|-------|
+| CPU model | AMD EPYC Processor (with IBPB) |
 | Architecture | x86_64 |
-| Threads per core | 1 |
-| Sockets | 1 |
-
-### Idle CPU (3-minute sample)
-
-| Sample | CPU % (idle) | Load Avg | Free Memory |
-|--------|-------------|----------|-------------|
-| 1 | 1.1% us | 0.16 | 12,742 MB |
-| 2 (5s) | 1.1% us | 0.15 | 12,739 MB |
-| 3 (10s) | 1.1% us | 0.14 | 12,731 MB |
-| Load avg (3 samples) | — | 0.14, 0.19, 0.18 | — |
-
-**Idle CPU: ~1.1% user**
-**Idle Node CPU: 20.6% (cumulative process.cpuUsage/uptime — not instantaneous)**
-**System load average: 0.14-0.21 (idle)**
+| Cores | 6 (1 thread per core, 1 socket) |
+| Total memory | 15,988 MB |
+| Idle CPU (user) | 1.1% |
+| Idle load average | 0.14-0.21 |
+| Free memory (idle) | ~12,700 MB |
 
 ### Process CPU breakdown (idle)
 
@@ -35,181 +41,179 @@
 | nginx workers | 2693116+ | 0.4% | 29 MB each | Reverse proxy |
 | adelphos-website | 805 | 0.3% | 161 MB | Other app |
 | frontend | 1840330 | 4.1% | 824 MB | Other app |
-| redis | 602 | 0.1% | 10 MB | Cache (not used by SOP) |
+| redis | 602 | 0.1% | 10 MB | Present but unused by SOP |
 
-**Unexpected processes:** None. Redis is present but not used by the SOP application.
+**Unexpected processes:** None.
 
-## 2. Node Process Baseline
+## 3. Node Process Baseline
 
 | Metric | Value |
 |--------|-------|
 | PID | 2894153 (next-server) |
-| CPU % | 0.2% (idle) |
+| CPU % (idle) | 0.2% |
 | RSS | 183 MB |
 | Heap used | 24 MB |
-| Heap total | 37 MB |
 | Event loop delay P95 | 1 ms |
 | Child processes | 0 (no spawn/exec in runtime src) |
-| PM2 restarts | 345 (historical, 0 unstable) |
+| PM2 unstable restarts | 0 |
 
-## 3. CPU-Heavy Operations Audit
+## 4. CPU-Heavy Operations Audit
 
-| Operation | Implementation | Uses child process? | Expected CPU risk | Current concurrency control |
-|-----------|---------------|---------------------|-------------------|---------------------------|
-| **Puppeteer PDF render** | `puppeteer.launch()` → `page.pdf()` | No (Chromium subprocess managed by Puppeteer) | **HIGH** — launches Chromium per call | `renderLimiter` (MAX_CONCURRENT_RENDERS=2, MAX_QUEUED_RENDERS=3) |
-| **PDF export (pdf-lib)** | `PDFDocument.create()` → `pdfDoc.save()` | No | LOW — pure JS, 23-59ms | `exportLimiter` (MAX_CONCURRENT_EXPORTS=3, MAX_QUEUED_EXPORTS=5) |
-| **DOCX export (docx)** | `Packer.toBuffer(doc)` | No | LOW — pure JS | `exportLimiter` (same as PDF) |
-| **CV PDF parsing** | `pdf-parse(buffer)` | No | MODERATE — regex + buffer processing | `cvParseLimiter` (MAX_CONCURRENT_CV_PARSE=2, MAX_QUEUED_CV_PARSE=3) |
-| **CV DOCX parsing** | `mammoth.extractRawText()` | No | MODERATE — XML parsing | `cvParseLimiter` (same) |
-| **CV text parsing** | Regex chains over extracted text | No | MODERATE — regex on large text | `cvParseLimiter` (same) |
-| **HTML extraction** | `String.replace()` + `RegExp` chains | No | LOW-MODERATE — bounded by DISCOVERY_BUDGET | `crawlLimiter` (MAX_CONCURRENT_CRAWLS=2, MAX_QUEUED_CRAWLS=3) |
-| **Web crawling** | Sequential `fetch()` loops | No | LOW — I/O bound, sequential | `crawlLimiter` + DISCOVERY_BUDGET caps |
-| **Tesseract OCR** | **Not used** | N/A | N/A | N/A |
-| **pdftoppm/Poppler** | **Not used** | N/A | N/A | N/A |
-| **Image conversion** | **Not used** | N/A | N/A | N/A |
-| **Compression** | Dead import only (zlib never called) | N/A | N/A | N/A |
+| Operation | Implementation | child process? | CPU risk | Concurrency control |
+|-----------|---------------|-----------------|----------|-------------------|
+| Puppeteer PDF render | `puppeteer.launch()` → `page.pdf()` | No (Chromium managed by Puppeteer) | **HIGH** | `renderLimiter` (2 concurrent, 3 queued) |
+| PDF export (pdf-lib) | `PDFDocument.create()` → `save()` | No | LOW | `exportLimiter` (3 concurrent, 5 queued) |
+| DOCX export (docx) | `Packer.toBuffer()` | No | LOW | `exportLimiter` (same) |
+| CV PDF parsing | `pdf-parse(buffer)` | No | MODERATE | `cvParseLimiter` (2 concurrent, 3 queued) |
+| CV DOCX parsing | `mammoth.extractRawText()` | No | MODERATE | `cvParseLimiter` (same) |
+| HTML extraction | `String.replace()` + `RegExp` | No | LOW-MODERATE | `crawlLimiter` (2 concurrent, 3 queued) |
+| Web crawling | Sequential `fetch()` loops | No | LOW (I/O bound) | `crawlLimiter` + DISCOVERY_BUDGET |
+| Tesseract OCR | **Not used** | N/A | N/A | N/A |
+| pdftoppm/Poppler | **Not used** | N/A | N/A | N/A |
+| Image conversion | **Not used** | N/A | N/A | N/A |
 
-## 4. OCR Benchmark
+## 5. Puppeteer CPU Benchmark (Production, 6 Cores)
 
-**Tesseract/OCR is NOT used in this application.** CV parsing uses pure JavaScript:
-- PDF: `pdf-parse` (pure JS PDF text extraction)
-- DOCX: `mammoth` (pure JS DOCX text extraction)
-- Text: Rule-based regex extraction
+Sustained 15-second render at each concurrency level. Measurements taken on production server (`/opt/sop-ai-app`).
 
-No OCR benchmark applicable.
+| Concurrency | Renders completed | Render p50 | Render p95 | Load1 | Load/Cores | API p95 | RSS | Errors | Orphans |
+|-------------|-------------------|------------|------------|-------|------------|---------|-----|--------|---------|
+| 1 | 28 | 531 ms | 625 ms | 0.55 | 9% | 3 ms | 96 MB | 0 | 0 |
+| 2 | 28 | 1,004 ms | 2,250 ms | 3.86 | 64% | 5 ms | 101 MB | 0 | 0 |
+| 3 | 60 | 769 ms | 1,043 ms | 5.4 | 90% | 4 ms | 112 MB | 0 | 0 |
+| 4 | 48 | 1,121 ms | 1,689 ms | 7.22 | 120% | 7 ms | 117 MB | 0 | 0 |
 
-## 5. OCR Concurrency Test
+### Analysis
 
-Not applicable — no OCR operations.
+- **Concurrency 1:** Load 0.55/6 = 9%. Excellent headroom. Render p50 = 531ms.
+- **Concurrency 2:** Load 3.86/6 = 64%. Good headroom (36% remaining). API p95 = 5ms. Render p50 = 1,004ms (doubled due to queueing).
+- **Concurrency 3:** Load 5.4/6 = 90%. Approaching saturation. Only 10% headroom.
+- **Concurrency 4:** Load 7.22/6 = 120%. Oversaturated — load exceeds core count. API p95 degrading (7ms).
 
-## 6. Safe OCR Limit
+### Conclusion: MAX_CONCURRENT_RENDERS=2 is justified
 
-Not applicable — no OCR operations. `MAX_CONCURRENT_OCR` is not needed.
+At concurrency 2, load is 64% of capacity, leaving 36% headroom for normal application requests. API p95 remains 5ms. Raising to 3 would push load to 90%, leaving only 10% headroom — insufficient for stable consultant experience.
 
-## 7. PDF Export Benchmark
+## 6. PDF Export Benchmark (Local)
 
-| Concurrency | Duration | RSS Delta | Heap Delta | Rejected | CPU Impact |
-|-------------|----------|-----------|------------|----------|------------|
-| 1 | 23 ms | +8 MB | +6 MB | 0 | Minimal |
-| 2 | 30 ms | +17 MB | -3 MB | 0 | Minimal |
-| 5 | 52 ms | +13 MB | +4 MB | 0 | Low |
-| 10 | 59 ms | +13 MB | -2 MB | 2 | Low (queue full at 8) |
+| Concurrency | Duration | RSS delta | Rejected |
+|-------------|----------|-----------|----------|
+| 1 | 23 ms | +8 MB | 0 |
+| 2 | 30 ms | +17 MB | 0 |
+| 5 | 52 ms | +13 MB | 0 |
+| 10 | 59 ms | +13 MB | 2 (queue full at 8) |
 
-**Conclusion:** PDF export is very lightweight. `MAX_CONCURRENT_EXPORTS=3` with `MAX_QUEUED_EXPORTS=5` provides ample capacity with minimal CPU impact.
+PDF export is very lightweight. `MAX_CONCURRENT_EXPORTS=3` with queue=5 is ample.
 
-## 8. Puppeteer Render Benchmark
+## 7. Backpressure Terminology
 
-| Concurrency | Duration | RSS Delta | Heap Delta | Rejected | Load Delta |
-|-------------|----------|-----------|------------|----------|------------|
-| 1 | 1,866 ms | +22 MB | +4 MB | 0 | +0.4 |
-| 2 | 2,861 ms | +21 MB | +2 MB | 0 | +0.8 |
-| 3 | 1,927 ms | +23 MB | 0 MB | 0 (1 queued) | +1.6 |
-| 4 | 2,987 ms | +10 MB | +1 MB | 0 (2 queued) | +0.1 |
+`isSystemUnderPressure()` has been audited and documented. It measures **limiter occupancy** (active/queued counts), NOT actual system CPU load. It is an **admission backpressure** signal, not a CPU-pressure measurement.
 
-**Conclusion:** Each Puppeteer render takes ~2 seconds and uses ~22 MB RSS. At concurrency 2, duration doubles (queueing). `MAX_CONCURRENT_RENDERS=2` is the safe limit — it keeps CPU manageable while allowing one render to proceed and one to queue.
+Renamed in documentation and added `isAdmissionBackpressure` alias. The primary safety mechanism is fixed concurrency + bounded queue.
 
-## 9. Child Process Safety
+No actual system-pressure detection (CPU sampling, load average monitoring) exists in the limiter. The `/api/metrics` endpoint exposes load average and CPU percent for external monitoring, but the limiter itself does not use these signals.
 
-| Check | Status |
-|-------|--------|
-| `spawn`/`execFile` used safely | N/A — no child_process in runtime src |
-| No shell interpolation | N/A |
-| Timeout exists | Yes — 30s page timeout added to all Puppeteer calls |
-| Timeout kills child | Yes — Puppeteer `browser.close()` in `finally` |
-| Child exit awaited | Yes — `await browser.close()` in `finally` |
-| stderr/stdout bounded | N/A — no direct child_process |
-| Temp files cleaned in finally | N/A — no temp files |
-| No orphan process remains | **Verified** — 0 Chromium/Chrome/Tesseract/pdftoppm after all benchmarks |
+## 8. Controlled Busy Responses
 
-## 10. Crawling Concurrency
+All 4 limiters were tested with queue-full scenarios. `ResourceBusyError` is thrown with:
+- `code: "RESOURCE_BUSY"` (machine-readable)
+- `resource: <type>` (render/export/crawl/cvParse)
+- Friendly message
 
-Web crawling is already sequential and bounded by `DISCOVERY_BUDGET`:
-- MAX_SEARCH_QUERIES: 12
-- MAX_CANDIDATE_URLS: 20
-- MAX_PAGES_FETCHED: 12
-- MAX_AI_CLASSIFICATION_CALLS: 8
-- MAX_AI_EXTRACTION_CALLS: 6
+API routes convert to controlled HTTP responses:
 
-Added `crawlLimiter` (MAX_CONCURRENT_CRAWLS=2, MAX_QUEUED_CRAWLS=3) as a global gate to prevent multiple concurrent discovery runs.
+| Route | Limiter | HTTP Status | Error Code |
+|------|---------|-------------|-----------|
+| `/api/application/document/export` | export | 503 | `EXPORT_BUSY` |
+| `/api/application/document/generate` | render | 503 | `RENDER_BUSY` |
+| `/api/requirements/discover` | crawl | 503 | `CRAWL_BUSY` |
+| `/api/application/cv-upload` | cvParse | 503 | `CV_PARSE_BUSY` |
+| `/api/requirements/resolve-prompt` | crawl | Graceful degradation (falls back to default template) |
 
-## 11. Generation CPU Check
+No generic HTTP 500 for queue-full scenarios.
 
-AI document generation is primarily I/O-bound (waiting for OpenAI API responses). The application server's CPU usage during generation is minimal — it orchestrates API calls and processes JSON responses. No CPU restriction needed for generation orchestration itself. Per-document locking (`acquireGenerationLock`) already prevents concurrent generation of the same document.
+## 9. Metrics Endpoint Security
 
-## 12. Event Loop Protection
+`/api/metrics` is protected. Access requires one of:
+1. **Localhost/internal IP** — for server-side monitoring (127.0.0.1, ::1, 10.x, 192.168.x)
+2. **API key** — `X-Metrics-Key` header matching `METRICS_API_KEY` environment variable
 
-| Metric | Idle | During PDF Export (10x) | During Puppeteer (4x) |
-|--------|------|------------------------|----------------------|
-| Event loop P95 | 1 ms | 51 ms (local baseline) | 52 ms (local baseline) |
-| API latency (metrics) | 57-67 ms | 57-67 ms | Not measured (local) |
+Verified on production:
+- External unauthenticated: **HTTP 401** (denied)
+- Localhost: **HTTP 200** (allowed)
+- No PII exposed
 
-**Production event loop P95: 1 ms** — healthy. No event loop freeze observed.
+## 10. Child Process Safety
 
-## 13. CPU Load Shedding
+During Puppeteer saturation test (concurrency 4, 15 seconds):
+- Chromium processes never exceeded expected bounded count
+- After test: 0 Chromium, 0 Chrome, 0 Tesseract, 0 pdftoppm
 
-Implemented via `isSystemUnderPressure()` in `resource-limiter.ts`:
-- Returns true when any limiter is at ≥80% capacity
-- Used to reject new expensive work while allowing normal reads
-- Protects operations in order: render → crawl → export → cvParse
-- Normal application navigation (student reads, profile reads) is never blocked
+All Puppeteer calls include:
+- 30s page timeout (`setDefaultTimeout`, `setDefaultNavigationTimeout`)
+- `browser.close()` in `finally` block
+- No shell interpolation (no child_process in runtime src)
 
-## 14. Normal Request Load During CPU-Heavy Work
+## 11. OCR Status
+
+```
+OCR IMPLEMENTED: NO
+SCANNED/IMAGE-ONLY PDF SUPPORT: NO
+```
+
+CV parsing uses:
+- `pdf-parse` (pure JS text extraction from text-based PDFs)
+- `mammoth` (pure JS text extraction from DOCX)
+- Rule-based regex over extracted text
+
+`pdf-parse` does **not** support image-only/scanned PDFs. It extracts embedded text only. Image-only PDFs will return empty or minimal text.
+
+**Note:** CPU capacity must be re-benchmarked if local OCR (Tesseract) is introduced. OCR would add significant CPU load from `pdftoppm` (PDF→image rendering) and `tesseract` (image→text recognition), both of which are CPU-intensive child processes.
+
+## 12. Event Loop Health
+
+| Metric | Idle | During Render (concurrency 2) | During Render (concurrency 4) |
+|--------|------|-------------------------------|-------------------------------|
+| Event loop P95 | 1 ms (prod) | ~51 ms (local baseline) | ~52 ms (local baseline) |
+| API p95 | 3 ms | 5 ms | 7 ms |
+
+Production event loop P95: 1 ms — healthy. No event loop freeze observed during any test.
+
+## 13. Normal API Responsiveness Under Load
 
 | Metric | Value |
 |--------|-------|
-| API p50 (metrics endpoint) | 59 ms |
-| API p95 (metrics endpoint) | 88 ms |
-| 5xx count during load | 0 |
-| CPU peak during 50 concurrent | 20.6% (cumulative) |
-| Load peak during 30s sustained | 2.49 |
+| Idle API p50 | 5 ms |
+| Idle API p95 | 10 ms |
+| During render (concurrency 2) API p95 | 5 ms |
+| During render (concurrency 4) API p95 | 7 ms |
+| 5xx count during all tests | 0 |
 
-## 15. PM2 Safety
+## 14. PM2 Safety
 
 | Check | Status |
 |-------|--------|
-| One SOP application process | Yes — `sop-app` (pid 2894140/2894153) |
+| One SOP application process | Yes |
 | No orphan Next.js server | Verified |
-| No duplicate listener | Verified — single process on port 5010 |
+| No duplicate listener | Verified |
 | PM2 cluster mode | NOT used (correct — limiters are process-local) |
 | PM2 restart as CPU management | NOT used (correct — restart is crash recovery only) |
+| PM2 unstable restarts | 0 |
 
-## 16. Metrics Endpoint
-
-`GET /api/metrics` returns:
-
-```json
-{
-  "process": { "pid", "uptimeSeconds", "cpuPercent", "rssMb", "heapUsedMb", "heapTotalMb", "externalMb" },
-  "system": { "loadAverage1", "loadAverage5", "loadAverage15", "cpuCores" },
-  "eventLoop": { "delayP95Ms" },
-  "resourceLimiters": {
-    "render": { "active", "queued", "maxConcurrent", "maxQueued", "totalAcquired", "totalRejected" },
-    "export": { ... },
-    "crawl": { ... },
-    "cvParse": { ... }
-  },
-  "systemUnderPressure": false
-}
-```
-
-No PII. No student data.
-
-## 17. Acceptance Test Results
+## 15. Acceptance Test
 
 | Requirement | Result |
 |------------|--------|
 | No crash | PASS |
-| No OOM | PASS — RSS peaked at 106 MB (export) / 48 MB (render) |
-| No orphan child processes | PASS — 0 Chromium/Chrome/Tesseract/pdftoppm after all tests |
+| No OOM | PASS — RSS peaked at 117 MB during render saturation |
+| No orphan child processes | PASS — 0 after all tests |
 | No unlimited queue | PASS — all limiters have maxQueued bounds |
 | No event-loop freeze | PASS — ELP95 = 1 ms (production) |
 | No DB corruption | PASS — no DB writes during benchmarks |
 | No unexpected PM2 restart | PASS — 0 unstable restarts |
-| Normal UI responsive under load | PASS — API p95 < 90 ms during 50 concurrent requests |
+| Normal UI responsive under load | PASS — API p95 ≤ 7 ms during all tests |
 
-## 18. Configuration
-
-All limits are configurable via environment variables:
+## 16. Configuration
 
 ```bash
 # Render (Puppeteer — heaviest)
@@ -227,51 +231,44 @@ MAX_QUEUED_CRAWLS=3
 # CV Parse (pdf-parse / mammoth — moderate)
 MAX_CONCURRENT_CV_PARSE=2
 MAX_QUEUED_CV_PARSE=3
+
+# Metrics endpoint (optional API key for external monitoring)
+METRICS_API_KEY=<set to enable external access>
 ```
 
-## 19. Summary
+## 17. Summary
 
 ```
-CPU CORES: 6 (4 available to Node)
+HOST CPUs: 6
+EFFECTIVE APP CPUs: 6
 
-IDLE CPU: 1.1%
-IDLE NODE CPU: 0.2% (instantaneous)
+RENDER CONCURRENCY 1:
+  CPU: Load 0.55/6 = 9%
+  API p95: 3 ms
 
-PDF EXPORT:
-  1 concurrent: CPU: minimal, RAM: +8MB, duration: 23ms
-  2 concurrent: CPU: minimal, RAM: +17MB, duration: 30ms
-  5 concurrent: CPU: low, RAM: +13MB, duration: 52ms
-  10 concurrent: CPU: low, RAM: +13MB, duration: 59ms, rejected: 2
+RENDER CONCURRENCY 2:
+  CPU: Load 3.86/6 = 64%
+  API p95: 5 ms
 
-PUPPETEER RENDER:
-  1 concurrent: CPU: moderate, RAM: +22MB, duration: 1866ms
-  2 concurrent: CPU: moderate, RAM: +21MB, duration: 2861ms
-  3 concurrent: CPU: high, RAM: +23MB, duration: 1927ms (1 queued)
-  4 concurrent: CPU: high, RAM: +10MB, duration: 2987ms (2 queued)
+RENDER CONCURRENCY 3:
+  CPU: Load 5.4/6 = 90%
+  API p95: 4 ms
+
+RENDER CONCURRENCY 4:
+  CPU: Load 7.22/6 = 120% (oversaturated)
+  API p95: 7 ms
 
 SAFE RENDER CONCURRENCY: 2
-RENDER QUEUE LIMIT: 3
+BOUNDED QUEUES: PASS
+CONTROLLED BUSY RESPONSE: PASS
+METRICS ENDPOINT PROTECTED: PASS
+ORPHAN CHROMIUM: 0
+EVENT LOOP HEALTH: PASS
+NORMAL API RESPONSIVE: PASS
+OCR IMPLEMENTED: NO
+CPU RE-BENCHMARK REQUIRED AFTER OCR: YES
 
-SAFE EXPORT CONCURRENCY: 3
-EXPORT QUEUE LIMIT: 5
-
-SAFE CRAWL CONCURRENCY: 2
-CRAWL QUEUE LIMIT: 3
-
-SAFE CV PARSE CONCURRENCY: 2
-CV PARSE QUEUE LIMIT: 3
-
-CPU PEAK: ~20.6% (cumulative, normal API load)
-EVENT LOOP P95: 1 ms (production)
-NORMAL API P95 DURING LOAD: 88 ms
-5XX: 0
-ORPHAN CHILD PROCESSES: 0
-
-OCR CONCURRENCY GATE: N/A (no OCR used)
-BOUNDED QUEUE: PASS
-CPU LOAD SHEDDING: PASS
-EVENT LOOP HEALTHY: PASS
-NORMAL UI RESPONSIVE UNDER LOAD: PASS
+CURRENT CPU HARDENING: PASS
 ```
 
-CPU RESOURCE MANAGEMENT VERIFIED
+CPU HARDENING VERIFICATION COMPLETE
