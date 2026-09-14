@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   listStudentApplications,
   listApplicationDocuments,
+  listAllApplications,
   getApplication,
 } from "@/lib/application/application-repository";
 import {
@@ -54,10 +55,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ application, documents });
     }
 
-    return NextResponse.json(
-      { error: "Provide studentId or applicationId parameter" },
-      { status: 400 },
-    );
+    // No filter: list all applications across all students (cross-student listing page)
+    const applications = await listAllApplications(limit, offset);
+    return NextResponse.json({ applications });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json(

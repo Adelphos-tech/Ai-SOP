@@ -1,18 +1,71 @@
 // ============================================================
-// GET /api/application/student
-// Phase SOP-AI-29
-// ============================================================
-// Get student by ID, email, or search by name
+// GET  /api/application/student   — Get student by ID, email, or search by name
+// POST /api/application/student   — Create a new student (canonical New Applicant flow)
+// Phase SOP-AI-29 + UX flow consolidation
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { getStudent, getStudentByEmail, searchStudents, getStudentProfile } from "@/lib/application/application-repository";
+import {
+  getStudent,
+  getStudentByEmail,
+  searchStudents,
+  getStudentProfile,
+  createStudent,
+} from "@/lib/application/application-repository";
+import { CreateStudentInput } from "@/lib/application/application-types";
 import {
   requireConsultantSession,
   authorizeStudentAccess,
   authErrorResponse,
   AuthError,
 } from "@/lib/auth/consultant-session";
+
+export async function POST(request: NextRequest) {
+  try {
+    // ===== AUTH =====
+    let consultant;
+    try {
+      consultant = await requireConsultantSession(request);
+    } catch (e) {
+      if (e instanceof AuthError) return authErrorResponse(e);
+      throw e;
+    }
+
+    const body = await request.json();
+
+    if (!body.firstName || !body.lastName || !body.email) {
+      return NextResponse.json(
+        { error: "firstName, lastName, and email are required" },
+        { status: 400 },
+      );
+    }
+
+    // Reuse existing student if one with this email already exists (idempotent)
+    const existing = await getStudentByEmail(body.email);
+    if (existing) {
+      return NextResponse.json({ student: existing, duplicate: true });
+    }
+
+    const studentInput: CreateStudentInput = {
+      firstName: body.firstName,
+      lastName: body.lastName,
+      email: body.email,
+      phone: body.phone,
+      country: body.country,
+      externalRefId: body.externalRefId,
+      profileData: body.profileData,
+    };
+
+    const student = await createStudent(studentInput);
+    return NextResponse.json({ student, duplicate: false });
+  } catch (error: any) {
+    if (error instanceof AuthError) return authErrorResponse(error);
+    return NextResponse.json(
+      { error: error?.message || "Internal server error" },
+      { status: 500 },
+    );
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {

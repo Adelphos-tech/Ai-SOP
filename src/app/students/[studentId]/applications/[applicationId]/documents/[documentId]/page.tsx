@@ -381,8 +381,9 @@ export default function DocumentWorkspacePage() {
     <PageContainer>
       <WorkflowStepper />
       <Breadcrumb items={[
-        { label: "Student", href: `/students/${studentId}` },
-        { label: "Application", href: `/students/${studentId}/applications/${applicationId}` },
+        { label: "Students", href: "/students" },
+        { label: student ? `${student.firstName} ${student.lastName}` : "Student", href: `/students/${studentId}` },
+        { label: application?.universityName || "Application", href: `/students/${studentId}/applications/${applicationId}` },
         { label: document?.documentTitle || "Document" },
       ]} />
 

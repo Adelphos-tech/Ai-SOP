@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   DOCUMENT_TYPE_OPTIONS,
@@ -15,6 +15,11 @@ import {
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass } from "@/components/ui/FormField";
+import {
+  INTAKE_SECTIONS,
+  calculateIntakeCompletion,
+  getProfileReadiness,
+} from "@/lib/application/intake-completion";
 
 interface Application {
   id: string;
@@ -65,12 +70,22 @@ interface RequirementLookupResult {
   writingRequirements?: WritingRequirement[];
 }
 
+interface Student {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
 export default function ApplicationWorkspacePage() {
   const params = useParams();
+  const router = useRouter();
   const studentId = params.studentId as string;
   const applicationId = params.applicationId as string;
 
   const [application, setApplication] = useState<Application | null>(null);
+  const [student, setStudent] = useState<Student | null>(null);
+  const [profile, setProfile] = useState<any>(null);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -100,7 +115,13 @@ export default function ApplicationWorkspacePage() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/application/list?applicationId=${applicationId}&studentId=${studentId}`);
+      // Fetch application, student, and profile in parallel
+      const [res, studentRes, profileRes] = await Promise.all([
+        fetch(`/api/application/list?applicationId=${applicationId}&studentId=${studentId}`),
+        fetch(`/api/application/student?id=${studentId}`),
+        fetch(`/api/application/profile?studentId=${studentId}`),
+      ]);
+
       if (!res.ok) {
         const data = await res.json();
         setError(data.error || "Application not found");
@@ -109,6 +130,16 @@ export default function ApplicationWorkspacePage() {
       const data = await res.json();
       setApplication(data.application);
       setDocuments(data.documents || []);
+
+      if (studentRes.ok) {
+        const studentData = await studentRes.json();
+        setStudent(studentData.student);
+      }
+
+      if (profileRes.ok) {
+        const profileData = await profileRes.json();
+        setProfile(profileData.profile);
+      }
 
       if (data.application) {
         try {
@@ -163,6 +194,9 @@ export default function ApplicationWorkspacePage() {
         throw new Error(err.error || "Failed to add document");
       }
 
+      const docData = await res.json();
+      const newDocId = docData.document?.id;
+
       setShowAddForm(false);
       setDocumentType("STATEMENT_OF_PURPOSE");
       setDocumentTitle("");
@@ -176,7 +210,13 @@ export default function ApplicationWorkspacePage() {
       setSelectedWritingReqId(null);
       setResolutionPath(null);
       setResolutionLabel(null);
-      await loadApplication();
+
+      // No dead-end: go straight to the document workspace
+      if (newDocId) {
+        router.push(`/students/${studentId}/applications/${applicationId}/documents/${newDocId}`);
+      } else {
+        await loadApplication();
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to add document");
     } finally {
@@ -324,8 +364,8 @@ export default function ApplicationWorkspacePage() {
       <WorkflowStepper />
       <Breadcrumb items={[
         { label: "Students", href: "/students" },
-        { label: "Student", href: `/students/${studentId}` },
-        { label: "Application" },
+        { label: student ? `${student.firstName} ${student.lastName}` : "Student", href: `/students/${studentId}` },
+        { label: application ? `${application.universityName}` : "Application" },
       ]} />
 
       {/* Application Summary */}
@@ -337,6 +377,7 @@ export default function ApplicationWorkspacePage() {
               {application?.programName} · {application?.degree}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-sm text-dvivid-text-muted">
+              {student && <span className="font-medium text-dvivid-text-primary">{student.firstName} {student.lastName}</span>}
               {application?.intake && <span>{application.intake} {application.intakeYear}</span>}
               {application?.country && <span>{application.country}</span>}
               {application?.department && <span>{application.department}</span>}
@@ -350,6 +391,45 @@ export default function ApplicationWorkspacePage() {
             <PrimaryButton onClick={() => setShowAddForm(!showAddForm)}>Add Document</PrimaryButton>
           </div>
         </div>
+
+        {/* Profile Readiness / Complete Missing Information */}
+        {profile !== null && (() => {
+          const readiness = getProfileReadiness(profile, application);
+          const firstMissing = readiness.sections.find(s => s.status === "missing");
+          return (
+            <div className="mt-6 pt-6 border-t border-dvivid-border-light">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <span className="text-sm font-medium text-dvivid-text-secondary">
+                  Profile Readiness: {readiness.requiredComplete}/{readiness.requiredTotal} required sections complete
+                </span>
+                {firstMissing ? (
+                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/${firstMissing.slug}`}>
+                    <PrimaryButton>Complete Missing Information →</PrimaryButton>
+                  </Link>
+                ) : (
+                  <span className="text-sm font-medium text-dvivid-success">✓ Profile ready for generation</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {readiness.sections.map(s => (
+                  <Link
+                    key={s.sectionId}
+                    href={`/students/${studentId}/applications/${applicationId}/intake/${s.slug}`}
+                    className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
+                      s.status === "complete"
+                        ? "bg-dvivid-success-light text-dvivid-success hover:bg-dvivid-success-light/70"
+                        : s.status === "missing"
+                        ? "bg-dvivid-error-light text-dvivid-error hover:bg-dvivid-error-light/70"
+                        : "bg-gray-100 text-dvivid-text-muted hover:bg-gray-200"
+                    }`}
+                  >
+                    {s.status === "complete" ? "✓" : s.status === "missing" ? "○" : "—"} {s.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Requirements Status */}

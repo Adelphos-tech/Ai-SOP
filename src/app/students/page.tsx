@@ -78,8 +78,8 @@ export default function StudentsPage() {
         title="Students"
         subtitle="Search and manage student application profiles."
         action={
-          <Link href="/app-setup">
-            <PrimaryButton>+ New Student</PrimaryButton>
+          <Link href="/students/new">
+            <PrimaryButton>+ New Applicant</PrimaryButton>
           </Link>
         }
       />
@@ -112,7 +112,7 @@ export default function StudentsPage() {
           title="No Students Found"
           description={`No students match "${query}". Create a new student profile to get started.`}
           action={
-            <Link href="/app-setup">
+            <Link href="/students/new">
               <PrimaryButton>Create New Student</PrimaryButton>
             </Link>
           }

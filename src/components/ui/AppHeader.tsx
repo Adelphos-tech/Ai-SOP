@@ -7,7 +7,7 @@ import { LogoutButton } from "@/components/auth/AuthGuard";
 
 const navLinks = [
   { href: "/students", label: "Students" },
-  { href: "/app-setup", label: "Applications" },
+  { href: "/applications", label: "Applications" },
 ];
 
 export function AppHeader() {

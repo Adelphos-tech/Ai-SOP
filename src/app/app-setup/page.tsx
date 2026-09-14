@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   DOCUMENT_TYPE_OPTIONS,
   PROMPT_SOURCE_OPTIONS,
@@ -9,6 +11,16 @@ import {
   PromptSource,
 } from "@/lib/application/application-types";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
+
+// ============================================================
+// LEGACY_APPLICATION_SETUP
+// ============================================================
+// This page is the legacy one-shot form. The canonical flow is
+// /students → student workspace → application workspace → intake → documents.
+// After a successful save here, the user is redirected to the
+// canonical application workspace (no dead-end).
+// New users should use /students/new instead.
+// ============================================================
 
 interface SavedData {
   studentId: string;
@@ -28,6 +40,7 @@ interface SavedDocument {
 }
 
 export default function AppSetupPage() {
+  const router = useRouter();
   // Student state
   const [studentId, setStudentId] = useState("");
   const [firstName, setFirstName] = useState("");
@@ -188,6 +201,12 @@ export default function AppSetupPage() {
       setSaved(true);
       resetDocumentForm();
       await loadDocuments(data.applicationId);
+
+      // No dead-end: redirect to the canonical application workspace
+      // so the consultant can proceed with intake / generation / review.
+      setTimeout(() => {
+        router.push(`/students/${data.studentId}/applications/${data.applicationId}`);
+      }, 800);
     } catch (err: any) {
       setError(err?.message || "Save failed");
     } finally {
@@ -258,14 +277,28 @@ export default function AppSetupPage() {
         </p>
       </div>
 
-      {/* Saved Status */}
+      {/* Legacy banner */}
+      <div className="mb-6 p-4 bg-dvivid-primary-light border border-dvivid-primary-border rounded-card flex items-start gap-3">
+        <span className="text-dvivid-primary text-lg">ⓘ</span>
+        <div className="flex-1">
+          <p className="text-sm font-medium text-dvivid-primary">Legacy Application Setup</p>
+          <p className="text-xs text-dvivid-text-secondary mt-0.5">
+            This is the legacy quick-form. The canonical workflow is via the{" "}
+            <Link href="/students" className="text-dvivid-primary underline">Students</Link>{" "}
+            tab (Students → New Applicant → Application → Intake → Documents). For new applicants, use{" "}
+            <Link href="/students/new" className="text-dvivid-primary underline">New Applicant</Link>.
+          </p>
+        </div>
+      </div>
+
+      {/* Saved Status — redirecting to application workspace */}
       {saved && savedData && (
         <div className="mb-6 p-4 bg-dvivid-success-light border border-dvivid-success/20 rounded-card flex items-center gap-3">
           <span className="text-dvivid-success text-lg">✓</span>
           <div className="flex-1">
-            <p className="text-sm font-medium text-dvivid-success">Saved successfully</p>
+            <p className="text-sm font-medium text-dvivid-success">Application created successfully. Opening application workspace…</p>
             <p className="text-xs text-dvivid-text-secondary mt-0.5">
-              Student: {savedData.studentId.slice(0, 8)}... · Application: {savedData.applicationId.slice(0, 8)}... · Document: {savedData.documentId.slice(0, 8)}...
+              Redirecting to the application workspace where you can complete intake and generate documents.
             </p>
           </div>
         </div>

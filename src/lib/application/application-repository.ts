@@ -237,6 +237,35 @@ export async function listStudentApplications(studentId: string, limit = 100, of
   return (rows as any[]).map(rowToApplication);
 }
 
+/**
+ * List all applications across all students, with student info joined.
+ * Used by the cross-student Applications listing page.
+ */
+export async function listAllApplications(limit = 200, offset = 0): Promise<Array<Application & {
+  studentFirstName: string;
+  studentLastName: string;
+  studentEmail: string;
+  documentCount: number;
+}>> {
+  const pool = getDbPool();
+  const [rows] = await pool.query(
+    `SELECT a.*, s.first_name AS student_first_name, s.last_name AS student_last_name, s.email AS student_email,
+       (SELECT COUNT(*) FROM application_documents d WHERE d.application_id = a.id) AS document_count
+     FROM applications a
+     JOIN students s ON s.id = a.student_id
+     ORDER BY a.updated_at DESC, a.created_at DESC
+     LIMIT ? OFFSET ?`,
+    [limit, offset],
+  );
+  return (rows as any[]).map(row => ({
+    ...rowToApplication(row),
+    studentFirstName: row.student_first_name || "",
+    studentLastName: row.student_last_name || "",
+    studentEmail: row.student_email || "",
+    documentCount: Number(row.document_count) || 0,
+  }));
+}
+
 function rowToApplication(row: any): Application {
   return {
     id: row.id,
