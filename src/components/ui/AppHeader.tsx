@@ -14,7 +14,6 @@ import { useState } from "react";
 
 const navLinks = [
   { href: "/students", label: "Students" },
-  { href: "/applications", label: "Applications" },
 ];
 
 export function AppHeader() {
