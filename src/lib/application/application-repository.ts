@@ -83,6 +83,55 @@ export async function searchStudents(query: string): Promise<Student[]> {
   return (rows as any[]).map(rowToStudent);
 }
 
+/**
+ * List students with server-side pagination.
+ * Returns students ordered by most recently updated first.
+ */
+export async function listStudents(options: {
+  limit?: number;
+  offset?: number;
+  query?: string;
+}): Promise<{ students: Student[]; total: number }> {
+  const pool = getDbPool();
+  const limit = Math.min(options.limit || 25, 100);
+  const offset = options.offset || 0;
+  const query = options.query?.trim();
+
+  if (query) {
+    const likeQuery = `%${query}%`;
+    const concatQuery = `%${query.replace(/\s+/g, "%")}%`;
+    const [rows] = await pool.execute(
+      `SELECT * FROM students
+       WHERE first_name LIKE ? OR last_name LIKE ? OR email LIKE ?
+         OR CONCAT(first_name, ' ', last_name) LIKE ?
+         OR CONCAT(first_name, ' ', last_name) LIKE ?
+       ORDER BY updated_at DESC, last_name, first_name
+       LIMIT ${limit} OFFSET ${offset}`,
+      [likeQuery, likeQuery, likeQuery, likeQuery, concatQuery],
+    );
+    const [countRows] = await pool.execute(
+      `SELECT COUNT(*) as total FROM students
+       WHERE first_name LIKE ? OR last_name LIKE ? OR email LIKE ?
+         OR CONCAT(first_name, ' ', last_name) LIKE ?
+         OR CONCAT(first_name, ' ', last_name) LIKE ?`,
+      [likeQuery, likeQuery, likeQuery, likeQuery, concatQuery],
+    );
+    return {
+      students: (rows as any[]).map(rowToStudent),
+      total: (countRows as any[])[0]?.total || 0,
+    };
+  }
+
+  const [rows] = await pool.execute(
+    `SELECT * FROM students ORDER BY updated_at DESC, last_name, first_name LIMIT ${limit} OFFSET ${offset}`,
+  );
+  const [countRows] = await pool.execute("SELECT COUNT(*) as total FROM students");
+  return {
+    students: (rows as any[]).map(rowToStudent),
+    total: (countRows as any[])[0]?.total || 0,
+  };
+}
+
 export async function saveStudentProfile(studentId: string, profileData: StudentProfileData): Promise<void> {
   const pool = getDbPool();
   await pool.execute(

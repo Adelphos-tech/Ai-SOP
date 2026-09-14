@@ -20,6 +20,7 @@ import {
   calculateIntakeCompletion,
   getProfileReadiness,
 } from "@/lib/application/intake-completion";
+import { CVUpload } from "@/components/ui/CVUpload";
 
 interface Application {
   id: string;
@@ -106,6 +107,7 @@ export default function ApplicationWorkspacePage() {
   const [resolving, setResolving] = useState(false);
   const [resolutionPath, setResolutionPath] = useState<string | null>(null);
   const [resolutionLabel, setResolutionLabel] = useState<string | null>(null);
+  const [showCVUpload, setShowCVUpload] = useState(false);
 
   useEffect(() => {
     loadApplication();
@@ -364,6 +366,28 @@ export default function ApplicationWorkspacePage() {
   const firstMissingSlug = readiness?.sections.find(s => s.status === "missing")?.slug;
   const intakeComplete = readiness?.canGenerate ?? false;
 
+  // Determine the primary document (first document, or most advanced)
+  const primaryDoc = documents.length > 0 ? documents[0] : null;
+  const docWorkspaceHref = primaryDoc ? `/students/${studentId}/applications/${applicationId}/documents/${primaryDoc.id}` : null;
+
+  // State-based CTA: A=incomplete, B=ready+no docs, C=ready+doc NOT_STARTED, D=generated, E=approved
+  const intakeHref = firstMissingSlug
+    ? `/students/${studentId}/applications/${applicationId}/intake/${firstMissingSlug}`
+    : `/students/${studentId}/applications/${applicationId}/intake/student-details`;
+
+  let primaryCta: { label: string; href: string; onClick?: () => void } | null = null;
+  if (!intakeComplete) {
+    primaryCta = { label: "Complete Missing Information →", href: intakeHref };
+  } else if (documents.length === 0) {
+    primaryCta = { label: "Add Document →", href: "", onClick: () => setShowAddForm(true) };
+  } else if (primaryDoc && primaryDoc.generationStatus === "NOT_STARTED") {
+    primaryCta = { label: "Generate Document →", href: docWorkspaceHref! };
+  } else if (primaryDoc && (primaryDoc.generationStatus === "GENERATED" || primaryDoc.generationStatus === "IN_REVIEW")) {
+    primaryCta = { label: "Review Document →", href: docWorkspaceHref! };
+  } else if (primaryDoc && primaryDoc.reviewStatus === "APPROVED") {
+    primaryCta = { label: "Export Final Document →", href: docWorkspaceHref! };
+  }
+
   return (
     <PageContainer>
       <WorkflowStepper
@@ -393,14 +417,26 @@ export default function ApplicationWorkspacePage() {
           </div>
           <div className="flex items-center gap-3">
             <StatusBadge status={application?.status || "DRAFT"} />
-            <Link href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}>
-              <SecondaryButton>9-Section Intake</SecondaryButton>
+            <Link href={intakeHref}>
+              <SecondaryButton>Review / Edit Intake</SecondaryButton>
             </Link>
-            <PrimaryButton onClick={() => setShowAddForm(!showAddForm)}>Add Document</PrimaryButton>
           </div>
         </div>
 
-        {/* Profile Readiness / Complete Missing Information */}
+        {/* State-Based Primary CTA */}
+        {primaryCta && (
+          <div className="mt-6 pt-6 border-t border-dvivid-border-light">
+            {primaryCta.onClick ? (
+              <PrimaryButton onClick={primaryCta.onClick}>{primaryCta.label}</PrimaryButton>
+            ) : (
+              <Link href={primaryCta.href}>
+                <PrimaryButton>{primaryCta.label}</PrimaryButton>
+              </Link>
+            )}
+          </div>
+        )}
+
+        {/* Profile Readiness / CV Upload */}
         {readiness && (() => {
           const firstMissing = readiness.sections.find(s => s.status === "missing");
           return (
@@ -409,14 +445,39 @@ export default function ApplicationWorkspacePage() {
                 <span className="text-sm font-medium text-dvivid-text-secondary">
                   Profile Readiness: {readiness.requiredComplete}/{readiness.requiredTotal} required sections complete
                 </span>
-                {firstMissing ? (
-                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/${firstMissing.slug}`}>
-                    <PrimaryButton>Complete Missing Information →</PrimaryButton>
-                  </Link>
-                ) : (
-                  <span className="text-sm font-medium text-dvivid-success">✓ Profile ready for generation</span>
-                )}
+                <div className="flex items-center gap-3">
+                  {!intakeComplete && (
+                    <button
+                      onClick={() => setShowCVUpload(!showCVUpload)}
+                      className="text-sm text-dvivid-primary hover:underline font-medium"
+                    >
+                      Upload CV to pre-fill
+                    </button>
+                  )}
+                  {firstMissing ? (
+                    <Link href={`/students/${studentId}/applications/${applicationId}/intake/${firstMissing.slug}`}>
+                      <span className="text-sm text-dvivid-primary hover:underline font-medium cursor-pointer">Complete Missing Information →</span>
+                    </Link>
+                  ) : (
+                    <span className="text-sm font-medium text-dvivid-success">✓ Profile ready</span>
+                  )}
+                </div>
               </div>
+
+              {/* CV Upload Panel */}
+              {showCVUpload && !intakeComplete && (
+                <div className="mb-4 p-4 bg-dvivid-surface-alt border border-dvivid-border rounded-input">
+                  <CVUpload
+                    studentId={studentId}
+                    onApplied={() => {
+                      setShowCVUpload(false);
+                      loadApplication();
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Section pills */}
               <div className="flex flex-wrap gap-2">
                 {readiness.sections.map(s => (
                   <Link
@@ -680,49 +741,68 @@ export default function ApplicationWorkspacePage() {
       {documents.length === 0 ? (
         <EmptyState
           title="No Documents Yet"
-          description="Add an SOP, essay, personal statement or other writing task."
+          description={intakeComplete ? "Add an SOP, essay, personal statement or other writing task." : "Complete the intake first, then add a document."}
           action={<PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>}
         />
       ) : (
         <div className="space-y-4">
-          {documents.map((doc) => (
-            <Link
-              key={doc.id}
-              href={`/students/${studentId}/applications/${applicationId}/documents/${doc.id}`}
-              className="block bg-white border border-dvivid-border rounded-card shadow-card p-6 hover:shadow-card-hover hover:border-dvivid-primary-border transition-all"
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-card-title text-dvivid-text-primary">{doc.documentTitle}</h3>
-                  <p className="text-sm text-dvivid-text-secondary mt-1 line-clamp-2">
-                    {doc.promptText.substring(0, 120)}{doc.promptText.length > 120 ? "..." : ""}
-                  </p>
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    <PromptSourceBadge source={doc.promptSource} />
-                    <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-secondary text-xs font-medium rounded-full">
-                      {doc.documentType.replace(/_/g, " ").toLowerCase()}
-                    </span>
-                    {doc.wordMax && (
-                      <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
-                        {doc.wordMin || 0}-{doc.wordMax} words
+          {documents.map((doc) => {
+            const docHref = `/students/${studentId}/applications/${applicationId}/documents/${doc.id}`;
+            let actionLabel = "Open";
+            let actionColor = "text-dvivid-text-secondary";
+            if (doc.generationStatus === "NOT_STARTED") {
+              actionLabel = "Generate →";
+              actionColor = "text-dvivid-primary font-medium";
+            } else if (doc.generationStatus === "GENERATING") {
+              actionLabel = "Generating...";
+              actionColor = "text-dvivid-warning";
+            } else if (doc.generationStatus === "GENERATED" || doc.generationStatus === "IN_REVIEW") {
+              actionLabel = "Review →";
+              actionColor = "text-dvivid-primary font-medium";
+            } else if (doc.reviewStatus === "APPROVED") {
+              actionLabel = "Export / Open →";
+              actionColor = "text-dvivid-success font-medium";
+            }
+            return (
+              <Link
+                key={doc.id}
+                href={docHref}
+                className="block bg-white border border-dvivid-border rounded-card shadow-card p-6 hover:shadow-card-hover hover:border-dvivid-primary-border transition-all"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-card-title text-dvivid-text-primary">{doc.documentTitle}</h3>
+                    <p className="text-sm text-dvivid-text-secondary mt-1 line-clamp-2">
+                      {doc.promptText.substring(0, 120)}{doc.promptText.length > 120 ? "..." : ""}
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <PromptSourceBadge source={doc.promptSource} />
+                      <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-secondary text-xs font-medium rounded-full">
+                        {doc.documentType.replace(/_/g, " ").toLowerCase()}
                       </span>
+                      {doc.wordMax && (
+                        <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
+                          {doc.wordMin || 0}-{doc.wordMax} words
+                        </span>
+                      )}
+                      {doc.pageLimit && (
+                        <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
+                          {doc.pageLimit} page(s)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                    <StatusBadge status={doc.generationStatus} />
+                    {doc.generationStatus !== "NOT_STARTED" && doc.reviewStatus && (
+                      <StatusBadge status={doc.reviewStatus} />
                     )}
-                    {doc.pageLimit && (
-                      <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
-                        {doc.pageLimit} page(s)
-                      </span>
-                    )}
+                    <span className={`text-sm ${actionColor}`}>{actionLabel}</span>
                   </div>
                 </div>
-                <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                  <StatusBadge status={doc.generationStatus} />
-                  {doc.generationStatus !== "NOT_STARTED" && doc.reviewStatus && (
-                    <StatusBadge status={doc.reviewStatus} />
-                  )}
-                </div>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            );
+          })}
         </div>
       )}
     </PageContainer>

@@ -9,6 +9,7 @@ import {
   getStudent,
   getStudentByEmail,
   searchStudents,
+  listStudents,
   getStudentProfile,
   createStudent,
 } from "@/lib/application/application-repository";
@@ -83,6 +84,9 @@ export async function GET(request: NextRequest) {
     const email = searchParams.get("email");
     const query = searchParams.get("q");
     const includeProfile = searchParams.get("profile") === "true";
+    const listMode = searchParams.get("list") === "true";
+    const pageLimit = searchParams.get("limit");
+    const offset = searchParams.get("offset");
 
     // Authorize student access if a student id is provided
     if (id) {
@@ -109,12 +113,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ student });
     }
 
-    if (query) {
-      const students = await searchStudents(query);
-      return NextResponse.json({ students });
+    // List mode with pagination (also supports search query)
+    if (listMode || query) {
+      const result = await listStudents({
+        limit: pageLimit ? parseInt(pageLimit) : 25,
+        offset: offset ? parseInt(offset) : 0,
+        query: query || undefined,
+      });
+      return NextResponse.json({
+        students: result.students,
+        total: result.total,
+        limit: pageLimit ? parseInt(pageLimit) : 25,
+        offset: offset ? parseInt(offset) : 0,
+      });
     }
 
-    return NextResponse.json({ error: "Provide id, email, or q parameter" }, { status: 400 });
+    return NextResponse.json({ error: "Provide id, email, list=true, or q parameter" }, { status: 400 });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json(

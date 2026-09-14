@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   PageContainer, Breadcrumb, PageHeader, PrimaryButton, SecondaryButton,
@@ -45,6 +45,7 @@ interface ProfileData {
 
 export default function StudentWorkspacePage() {
   const params = useParams();
+  const router = useRouter();
   const studentId = params.studentId as string;
 
   const [student, setStudent] = useState<Student | null>(null);
@@ -143,6 +144,9 @@ export default function StudentWorkspacePage() {
         throw new Error(err.error || "Failed to create application");
       }
 
+      const data = await res.json();
+      const newAppId = data.application?.id;
+
       setShowNewAppForm(false);
       setUniversityName("");
       setProgramName("");
@@ -151,7 +155,13 @@ export default function StudentWorkspacePage() {
       setCountry("");
       setIntake("");
       setIntakeYear("");
-      await loadStudent();
+
+      // No dead-end: go straight to the new Application Workspace
+      if (newAppId) {
+        router.push(`/students/${studentId}/applications/${newAppId}`);
+      } else {
+        await loadStudent();
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to create application");
     } finally {
@@ -213,7 +223,7 @@ export default function StudentWorkspacePage() {
           </div>
           <div className="flex gap-3">
             {applications.length > 0 && (
-              <Link href={`/students/${studentId}/applications/${applications[0].id}/intake/student-details`}>
+              <Link href={`/students/${studentId}/applications/${applications[0].id}`}>
                 <SecondaryButton>Edit / Complete Profile</SecondaryButton>
               </Link>
             )}

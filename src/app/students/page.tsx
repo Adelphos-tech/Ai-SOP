@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { PageContainer, PageHeader, PrimaryButton, EmptyState, StatusBadge } from "@/components/ui";
 
@@ -16,28 +16,32 @@ interface StudentResult {
   applicationCount?: number;
 }
 
+const PAGE_SIZE = 25;
+
 export default function StudentsPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<StudentResult[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
-  async function handleSearch(e?: React.FormEvent) {
-    if (e) e.preventDefault();
-    if (!query.trim()) {
-      setResults([]);
-      setSearched(false);
-      return;
-    }
-
+  const fetchStudents = useCallback(async (searchQuery: string, pageOffset: number) => {
     setLoading(true);
-    setSearched(true);
     try {
-      const res = await fetch(`/api/application/student?q=${encodeURIComponent(query)}`);
+      const params = new URLSearchParams({
+        list: "true",
+        limit: String(PAGE_SIZE),
+        offset: String(pageOffset),
+      });
+      if (searchQuery.trim()) params.set("q", searchQuery.trim());
+
+      const res = await fetch(`/api/application/student?${params}`);
       if (res.ok) {
         const data = await res.json();
         const students = data.students || [];
 
+        // Fetch application counts in parallel
         const withCounts = await Promise.all(
           students.map(async (s: StudentResult) => {
             try {
@@ -53,28 +57,44 @@ export default function StudentsPage() {
           }),
         );
         setResults(withCounts);
+        setTotal(data.total || 0);
+        setOffset(pageOffset);
       } else {
         setResults([]);
+        setTotal(0);
       }
     } catch {
       setResults([]);
+      setTotal(0);
     } finally {
       setLoading(false);
+      setLoaded(true);
     }
-  }
+  }, []);
 
+  // Load first page on mount
+  useEffect(() => {
+    fetchStudents("", 0);
+  }, [fetchStudents]);
+
+  // Debounced search
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (query.trim().length >= 2) handleSearch();
-    }, 300);
+      if (loaded) fetchStudents(query, 0);
+    }, 350);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, loaded, fetchStudents]);
+
+  const hasPrev = offset > 0;
+  const hasNext = offset + PAGE_SIZE < total;
+  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
 
   return (
     <PageContainer>
       <PageHeader
         title="Students"
-        subtitle="Search and manage student application profiles."
+        subtitle={`${total} student${total !== 1 ? "s" : ""} total`}
         action={
           <Link href="/students/new">
             <PrimaryButton>+ New Applicant</PrimaryButton>
@@ -83,16 +103,15 @@ export default function StudentsPage() {
       />
 
       {/* Search bar */}
-      <form onSubmit={handleSearch} className="mb-8">
+      <form onSubmit={(e) => { e.preventDefault(); fetchStudents(query, 0); }} className="mb-8">
         <div className="relative">
           <input
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="Search by name, email, or student ID..."
-            className="w-full px-5 py-3.5 pl-13 border border-dvivid-border rounded-input bg-white text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:ring-2 focus:ring-dvivid-primary/12 focus:border-dvivid-primary transition-colors text-base"
+            className="w-full px-5 py-3.5 border border-dvivid-border rounded-input bg-white text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:ring-2 focus:ring-dvivid-primary/12 focus:border-dvivid-primary transition-colors text-base"
             style={{ paddingLeft: "48px" }}
-            autoFocus
           />
           <svg className="absolute left-4 top-4 w-5 h-5 text-dvivid-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -100,15 +119,16 @@ export default function StudentsPage() {
         </div>
       </form>
 
-      {/* Results */}
+      {/* Loading */}
       {loading && (
-        <div className="text-center py-12 text-dvivid-text-secondary text-sm">Searching...</div>
+        <div className="text-center py-12 text-dvivid-text-secondary text-sm">Loading students...</div>
       )}
 
-      {!loading && searched && results.length === 0 && (
+      {/* Empty results */}
+      {!loading && loaded && results.length === 0 && (
         <EmptyState
-          title="No Students Found"
-          description={`No students match "${query}". Create a new student profile to get started.`}
+          title={query ? "No Students Found" : "No Students Yet"}
+          description={query ? `No students match "${query}".` : "Create your first student to get started."}
           action={
             <Link href="/students/new">
               <PrimaryButton>Create New Student</PrimaryButton>
@@ -117,11 +137,9 @@ export default function StudentsPage() {
         />
       )}
 
+      {/* Results */}
       {!loading && results.length > 0 && (
         <div className="space-y-4">
-          <p className="text-sm text-dvivid-text-secondary font-medium">
-            {results.length} student{results.length !== 1 ? "s" : ""} found
-          </p>
           {results.map(student => (
             <Link
               key={student.id}
@@ -158,19 +176,32 @@ export default function StudentsPage() {
               </div>
             </Link>
           ))}
-        </div>
-      )}
 
-      {!loading && !searched && (
-        <EmptyState
-          title="Search for Students"
-          description="Start typing to search for students by name, email, or student ID."
-          icon={
-            <svg className="w-8 h-8 text-dvivid-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5 9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-            </svg>
-          }
-        />
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-4">
+              <p className="text-sm text-dvivid-text-secondary">
+                Page {currentPage} of {totalPages}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => fetchStudents(query, Math.max(0, offset - PAGE_SIZE))}
+                  disabled={!hasPrev || loading}
+                  className="px-4 py-2 text-sm font-medium text-dvivid-text-primary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ← Previous
+                </button>
+                <button
+                  onClick={() => fetchStudents(query, offset + PAGE_SIZE)}
+                  disabled={!hasNext || loading}
+                  className="px-4 py-2 text-sm font-medium text-dvivid-text-primary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </PageContainer>
   );
