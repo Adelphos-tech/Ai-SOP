@@ -74,6 +74,18 @@ jobs:
         env:
           SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
 
+      - name: Create mock production database for isolation tests
+        run: |
+          mysql -h 127.0.0.1 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" <<'SQL'
+            CREATE DATABASE IF NOT EXISTS sop_ai_app;
+            CREATE USER IF NOT EXISTS 'sop_app'@'%' IDENTIFIED BY '${{ secrets.SOP_TEST_DB_PASSWORD }}';
+            GRANT SELECT ON sop_ai_app.* TO 'sop_app'@'%';
+            FLUSH PRIVILEGES;
+          SQL
+
+      - name: Set production DB password for tests
+        run: echo "SOP_PROD_DB_PASSWORD=${{ secrets.SOP_TEST_DB_PASSWORD }}" >> $GITHUB_ENV
+
       - name: TypeScript type check
         run: npx tsc --noEmit
 
