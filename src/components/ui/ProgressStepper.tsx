@@ -18,8 +18,8 @@ export function ProgressStepper({
 }) {
   return (
     <>
-      {/* Desktop: CSS grid with 7 equal columns — no scrollbar, labels can wrap */}
-      <div className={`hidden lg:grid grid-cols-7 gap-0 ${className}`}>
+      {/* Desktop: CSS grid with 6 equal columns — no scrollbar, labels can wrap */}
+      <div className={`hidden lg:grid grid-cols-6 gap-0 ${className}`}>
         {steps.map((step, i) => {
           const isClickable = step.status === "completed" && step.href;
           const circle = (

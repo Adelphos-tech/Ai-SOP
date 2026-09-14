@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   PageContainer, PageHeader, PrimaryButton, EmptyState, StatusBadge,
 } from "@/components/ui";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 
 // ============================================================
 // /applications — Cross-student Applications Listing
@@ -80,7 +79,6 @@ export default function ApplicationsPage() {
 
   return (
     <PageContainer>
-      <WorkflowStepper />
       <PageHeader
         title="Applications"
         subtitle="All university applications across students. Click an application to open its workspace."

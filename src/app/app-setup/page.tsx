@@ -10,7 +10,6 @@ import {
   DocumentType,
   PromptSource,
 } from "@/lib/application/application-types";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 
 // ============================================================
 // LEGACY_APPLICATION_SETUP
@@ -268,7 +267,6 @@ export default function AppSetupPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 md:px-8 py-8">
-      <WorkflowStepper />
       {/* Page Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-dvivid-text-primary">Application Setup</h1>

@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { PageContainer, PageHeader, PrimaryButton, EmptyState, StatusBadge } from "@/components/ui";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 
 interface StudentResult {
   id: string;
@@ -73,7 +72,6 @@ export default function StudentsPage() {
 
   return (
     <PageContainer>
-      <WorkflowStepper />
       <PageHeader
         title="Students"
         subtitle="Search and manage student application profiles."

@@ -7,6 +7,7 @@ import {
   PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
   SectionCard, StatusBadge,
 } from "@/components/ui";
+import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass, TextAreaField } from "@/components/ui/FormField";
 import { IntakeTracker } from "@/components/ui/IntakeTracker";
 import { CVUpload } from "@/components/ui/CVUpload";
@@ -156,11 +157,18 @@ export default function IntakePage() {
   }
 
   const completions = calculateIntakeCompletion(profile, application);
+  const readiness = getProfileReadiness(profile, application);
+  const firstMissingSlug = readiness.sections.find(s => s.status === "missing")?.slug;
+  const intakeComplete = readiness.canGenerate;
   const prevSection = INTAKE_SECTIONS.find(s => s.id === currentStep - 1);
   const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
 
   return (
     <PageContainer>
+      <WorkflowStepper
+        intakeComplete={intakeComplete}
+        firstIncompleteIntakeSlug={firstMissingSlug}
+      />
       <Breadcrumb items={[
         { label: "Students", href: "/students" },
         { label: application?.universityName || "Application", href: `/students/${studentId}/applications/${applicationId}` },

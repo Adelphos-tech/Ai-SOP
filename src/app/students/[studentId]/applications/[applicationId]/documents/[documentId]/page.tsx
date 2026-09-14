@@ -379,7 +379,10 @@ export default function DocumentWorkspacePage() {
 
   return (
     <PageContainer>
-      <WorkflowStepper />
+      <WorkflowStepper
+        generationStatus={document?.generationStatus}
+        reviewStatus={document?.reviewStatus}
+      />
       <Breadcrumb items={[
         { label: "Students", href: "/students" },
         { label: student ? `${student.firstName} ${student.lastName}` : "Student", href: `/students/${studentId}` },

@@ -4,108 +4,232 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { ProgressStepper, StepperStep } from "./ProgressStepper";
 
-/**
- * Phase SOP-UI-35A: WorkflowStepper
- *
- * Maps the current route to one of 7 canonical consultant workflow steps:
- *   1. Student
- *   2. School & Program
- *   3. Background & Experience
- *   4. Story & Goals
- *   5. Document & Prompt
- *   6. Generate
- *   7. Review & Export
- *
- * The active step is derived from the route. Completed steps are clickable
- * (navigate backward). The current and upcoming steps are non-clickable
- * from the stepper itself (the page itself drives forward navigation).
- */
+// ============================================================
+// CANONICAL WORKFLOW TRACKER
+// ============================================================
+// 6-step consultant journey:
+//   1. Applicant
+//   2. Application
+//   3. Intake
+//   4. Document
+//   5. Generate
+//   6. Review & Export
+//
+// The active step is derived from BOTH the route AND known
+// workflow state (document generation/review status, intake
+// completion). Completed steps link only to canonical
+// database-backed pages — never to legacy/localStorage routes.
+// ============================================================
 
-export interface WorkflowStepDef {
+// ============================================================
+// STEP DEFINITIONS
+// ============================================================
+
+export interface CanonicalStepDef {
   label: string;
-  /** Routes that belong to this workflow step (prefix match) */
-  routes: string[];
-  /** Where to navigate when clicking back to this completed step */
-  backHref: string;
+  /** Index (0-based) of this step */
+  index: number;
 }
 
-export const WORKFLOW_STEPS: WorkflowStepDef[] = [
-  {
-    label: "Student",
-    routes: ["/students", "/personal", "/app-setup"],
-    backHref: "/students",
-  },
-  {
-    label: "School & Program",
-    routes: ["/application", "/app-setup"],
-    backHref: "/app-setup",
-  },
-  {
-    label: "Background & Experience",
-    routes: ["/education", "/english", "/experience", "/projects", "/achievements", "/documents"],
-    backHref: "/education",
-  },
-  {
-    label: "Story & Goals",
-    routes: ["/personal-story", "/career", "/preferences"],
-    backHref: "/personal-story",
-  },
-  {
-    label: "Document & Prompt",
-    routes: ["/requirements-library", "/requirements"],
-    backHref: "/requirements-library",
-  },
-  {
-    label: "Generate",
-    routes: ["/fact-sheet"],
-    backHref: "/fact-sheet",
-  },
-  {
-    label: "Review & Export",
-    routes: ["/sop-result"],
-    backHref: "/",
-  },
+export const CANONICAL_STEPS: CanonicalStepDef[] = [
+  { label: "Applicant", index: 0 },
+  { label: "Application", index: 1 },
+  { label: "Intake", index: 2 },
+  { label: "Document", index: 3 },
+  { label: "Generate", index: 4 },
+  { label: "Review & Export", index: 5 },
 ];
 
-/**
- * Determine which workflow step (0-indexed) a path belongs to.
- * Document and application workspace routes are matched specially
- * since they contain dynamic segments.
- */
-export function getWorkflowStepIndex(pathname: string): number {
-  // Document workspace → Review & Export (step 6, 0-indexed)
-  if (pathname.match(/\/students\/[^/]+\/applications\/[^/]+\/documents\/[^/]+/)) {
-    return 6;
-  }
-  // Application workspace → Document & Prompt (step 4, 0-indexed)
-  if (pathname.match(/\/students\/[^/]+\/applications\/[^/]+$/)) {
-    return 4;
-  }
-  // Student workspace → Student (step 0)
-  if (pathname.match(/\/students\/[^/]+$/)) {
-    return 0;
-  }
+// ============================================================
+// ROUTE PATTERN MATCHING
+// ============================================================
 
-  // Match against route prefixes
-  for (let i = 0; i < WORKFLOW_STEPS.length; i++) {
-    for (const route of WORKFLOW_STEPS[i].routes) {
-      if (pathname === route || pathname.startsWith(route + "/")) {
-        return i;
-      }
-    }
-  }
-  return 0;
+// Dynamic route patterns for the canonical flow.
+// We use regex to extract studentId / applicationId / documentId.
+
+const STUDENT_NEW_RE = /^\/students\/new$/;
+const STUDENT_WORKSPACE_RE = /^\/students\/([^/]+)$/;
+const APPLICATION_WORKSPACE_RE = /^\/students\/([^/]+)\/applications\/([^/]+)$/;
+const INTAKE_RE = /^\/students\/([^/]+)\/applications\/([^/]+)\/intake(?:\/(.+))?$/;
+const DOCUMENT_RE = /^\/students\/([^/]+)\/applications\/([^/]+)\/documents\/([^/]+)$/;
+
+interface RouteInfo {
+  studentId: string | null;
+  applicationId: string | null;
+  documentId: string | null;
+  /** Which canonical step this route maps to (0-based), or null if not a journey page */
+  routeStep: number | null;
 }
 
-export function WorkflowStepper({ className = "" }: { className?: string }) {
-  const pathname = usePathname();
-  const activeIndex = getWorkflowStepIndex(pathname);
+function parseRoute(pathname: string): RouteInfo {
+  if (STUDENT_NEW_RE.test(pathname)) {
+    return { studentId: null, applicationId: null, documentId: null, routeStep: 0 };
+  }
+  let m = pathname.match(STUDENT_WORKSPACE_RE);
+  if (m) {
+    return { studentId: m[1], applicationId: null, documentId: null, routeStep: 0 };
+  }
+  m = pathname.match(INTAKE_RE);
+  if (m) {
+    return { studentId: m[1], applicationId: m[2], documentId: null, routeStep: 2 };
+  }
+  m = pathname.match(DOCUMENT_RE);
+  if (m) {
+    return { studentId: m[1], applicationId: m[2], documentId: m[3], routeStep: 3 };
+  }
+  m = pathname.match(APPLICATION_WORKSPACE_RE);
+  if (m) {
+    return { studentId: m[1], applicationId: m[2], documentId: null, routeStep: 1 };
+  }
+  return { studentId: null, applicationId: null, documentId: null, routeStep: null };
+}
 
-  const steps: StepperStep[] = WORKFLOW_STEPS.map((def, i) => ({
-    label: def.label,
-    status: i < activeIndex ? "completed" : i === activeIndex ? "active" : "upcoming",
-    href: i < activeIndex ? def.backHref : undefined,
-  }));
+// ============================================================
+// STATE-BASED STEP RESOLUTION
+// ============================================================
+
+/**
+ * Determine the effective active step from route + document state.
+ *
+ * On the document workspace route, the step depends on the document's
+ * generation/review status:
+ *   NOT_STARTED              → Document (step 3)
+ *   IN_PROGRESS / GENERATING  → Generate (step 4)
+ *   GENERATED / REVIEWED / FINALIZED / FAILED → Review & Export (step 5)
+ *     (FAILED is treated as Review & Export so the consultant can retry)
+ *
+ * On other routes, the route step is used directly.
+ */
+function resolveActiveStep(
+  routeStep: number,
+  documentId: string | null,
+  generationStatus?: string,
+  reviewStatus?: string,
+): number {
+  if (routeStep !== 3 || !documentId) {
+    return routeStep;
+  }
+
+  // Document workspace — derive from document state
+  if (!generationStatus || generationStatus === "NOT_STARTED") {
+    return 3; // Document
+  }
+  if (generationStatus === "IN_PROGRESS" || generationStatus === "GENERATING") {
+    return 4; // Generate
+  }
+  // GENERATED, REVIEWED, FINALIZED, FAILED → Review & Export
+  return 5;
+}
+
+// ============================================================
+// COMPLETED STEP DESTINATIONS
+// ============================================================
+
+/**
+ * Build the href for a completed step.
+ * Only canonical database-backed routes are used.
+ * Returns undefined if the step cannot be navigated to (missing IDs).
+ */
+function stepHref(
+  stepIndex: number,
+  info: RouteInfo,
+  intakeComplete?: boolean,
+  firstIncompleteIntakeSlug?: string,
+): string | undefined {
+  const { studentId, applicationId, documentId } = info;
+
+  switch (stepIndex) {
+    case 0: // Applicant → student workspace
+      if (studentId) return `/students/${studentId}`;
+      return undefined;
+
+    case 1: // Application → application workspace
+      if (studentId && applicationId) return `/students/${studentId}/applications/${applicationId}`;
+      return undefined;
+
+    case 2: // Intake → first incomplete section (or first section if all complete)
+      if (studentId && applicationId) {
+        const slug = firstIncompleteIntakeSlug || "student-details";
+        return `/students/${studentId}/applications/${applicationId}/intake/${slug}`;
+      }
+      return undefined;
+
+    case 3: // Document → document workspace
+      if (studentId && applicationId && documentId) {
+        return `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
+      }
+      return undefined;
+
+    case 4: // Generate → document workspace
+      if (studentId && applicationId && documentId) {
+        return `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
+      }
+      return undefined;
+
+    case 5: // Review & Export → document workspace
+      if (studentId && applicationId && documentId) {
+        return `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
+      }
+      return undefined;
+
+    default:
+      return undefined;
+  }
+}
+
+// ============================================================
+// MAIN COMPONENT
+// ============================================================
+
+export interface WorkflowStepperProps {
+  /** Document generation status — used for state-based Generate/Review steps */
+  generationStatus?: string;
+  /** Document review status */
+  reviewStatus?: string;
+  /** Whether all required intake sections are complete */
+  intakeComplete?: boolean;
+  /** Slug of the first incomplete required intake section (for Intake step link) */
+  firstIncompleteIntakeSlug?: string;
+  className?: string;
+}
+
+export function WorkflowStepper({
+  generationStatus,
+  reviewStatus,
+  intakeComplete,
+  firstIncompleteIntakeSlug,
+  className = "",
+}: WorkflowStepperProps) {
+  const pathname = usePathname();
+  const info = parseRoute(pathname);
+
+  // Only render on journey pages
+  if (info.routeStep === null) {
+    return null;
+  }
+
+  const activeStep = resolveActiveStep(
+    info.routeStep,
+    info.documentId,
+    generationStatus,
+    reviewStatus,
+  );
+
+  const steps: StepperStep[] = CANONICAL_STEPS.map((def) => {
+    const isCompleted = def.index < activeStep;
+    const isActive = def.index === activeStep;
+
+    // Completed steps are clickable if they have a valid destination
+    const href = isCompleted
+      ? stepHref(def.index, info, intakeComplete, firstIncompleteIntakeSlug)
+      : undefined;
+
+    return {
+      label: def.label,
+      status: isCompleted ? "completed" : isActive ? "active" : "upcoming",
+      href,
+    };
+  });
 
   return (
     <div className={`bg-white border border-dvivid-border rounded-card shadow-card px-6 py-5 mb-6 ${className}`}>
@@ -114,25 +238,50 @@ export function WorkflowStepper({ className = "" }: { className?: string }) {
   );
 }
 
-/**
- * Sticky version — stays near the top on long pages.
- * Uses a lighter background and reduced padding to save space.
- */
-export function StickyWorkflowStepper({ className = "" }: { className?: string }) {
-  const pathname = usePathname();
-  const activeIndex = getWorkflowStepIndex(pathname);
+// ============================================================
+// STICKY VERSION
+// ============================================================
 
-  const steps: StepperStep[] = WORKFLOW_STEPS.map((def, i) => ({
-    label: def.label,
-    status: i < activeIndex ? "completed" : i === activeIndex ? "active" : "upcoming",
-    href: i < activeIndex ? def.backHref : undefined,
-  }));
+export function StickyWorkflowStepper(props: WorkflowStepperProps) {
+  const pathname = usePathname();
+  const info = parseRoute(pathname);
+
+  if (info.routeStep === null) {
+    return null;
+  }
+
+  const activeStep = resolveActiveStep(
+    info.routeStep,
+    info.documentId,
+    props.generationStatus,
+    props.reviewStatus,
+  );
+
+  const steps: StepperStep[] = CANONICAL_STEPS.map((def) => {
+    const isCompleted = def.index < activeStep;
+    const isActive = def.index === activeStep;
+    const href = isCompleted
+      ? stepHref(def.index, info, props.intakeComplete, props.firstIncompleteIntakeSlug)
+      : undefined;
+
+    return {
+      label: def.label,
+      status: isCompleted ? "completed" : isActive ? "active" : "upcoming",
+      href,
+    };
+  });
 
   return (
-    <div className={`sticky top-[72px] z-20 bg-white/95 backdrop-blur border-b border-dvivid-border px-4 md:px-8 py-3 mb-6 ${className}`}>
+    <div className={`sticky top-[72px] z-20 bg-white/95 backdrop-blur border-b border-dvivid-border px-4 md:px-8 py-3 mb-6 ${props.className || ""}`}>
       <div className="max-w-[1280px] mx-auto">
         <ProgressStepper steps={steps} />
       </div>
     </div>
   );
 }
+
+// ============================================================
+// EXPORTED HELPERS (for testing / external use)
+// ============================================================
+
+export { parseRoute, resolveActiveStep, stepHref };

@@ -3,7 +3,10 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { hrefWithStudent } from "@/lib/navigation/student-nav";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
+
+// NOTE: WorkflowStepper removed from FormShell — legacy pages
+// (/personal, /education, /experience, etc.) are not part of the
+// canonical database-backed flow and should not show the tracker.
 
 const sectionOrder = [
   "personal", "education", "english", "experience", "projects",
@@ -30,7 +33,6 @@ function FormShellInner({
 
   return (
     <div className="max-w-3xl mx-auto space-y-6 px-4 md:px-8 py-8">
-      <WorkflowStepper />
       {studentId && (
         <div className="flex items-center gap-2 text-sm">
           <Link href={`/students/${studentId}`} className="text-dvivid-text-secondary hover:text-dvivid-blue transition-colors">

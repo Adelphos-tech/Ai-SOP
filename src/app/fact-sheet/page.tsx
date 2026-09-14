@@ -6,7 +6,6 @@ import { useProfile } from "@/lib/persistence/ProfileContext";
 import { calculateSections, calculateOverallCompletion } from "@/lib/completion/calculation";
 import { Checkbox } from "@/components/forms/fields/Checkbox";
 import { PageContainer, PageHeader, SectionCard, PrimaryButton } from "@/components/ui";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 
 function FactRow({ label, value }: { label: string; value?: string }) {
   if (!value) return null;
@@ -111,7 +110,6 @@ export default function FactSheetPage() {
 
   return (
     <PageContainer>
-      <WorkflowStepper />
       <PageHeader
         title="Review Fact Sheet"
         subtitle="Review all information before generating your document. Accuracy is critical."

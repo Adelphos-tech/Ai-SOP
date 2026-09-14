@@ -359,9 +359,17 @@ export default function ApplicationWorkspacePage() {
     );
   }
 
+  // Compute intake readiness for tracker + CTA
+  const readiness = profile !== null && application ? getProfileReadiness(profile, application) : null;
+  const firstMissingSlug = readiness?.sections.find(s => s.status === "missing")?.slug;
+  const intakeComplete = readiness?.canGenerate ?? false;
+
   return (
     <PageContainer>
-      <WorkflowStepper />
+      <WorkflowStepper
+        intakeComplete={intakeComplete}
+        firstIncompleteIntakeSlug={firstMissingSlug}
+      />
       <Breadcrumb items={[
         { label: "Students", href: "/students" },
         { label: student ? `${student.firstName} ${student.lastName}` : "Student", href: `/students/${studentId}` },
@@ -393,8 +401,7 @@ export default function ApplicationWorkspacePage() {
         </div>
 
         {/* Profile Readiness / Complete Missing Information */}
-        {profile !== null && (() => {
-          const readiness = getProfileReadiness(profile, application);
+        {readiness && (() => {
           const firstMissing = readiness.sections.find(s => s.status === "missing");
           return (
             <div className="mt-6 pt-6 border-t border-dvivid-border-light">
