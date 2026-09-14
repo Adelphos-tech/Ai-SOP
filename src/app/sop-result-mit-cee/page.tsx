@@ -7,6 +7,9 @@ import { promises as fs } from "fs";
 import path from "path";
 import { notFound } from "next/navigation";
 
+// This page reads from the filesystem at runtime — never statically prerender
+export const dynamic = "force-dynamic";
+
 const BASE = path.join(process.cwd(), "logs", "live-generations", "mit-cee-meng-fall-2027-001");
 
 async function loadData() {
