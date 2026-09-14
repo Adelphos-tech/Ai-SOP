@@ -82,12 +82,26 @@ import {
 } from "./types";
 import { ResponseComponent } from "./generation-contract-types";
 import { generateCacheKey } from "./freshness";
+import { crawlLimiter, ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 
 // ============================================================
 // MAIN DISCOVERY FUNCTION
 // ============================================================
 
 export async function discoverRequirements(
+  input: ApplicationDiscoveryInput,
+  options?: { searchProvider?: OfficialSourceSearchProvider },
+): Promise<ApplicationDiscoveryResult> {
+  // Acquire crawl slot — prevents unbounded concurrent discovery
+  const release = await crawlLimiter.acquire();
+  try {
+    return await _discoverRequirementsInner(input, options);
+  } finally {
+    release();
+  }
+}
+
+async function _discoverRequirementsInner(
   input: ApplicationDiscoveryInput,
   options?: { searchProvider?: OfficialSourceSearchProvider },
 ): Promise<ApplicationDiscoveryResult> {

@@ -31,6 +31,7 @@ import {
   AuthError,
 } from "@/lib/auth/consultant-session";
 import { checkRateLimit, getClientIp } from "@/lib/auth/rate-limiter";
+import { cvParseLimiter, ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 
 export const maxDuration = 60;
 
@@ -201,11 +202,23 @@ export async function POST(request: NextRequest) {
 
     await writeFile(hashFilePath, buffer);
 
-    // ===== PARSE =====
+    // ===== PARSE (concurrency-limited) =====
     let parsed;
     try {
-      parsed = await parseCVFile(buffer, file.name);
+      const release = await cvParseLimiter.acquire();
+      try {
+        parsed = await parseCVFile(buffer, file.name);
+      } finally {
+        release();
+      }
     } catch (parseError: any) {
+      // Concurrency rejection
+      if (parseError instanceof ResourceBusyError) {
+        return NextResponse.json(
+          { error: parseError.message, code: "CV_PARSE_BUSY" },
+          { status: 503 },
+        );
+      }
       // Deterministic failure classification — return controlled 400
       const code = parseError?.code || "PARSE_FAILED";
       const userMessage = parseError?.userMessage || "We could not process this file. Please try a different PDF or DOCX, or enter the details manually.";

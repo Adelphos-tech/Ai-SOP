@@ -21,8 +21,10 @@ import {
   RenderStatus,
 } from "./render-lifecycle-types";
 import { ResponseComponent } from "@/lib/requirements/generation-contract-types";
+import { renderLimiter } from "@/lib/concurrency/resource-limiter";
 
 async function renderHtmlToPdfPages(html: string, profile: RenderProfile): Promise<number> {
+  const release = await renderLimiter.acquire();
   const puppeteer = await import("puppeteer");
   const pdfLib = await import("pdf-lib");
   const browser = await puppeteer.launch({
@@ -31,7 +33,9 @@ async function renderHtmlToPdfPages(html: string, profile: RenderProfile): Promi
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(30000);
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
     const pdfBytes = await page.pdf({
       format: profile.pageSize === "LETTER" ? "Letter" : "A4",
       printBackground: false,
@@ -40,6 +44,7 @@ async function renderHtmlToPdfPages(html: string, profile: RenderProfile): Promi
     return doc.getPageCount();
   } finally {
     await browser.close();
+    release();
   }
 }
 
@@ -52,6 +57,7 @@ async function measureRenderPressure(
   profile: RenderProfile,
   maxPages: number
 ): Promise<{ contentHeightPx: number; availableHeightPx: number; overflowHeightPx: number; overflowRatio: number }> {
+  const release = await renderLimiter.acquire();
   const puppeteer = await import("puppeteer");
   const browser = await puppeteer.launch({
     headless: true,
@@ -59,7 +65,9 @@ async function measureRenderPressure(
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(30000);
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
 
     // Set the page size to match the render profile
     const format = profile.pageSize === "LETTER" ? "Letter" : "A4";
@@ -86,6 +94,7 @@ async function measureRenderPressure(
     return { contentHeightPx: 0, availableHeightPx: 0, overflowHeightPx: 0, overflowRatio: 1 };
   } finally {
     await browser.close();
+    release();
   }
 }
 

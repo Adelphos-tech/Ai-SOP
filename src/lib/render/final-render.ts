@@ -24,8 +24,10 @@ import {
   RenderDeltaAnalytics,
 } from "./render-lifecycle-types";
 import { ResponseComponent } from "@/lib/requirements/generation-contract-types";
+import { renderLimiter } from "@/lib/concurrency/resource-limiter";
 
 async function renderHtmlToPdfPages(html: string, profile: RenderProfile): Promise<number> {
+  const release = await renderLimiter.acquire();
   const puppeteer = await import("puppeteer");
   const pdfLib = await import("pdf-lib");
   const browser = await puppeteer.launch({
@@ -34,7 +36,9 @@ async function renderHtmlToPdfPages(html: string, profile: RenderProfile): Promi
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(30000);
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
     const pdfBytes = await page.pdf({
       format: profile.pageSize === "LETTER" ? "Letter" : "A4",
       printBackground: false,
@@ -43,6 +47,7 @@ async function renderHtmlToPdfPages(html: string, profile: RenderProfile): Promi
     return doc.getPageCount();
   } finally {
     await browser.close();
+    release();
   }
 }
 

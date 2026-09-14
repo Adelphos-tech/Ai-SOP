@@ -7,6 +7,7 @@
 
 import { RenderProfile, DVIVID_STANDARD_APPLICATION_V1 } from "./render-profile";
 import { generateComponentHtml, generateCombinedHtml } from "./html-generator";
+import { renderLimiter, ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 
 export interface RenderResult {
   pdfBuffer: Buffer;
@@ -51,6 +52,7 @@ async function getPdfLib(): Promise<any> {
 }
 
 async function renderHtmlToPdf(html: string, profile: RenderProfile): Promise<RenderResult> {
+  const release = await renderLimiter.acquire();
   const puppeteer = await getPuppeteer();
   const { PDFDocument } = await getPdfLib();
 
@@ -61,7 +63,9 @@ async function renderHtmlToPdf(html: string, profile: RenderProfile): Promise<Re
 
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(30000);
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 30000 });
 
     const pdfUint8 = await page.pdf({
       format: profile.pageSize === "LETTER" ? "Letter" : "A4",
@@ -81,6 +85,7 @@ async function renderHtmlToPdf(html: string, profile: RenderProfile): Promise<Re
     };
   } finally {
     await browser.close();
+    release();
   }
 }
 

@@ -18,6 +18,7 @@ import {
   AlignmentType,
   PageBreak,
 } from "docx";
+import { exportLimiter } from "@/lib/concurrency/resource-limiter";
 
 // ============================================================
 // TYPES
@@ -210,25 +211,30 @@ async function generateDocx(content: string): Promise<Buffer> {
  * Exports ONLY the document content — no AI metadata.
  */
 export async function exportDocument(input: ExportInput): Promise<ExportResult> {
-  const filename = buildFilename(input);
+  const release = await exportLimiter.acquire();
+  try {
+    const filename = buildFilename(input);
 
-  if (input.format === "PDF") {
-    const { buffer, pageCount } = await generatePdf(input.content);
+    if (input.format === "PDF") {
+      const { buffer, pageCount } = await generatePdf(input.content);
+      return {
+        buffer,
+        mimeType: "application/pdf",
+        filename,
+        pageCount,
+      };
+    }
+
+    const buffer = await generateDocx(input.content);
     return {
       buffer,
-      mimeType: "application/pdf",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       filename,
-      pageCount,
+      pageCount: 0, // DOCX page count is determined by the viewer
     };
+  } finally {
+    release();
   }
-
-  const buffer = await generateDocx(input.content);
-  return {
-    buffer,
-    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    filename,
-    pageCount: 0, // DOCX page count is determined by the viewer
-  };
 }
 
 /**
@@ -236,6 +242,11 @@ export async function exportDocument(input: ExportInput): Promise<ExportResult> 
  * Used for physical page limit validation.
  */
 export async function countPdfPages(content: string): Promise<number> {
-  const { pageCount } = await generatePdf(content);
-  return pageCount;
+  const release = await exportLimiter.acquire();
+  try {
+    const { pageCount } = await generatePdf(content);
+    return pageCount;
+  } finally {
+    release();
+  }
 }
