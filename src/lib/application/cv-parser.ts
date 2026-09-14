@@ -281,16 +281,42 @@ function extractName(text: string): { firstName?: string; lastName?: string } {
   const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
   for (const line of lines.slice(0, 5)) {
     // Skip lines that look like contact info or job titles
-    if (line.match(/@|phone|email|address|curriculum|resume|cv\b/i)) continue;
-    // Match 2-4 capitalized words
-    const nameMatch = line.match(/^([A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)\s+([A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)$/);
+    if (line.match(/@|phone|email|address|curriculum|cv\b/i)) continue;
+
+    // Strip common suffixes like "| Resume", "| CV", "| Curriculum Vitae"
+    let cleaned = line.replace(/\s*\|\s*.*$/i, "").replace(/\s*[-–—]\s*.*$/i, "").trim();
+
+    // Skip if cleaning removed too much
+    if (!cleaned || cleaned.length < 3) continue;
+
+    // Handle all-caps names (e.g., "KUNJ MANOJKUMAR MODH") — convert to title case
+    if (cleaned === cleaned.toUpperCase() && cleaned.match(/^[A-Z\s]+$/) && cleaned.split(/\s+/).length >= 2) {
+      cleaned = cleaned.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    // Match 2-word names (allow lowercase last name for Europass format)
+    const nameMatch = cleaned.match(/^([A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)\s+([A-Z][a-z]+(?:[-'][A-Za-z]+)*)$/);
     if (nameMatch) {
       return { firstName: nameMatch[1], lastName: nameMatch[2] };
     }
+
+    // Match 2-word names with lowercase last name (e.g., "Kunj Manojkumar modh")
+    const lowerLastNameMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+\s+[a-z]+)$/);
+    if (lowerLastNameMatch) {
+      const parts = lowerLastNameMatch[2].split(/\s+/);
+      return { firstName: lowerLastNameMatch[1], lastName: parts[parts.length - 1] };
+    }
+
     // Match 3-word names
-    const threeWordMatch = line.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([A-Z][a-z]+)$/);
+    const threeWordMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([A-Z][a-z]+)$/);
     if (threeWordMatch) {
       return { firstName: threeWordMatch[1], lastName: threeWordMatch[3] };
+    }
+
+    // Match 3-word names with lowercase last name (e.g., "Kunj Manojkumar modh")
+    const threeWordLowerMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([a-z]+)$/);
+    if (threeWordLowerMatch) {
+      return { firstName: threeWordLowerMatch[1], lastName: threeWordLowerMatch[3].replace(/\b\w/, c => c.toUpperCase()) };
     }
   }
   return {};
