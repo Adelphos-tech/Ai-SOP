@@ -21,6 +21,7 @@ import {
   authErrorResponse,
   AuthError,
 } from "@/lib/auth/consultant-session";
+import { ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 
 export const maxDuration = 300;
 
@@ -78,6 +79,15 @@ export async function POST(req: NextRequest) {
 
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
+    if (error instanceof ResourceBusyError) {
+      if (documentId) {
+        await releaseGenerationLock(documentId);
+      }
+      return NextResponse.json(
+        { error: error.message, code: "RENDER_BUSY" },
+        { status: 503 },
+      );
+    }
     console.error("Document generation error:", error);
     if (documentId) {
       await releaseGenerationLock(documentId);

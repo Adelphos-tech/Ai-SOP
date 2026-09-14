@@ -28,6 +28,7 @@ import {
   authErrorResponse,
   AuthError,
 } from "@/lib/auth/consultant-session";
+import { ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 
 export async function POST(request: NextRequest) {
   try {
@@ -145,6 +146,12 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
+    if (error instanceof ResourceBusyError) {
+      return NextResponse.json(
+        { error: error.message, code: "EXPORT_BUSY" },
+        { status: 503 },
+      );
+    }
     return NextResponse.json(
       { error: error?.message || "Internal server error" },
       { status: 500 },

@@ -189,8 +189,16 @@ export function getAllLimiterStats(): Record<ResourceType, LimiterStats> {
 }
 
 /**
- * Check if any expensive resource is under severe pressure.
- * Used for CPU load shedding — reject new expensive work but
+ * Check if any expensive resource is under admission backpressure.
+ *
+ * NOTE: This measures LIMITER OCCUPANCY (active/queued counts), NOT
+ * actual system CPU load. It is an admission-control / backpressure
+ * signal, not a CPU-pressure measurement.
+ *
+ * Fixed concurrency + bounded queue is the primary safety mechanism.
+ * This function provides an additional signal for load shedding.
+ *
+ * Used for admission protection — reject new expensive work but
  * allow normal reads to continue.
  */
 export function isSystemUnderPressure(): boolean {
@@ -201,3 +209,9 @@ export function isSystemUnderPressure(): boolean {
     cvParseLimiter.isUnderPressure()
   );
 }
+
+/**
+ * Alias that better reflects what this function actually measures.
+ * Same as isSystemUnderPressure() — kept for backwards compatibility.
+ */
+export const isAdmissionBackpressure = isSystemUnderPressure;

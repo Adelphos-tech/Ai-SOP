@@ -19,6 +19,7 @@ import {
   authErrorResponse,
   AuthError,
 } from "@/lib/auth/consultant-session";
+import { ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 
 export const maxDuration = 120;
 
@@ -46,6 +47,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
+    if (error instanceof ResourceBusyError) {
+      return NextResponse.json(
+        { error: error.message, code: "CRAWL_BUSY" },
+        { status: 503 },
+      );
+    }
     console.error("Discovery error:", error?.message);
     return NextResponse.json(
       { error: error?.message || "Discovery failed" },

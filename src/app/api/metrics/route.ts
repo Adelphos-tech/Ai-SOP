@@ -3,11 +3,20 @@
 // ============================================================
 // Returns CPU, memory, event loop, and resource limiter stats.
 // Used for monitoring CPU-heavy work and concurrency gates.
+//
+// SECURITY: Requires authenticated consultant session.
+// Operational/server metrics are not exposed publicly.
+// No PII is included.
 // ============================================================
 
-import { NextResponse } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { getAllLimiterStats, isSystemUnderPressure } from "@/lib/concurrency/resource-limiter";
+import {
+  requireConsultantSession,
+  authErrorResponse,
+  AuthError,
+} from "@/lib/auth/consultant-session";
 
 let eventLoopMonitor: any = null;
 try {
@@ -17,7 +26,18 @@ try {
   // Some environments may not support this
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // ===== AUTH =====
+  try {
+    await requireConsultantSession(request);
+  } catch (e) {
+    if (e instanceof AuthError) return authErrorResponse(e);
+    return NextResponse.json(
+      { error: "Authentication required" },
+      { status: 401 },
+    );
+  }
+
   const mem = process.memoryUsage();
   const cpu = process.cpuUsage();
   const elapsed = process.uptime();
@@ -56,7 +76,7 @@ export async function GET() {
       delayP95Ms: eventLoopDelayP95,
     },
     resourceLimiters: limiterStats,
-    systemUnderPressure: isSystemUnderPressure(),
+    admissionBackpressure: isSystemUnderPressure(),
     timestamp: new Date().toISOString(),
   });
 }
