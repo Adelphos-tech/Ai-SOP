@@ -18,8 +18,16 @@ on:
     branches: [main]
   workflow_dispatch: # Allow manual trigger
 
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "22.22.2"
+  RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
   APP_DIR: /opt/sop-ai-app
   PM2_NAME: sop-app
   HEALTH_URL: https://sop.adelphostech.com
@@ -113,34 +121,52 @@ jobs:
       - name: Run CV parse classification tests
         run: npx tsx tests/phase-cv-parse-classification-tests.ts
 
+      - name: Test deployment and rollback safety
+        run: node tests/ci-deployment-tests.cjs
+
+      - name: Build for CV upload integration test
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
+
+      - name: Test production CV upload endpoint
+        run: node tests/cv-production-upload.cjs
+
+      - name: Archive tested build
+        run: tar --exclude=.next/cache -czf next-build.tar.gz .next
+
+      - name: Save tested build
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-build
+          path: next-build.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   # ============================================================
   # Job 2: Build — production bundle
   # ============================================================
   build:
-    name: Build Production
+    name: Promote Tested Build
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          name: tested-build
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build Next.js
-        run: npm run build
-        env:
-          NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
+      - name: Verify tested artifact
+        run: |
+          tar -xzf next-build.tar.gz
+          test -s .next/BUILD_ID
+          test -f .next/prerender-manifest.json
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: next-build
-          path: .next/
+          path: next-build.tar.gz
+          if-no-files-found: error
           retention-days: 7
 
   # ============================================================
@@ -149,40 +175,44 @@ jobs:
   deploy:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: build
+    needs: [test, build]
     environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          name: next-build
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build Next.js (for rsync)
-        run: npm run build
-        env:
-          NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
+      - name: Extract tested build
+        run: tar -xzf next-build.tar.gz
 
       # ============================================================
       # SSH setup
       # ============================================================
       - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           # Configure SSH to use the deploy key for this host
           cat > ~/.ssh/config <<EOF
-          Host ${{ secrets.DEPLOY_HOST }}
-            HostName ${{ secrets.DEPLOY_HOST }}
+          Host sop-production
+            HostName $DEPLOY_HOST
             User root
             IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking no
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
           EOF
           chmod 600 ~/.ssh/config
 
@@ -193,30 +223,31 @@ jobs:
         id: deploy
         run: |
           BUILD_ID="ci-${{ github.sha }}-${{ github.run_number }}"
+          STAGING_DIR="${APP_DIR}.incoming-${RELEASE_ID}"
           echo "Deploying BUILD_ID=$BUILD_ID"
+          ssh sop-production "test ! -e '$STAGING_DIR' && mkdir -m 700 '$STAGING_DIR'"
 
           # Sync source code (excluding secrets, node_modules, .next)
-          rsync -avz --delete \
+          rsync -az \
             --exclude node_modules \
-            --exclude .next \
+            --exclude '.next*' \
             --exclude .git \
-            --exclude .env.local \
+            --exclude '.env*' \
+            --exclude next-build.tar.gz \
             --exclude uploads \
             --exclude logs \
             --exclude backups \
             --exclude baselines \
-            ./ root@${{ secrets.DEPLOY_HOST }}:${{ env.APP_DIR }}/
+            ./ "sop-production:$STAGING_DIR/"
 
           # Sync the build output
-          rsync -avz --delete \
-            .next/ \
-            root@${{ secrets.DEPLOY_HOST }}:${{ env.APP_DIR }}/.next/
+          rsync -az .next/ "sop-production:$STAGING_DIR/.next/"
 
           # Run safe deploy script on server
-          ssh root@${{ secrets.DEPLOY_HOST }} \
-            "cd ${{ env.APP_DIR }} && NEXT_PUBLIC_BUILD_ID=$BUILD_ID bash scripts/ci-deploy.sh"
+          ssh sop-production \
+            "APP_DIR='$APP_DIR' RELEASE_ID='$RELEASE_ID' NEXT_PUBLIC_BUILD_ID='$BUILD_ID' bash '$STAGING_DIR/scripts/ci-deploy.sh'"
 
-          echo "deploy_done=true" >> $GITHUB_OUTPUT
+          echo "deploy_done=true" >> "$GITHUB_OUTPUT"
 
       # ============================================================
       # Health check — verify production is responding
@@ -230,15 +261,17 @@ jobs:
           MAX_RETRIES=5
           RETRY=0
           HEALTHY=false
+          EXPECTED_BUILD_ID=$(cat .next/BUILD_ID)
+          [[ "$EXPECTED_BUILD_ID" =~ ^[a-zA-Z0-9_-]+$ ]]
 
           while [ $RETRY -lt $MAX_RETRIES ]; do
             RETRY=$((RETRY + 1))
             echo "Health check attempt $RETRY/$MAX_RETRIES..."
 
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.HEALTH_URL }} || echo "000")
+            STATUS=$(curl --silent --show-error --max-time 15 -o /dev/null -w "%{http_code}" "$HEALTH_URL/students" || true)
             echo "HTTP status: $STATUS"
 
-            if [ "$STATUS" = "200" ]; then
+            if [ "$STATUS" = "200" ] && curl --fail --silent --show-error --max-time 15 -o /dev/null "$HEALTH_URL/_next/static/$EXPECTED_BUILD_ID/_buildManifest.js"; then
               HEALTHY=true
               echo "healthy=true" >> $GITHUB_OUTPUT
               break
@@ -261,23 +294,25 @@ jobs:
         if: failure() && steps.deploy.outputs.deploy_done == 'true'
         run: |
           echo "::warning::Deploy failed — attempting rollback..."
-          ssh root@${{ secrets.DEPLOY_HOST }} \
-            "cd ${{ env.APP_DIR }} && bash scripts/ci-rollback.sh || echo 'Rollback script not found — manual intervention required'"
+          ssh sop-production \
+            "APP_DIR='$APP_DIR' RELEASE_ID='$RELEASE_ID' bash '$APP_DIR/scripts/ci-rollback.sh'"
 
       # ============================================================
       # Summary
       # ============================================================
       - name: Deploy summary
         if: always()
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          echo "## Deploy Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ needs.build.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deploy | ${{ steps.deploy.outputs.deploy_done == 'true' && '✅ Done' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Health | ${{ steps.health.outputs.healthy == 'true' && '✅ 200 OK' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Build ID:** ci-${{ github.sha }}-${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+          echo "## Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Step | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tests | ${{ needs.test.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Build | ${{ needs.build.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Deploy | ${{ steps.deploy.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Health | ${{ steps.health.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Build ID:** ci-${{ github.sha }}-${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+          printf '**Commit:** %s\n' "$COMMIT_MESSAGE" >> "$GITHUB_STEP_SUMMARY"
