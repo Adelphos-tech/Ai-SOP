@@ -160,10 +160,17 @@ export async function loadDocumentGenerationContext(
   const documentTypeConfig = getDocumentTypeConfig(document.documentType);
 
   // ===== CHECK FACT SHEET APPROVAL =====
+  // Auto-approve if profile has meaningful data (no dedicated approval UI yet).
+  // When a fact-sheet approval UI is added, this should check the explicit flag.
   let factSheetApproved = false;
   if (profile) {
     const anyProfile = profile as any;
-    factSheetApproved = anyProfile.factSheetApproval?.approved === true;
+    const hasExplicitApproval = anyProfile.factSheetApproval?.approved === true;
+    const hasBasicData = anyProfile.personalData?.firstName &&
+                         anyProfile.personalData?.lastName &&
+                         Array.isArray(anyProfile.education) &&
+                         anyProfile.education.length > 0;
+    factSheetApproved = hasExplicitApproval || hasBasicData;
   }
 
   // ===== PRE-GENERATION COMPLETENESS CHECKS =====

@@ -169,7 +169,12 @@ export default function DocumentWorkspacePage() {
         if (appRes.ok) {
           const appData = await appRes.json();
           setApplication(appData.application);
-          setStudent(appData.student);
+        }
+        // Fetch student separately since /api/application/list doesn't return student
+        const studentRes = await fetch(`/api/application/student?id=${studentId}`);
+        if (studentRes.ok) {
+          const studentData = await studentRes.json();
+          setStudent(studentData.student);
         }
       }
     } catch {
