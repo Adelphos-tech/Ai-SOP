@@ -507,10 +507,10 @@ async function runTests() {
       lastName: "Student",
       email: `unapproved.${Date.now()}@test.com`,
     });
-    // Save profile WITHOUT fact sheet approval
+    // Save profile WITHOUT fact sheet approval AND without the basic
+    // personalData+education that triggers auto-approval.
     await saveStudentProfile(unapprovedStudent.id, {
-      personalData: { firstName: "Unapproved", lastName: "Student" },
-      education: [{ level: "Bachelor", institution: "Test", degree: "B.Tech" }],
+      personalData: {},
       factSheetApproval: { approved: false, approvedAt: "" },
     } as any);
 
