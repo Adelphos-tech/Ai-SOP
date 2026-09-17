@@ -117,11 +117,11 @@ export default function ApplicationWorkspacePage() {
     setLoading(true);
     setError("");
     try {
-      // Fetch application, student, and profile in parallel
+      // Fetch application, student, and profile in parallel — no-store to avoid stale data after intake saves
       const [res, studentRes, profileRes] = await Promise.all([
-        fetch(`/api/application/list?applicationId=${applicationId}&studentId=${studentId}`),
-        fetch(`/api/application/student?id=${studentId}`),
-        fetch(`/api/application/profile?studentId=${studentId}`),
+        fetch(`/api/application/list?applicationId=${applicationId}&studentId=${studentId}`, { cache: "no-store" }),
+        fetch(`/api/application/student?id=${studentId}`, { cache: "no-store" }),
+        fetch(`/api/application/profile?studentId=${studentId}`, { cache: "no-store" }),
       ]);
 
       if (!res.ok) {

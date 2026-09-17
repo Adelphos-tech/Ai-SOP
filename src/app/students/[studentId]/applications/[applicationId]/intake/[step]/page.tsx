@@ -70,8 +70,8 @@ export default function IntakePage() {
     setError("");
     try {
       const [profileRes, appRes] = await Promise.all([
-        fetch(`/api/application/profile?studentId=${studentId}`),
-        fetch(`/api/application/list?studentId=${studentId}`),
+        fetch(`/api/application/profile?studentId=${studentId}`, { cache: "no-store" }),
+        fetch(`/api/application/list?studentId=${studentId}`, { cache: "no-store" }),
       ]);
 
       if (profileRes.ok) {
@@ -93,7 +93,7 @@ export default function IntakePage() {
     }
   }
 
-  // Save profile
+  // Save profile — throws on error so callers can block navigation
   const saveProfile = useCallback(async (newProfile: any) => {
     setSaving(true);
     setSaveStatus("saving");
@@ -107,10 +107,13 @@ export default function IntakePage() {
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus("idle"), 2000);
       } else {
+        const errText = await res.text().catch(() => "Save failed");
         setSaveStatus("error");
+        throw new Error(errText);
       }
-    } catch {
+    } catch (e: any) {
       setSaveStatus("error");
+      throw e;
     } finally {
       setSaving(false);
     }
@@ -124,10 +127,15 @@ export default function IntakePage() {
     });
   }, []);
 
-  // Save & Continue
+  // Save & Continue — blocks navigation if save fails
   async function handleSaveAndContinue() {
     if (!profile) return;
-    await saveProfile(profile);
+    try {
+      await saveProfile(profile);
+    } catch (err: any) {
+      setError(err?.message || "Failed to save. Please try again.");
+      return;
+    }
     // Navigate to next section
     const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
     if (nextSection) {
@@ -138,8 +146,16 @@ export default function IntakePage() {
     }
   }
 
-  // Skip optional section
+  // Skip optional section — also save current progress before navigating
   async function handleSkip() {
+    if (profile) {
+      try {
+        await saveProfile(profile);
+      } catch {
+        // If save fails on skip, still allow navigation but show warning
+        setError("Warning: progress may not have been saved.");
+      }
+    }
     const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
     if (nextSection) {
       router.push(`/students/${studentId}/applications/${applicationId}/intake/${nextSection.slug}`);
