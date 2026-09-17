@@ -41,18 +41,23 @@ export async function GET(request: NextRequest) {
       await authorizeStudentAccess(consultant, studentId);
     }
 
-    if (studentId) {
-      const applications = await listStudentApplications(studentId, limit, offset);
-      return NextResponse.json({ applications });
-    }
-
+    // applicationId takes precedence: return single application + documents
     if (applicationId) {
       const application = await getApplication(applicationId);
       if (!application) {
         return NextResponse.json({ error: "Application not found" }, { status: 404 });
       }
+      // Verify ownership when studentId is also provided
+      if (studentId && application.studentId !== studentId) {
+        return NextResponse.json({ error: "Application does not belong to this student" }, { status: 403 });
+      }
       const documents = await listApplicationDocuments(applicationId, limit, offset);
       return NextResponse.json({ application, documents });
+    }
+
+    if (studentId) {
+      const applications = await listStudentApplications(studentId, limit, offset);
+      return NextResponse.json({ applications });
     }
 
     // No filter: list all applications across all students (cross-student listing page)

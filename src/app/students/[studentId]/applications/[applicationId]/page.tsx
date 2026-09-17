@@ -130,6 +130,8 @@ export default function ApplicationWorkspacePage() {
         return;
       }
       const data = await res.json();
+      // DEBUG: log API response shape to catch mismatches
+      console.log("[Workspace] API response:", { hasApplication: !!data.application, hasDocuments: Array.isArray(data.documents), applicationId: data.application?.id });
       setApplication(data.application);
       setDocuments(data.documents || []);
 
@@ -365,6 +367,16 @@ export default function ApplicationWorkspacePage() {
   const readiness = profile !== null && application ? getProfileReadiness(profile, application) : null;
   const firstMissingSlug = readiness?.sections.find(s => s.status === "missing")?.slug;
   const intakeComplete = readiness?.canGenerate ?? false;
+
+  // DEBUG: log readiness state
+  if (readiness) {
+    console.log("[Workspace] Readiness:", {
+      requiredComplete: readiness.requiredComplete,
+      requiredTotal: readiness.requiredTotal,
+      canGenerate: readiness.canGenerate,
+      missingSections: readiness.sections.filter(s => s.status === "missing").map(s => s.label),
+    });
+  }
 
   // Determine the primary document (first document, or most advanced)
   const primaryDoc = documents.length > 0 ? documents[0] : null;
