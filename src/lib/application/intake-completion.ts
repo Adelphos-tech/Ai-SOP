@@ -61,10 +61,13 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
         filled = !!(p.fieldMotivation && String(p.fieldMotivation).trim().length > 0);
         break;
       case 3: // Academics & Projects
+        const hasSkills = p.skills && Object.values(p.skills).some(
+          (arr: any) => Array.isArray(arr) && arr.length > 0
+        );
         filled = !!(
           (Array.isArray(p.projects) && p.projects.length > 0) ||
           (Array.isArray(p.subjects) && p.subjects.length > 0) ||
-          (Array.isArray(p.skills) && p.skills.length > 0)
+          hasSkills
         );
         break;
       case 4: // Work Experience
