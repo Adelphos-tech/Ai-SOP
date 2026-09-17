@@ -130,8 +130,6 @@ export default function ApplicationWorkspacePage() {
         return;
       }
       const data = await res.json();
-      // DEBUG: log API response shape to catch mismatches
-      console.log("[Workspace] API response:", { hasApplication: !!data.application, hasDocuments: Array.isArray(data.documents), applicationId: data.application?.id });
       setApplication(data.application);
       setDocuments(data.documents || []);
 
@@ -147,12 +145,16 @@ export default function ApplicationWorkspacePage() {
 
       if (data.application) {
         try {
-          const reqRes = await fetch(
-            `/api/requirements/lookup?university=${encodeURIComponent(data.application.universityName)}&program=${encodeURIComponent(data.application.programName)}&degree=${encodeURIComponent(data.application.degree)}&intake=${encodeURIComponent(data.application.intake)}&intakeYear=${encodeURIComponent(data.application.intakeYear)}`,
-          );
-          if (reqRes.ok) {
-            const reqData = await reqRes.json();
-            setReqLookup(reqData);
+          const app = data.application;
+          // Guard against empty values that cause 400 on requirements lookup
+          if (app.universityName && app.programName && app.degree && app.intake && app.intakeYear) {
+            const reqRes = await fetch(
+              `/api/requirements/lookup?university=${encodeURIComponent(app.universityName)}&program=${encodeURIComponent(app.programName)}&degree=${encodeURIComponent(app.degree)}&intake=${encodeURIComponent(app.intake)}&intakeYear=${encodeURIComponent(app.intakeYear)}`,
+            );
+            if (reqRes.ok) {
+              const reqData = await reqRes.json();
+              setReqLookup(reqData);
+            }
           }
         } catch {
           // Requirements lookup is optional
@@ -368,16 +370,6 @@ export default function ApplicationWorkspacePage() {
   const firstMissingSlug = readiness?.sections.find(s => s.status === "missing")?.slug;
   const intakeComplete = readiness?.canGenerate ?? false;
 
-  // DEBUG: log readiness state
-  if (readiness) {
-    console.log("[Workspace] Readiness:", {
-      requiredComplete: readiness.requiredComplete,
-      requiredTotal: readiness.requiredTotal,
-      canGenerate: readiness.canGenerate,
-      missingSections: readiness.sections.filter(s => s.status === "missing").map(s => s.label),
-    });
-  }
-
   // Determine the primary document (first document, or most advanced)
   const primaryDoc = documents.length > 0 ? documents[0] : null;
   const docWorkspaceHref = primaryDoc ? `/students/${studentId}/applications/${applicationId}/documents/${primaryDoc.id}` : null;
@@ -429,7 +421,7 @@ export default function ApplicationWorkspacePage() {
           </div>
           <div className="flex items-center gap-3">
             <StatusBadge status={application?.status || "DRAFT"} />
-            <Link href={intakeHref}>
+            <Link href={intakeHref} prefetch={false}>
               <SecondaryButton>Review / Edit Intake</SecondaryButton>
             </Link>
           </div>
@@ -467,7 +459,7 @@ export default function ApplicationWorkspacePage() {
                     </button>
                   )}
                   {firstMissing ? (
-                    <Link href={`/students/${studentId}/applications/${applicationId}/intake/${firstMissing.slug}`}>
+                    <Link href={`/students/${studentId}/applications/${applicationId}/intake/${firstMissing.slug}`} prefetch={false}>
                       <span className="text-sm text-dvivid-primary hover:underline font-medium cursor-pointer">Complete Missing Information →</span>
                     </Link>
                   ) : (
@@ -495,6 +487,7 @@ export default function ApplicationWorkspacePage() {
                   <Link
                     key={s.sectionId}
                     href={`/students/${studentId}/applications/${applicationId}/intake/${s.slug}`}
+                    prefetch={false}
                     className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
                       s.status === "complete"
                         ? "bg-dvivid-success-light text-dvivid-success hover:bg-dvivid-success-light/70"
