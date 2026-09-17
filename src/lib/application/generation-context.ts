@@ -362,14 +362,24 @@ function checkRecommenderContext(profile: StudentProfileData | null): boolean {
 
 /**
  * Check if the profile has visa-specific evidence.
+ * Reads canonical intake keys (careerGoals.longTerm.*, countryQuestions,
+ * mastersMotivation) with legacy keys as fallback.
  */
 function checkVisaEvidence(profile: StudentProfileData | null): boolean {
   if (!profile) return false;
   const anyProfile = profile as any;
   const careerGoals = anyProfile.careerGoals;
+  const longTerm = careerGoals?.longTerm;
+  const countryQ = anyProfile.countryQuestions || anyProfile.countryQuestionnaire;
+  const mastersMotivation = anyProfile.mastersMotivation;
   return !!(
-    careerGoals &&
-    (careerGoals.whyField || careerGoals.whyProgram || careerGoals.returnHomeCountry || careerGoals.returnPlans)
+    // Canonical keys written by the 9-section intake
+    (longTerm && (longTerm.homeCountryPlans || longTerm.vision)) ||
+    (countryQ && Object.values(countryQ).some((v: any) => typeof v === "string" && v.trim().length > 0)) ||
+    (mastersMotivation && Object.values(mastersMotivation).some((v: any) => typeof v === "string" && v.trim().length > 0)) ||
+    // Legacy keys (fallback only)
+    (careerGoals &&
+      (careerGoals.whyField || careerGoals.whyProgram || careerGoals.returnHomeCountry || careerGoals.returnPlans))
   );
 }
 

@@ -71,7 +71,10 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
         );
         break;
       case 4: // Work Experience
-        filled = !!(Array.isArray(p.experience) && p.experience.length > 0);
+        filled = !!(
+          (Array.isArray(p.experience) && p.experience.length > 0) ||
+          p.noWorkExperience === true
+        );
         break;
       case 5: // Master's Motivation
         filled = !!(

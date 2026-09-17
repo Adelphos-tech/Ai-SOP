@@ -37,9 +37,10 @@ interface Application {
 }
 
 interface ProfileData {
-  personalDetails?: { firstName?: string; lastName?: string; currentCountry?: string };
+  personalData?: { firstName?: string; lastName?: string; currentCountry?: string };
   education?: unknown[];
   experience?: unknown[];
+  noWorkExperience?: boolean;
   [key: string]: unknown;
 }
 
@@ -74,7 +75,12 @@ export default function StudentWorkspacePage() {
     try {
       const studentRes = await fetch(`/api/application/student?id=${studentId}`);
       if (!studentRes.ok) {
-        setError("Student not found");
+        let msg = studentRes.status === 404 ? "Student not found" : "Failed to load student. Please try again.";
+        try {
+          const data = await studentRes.json();
+          if (data.error) msg = data.error;
+        } catch { /* keep default */ }
+        setError(msg);
         return;
       }
       const studentData = await studentRes.json();
@@ -171,9 +177,9 @@ export default function StudentWorkspacePage() {
 
   const profileSections = profile
     ? [
-        { name: "Personal Details", filled: !!(profile.personalDetails?.firstName && profile.personalDetails?.lastName) },
+        { name: "Personal Details", filled: !!(profile.personalData?.firstName && profile.personalData?.lastName) },
         { name: "Education", filled: Array.isArray(profile.education) && profile.education.length > 0 },
-        { name: "Experience", filled: Array.isArray(profile.experience) && profile.experience.length > 0 },
+        { name: "Experience", filled: (Array.isArray(profile.experience) && profile.experience.length > 0) || profile.noWorkExperience === true },
       ]
     : [];
   const completedSections = profileSections.filter(s => s.filled).length;

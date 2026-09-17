@@ -25,9 +25,11 @@ export default function StudentsPage() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const fetchStudents = useCallback(async (searchQuery: string, pageOffset: number) => {
     setLoading(true);
+    setLoadError("");
     try {
       const params = new URLSearchParams({
         list: "true",
@@ -62,10 +64,12 @@ export default function StudentsPage() {
       } else {
         setResults([]);
         setTotal(0);
+        setLoadError("Failed to load students. Please try again.");
       }
     } catch {
       setResults([]);
       setTotal(0);
+      setLoadError("Failed to load students. Please check your connection and try again.");
     } finally {
       setLoading(false);
       setLoaded(true);
@@ -109,7 +113,7 @@ export default function StudentsPage() {
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search by name, email, or student ID..."
+            placeholder="Search by name or email..."
             className="w-full px-5 py-3.5 border border-dvivid-border rounded-input bg-white text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:ring-2 focus:ring-dvivid-primary/12 focus:border-dvivid-primary transition-colors text-base"
             style={{ paddingLeft: "48px" }}
           />
@@ -124,8 +128,18 @@ export default function StudentsPage() {
         <div className="text-center py-12 text-dvivid-text-secondary text-sm">Loading students...</div>
       )}
 
+      {/* Load error — don't masquerade as empty data */}
+      {!loading && loadError && (
+        <div className="text-center py-12">
+          <p className="text-sm text-dvivid-error mb-3">{loadError}</p>
+          <button onClick={() => fetchStudents(query, offset)} className="text-sm text-dvivid-primary hover:underline">
+            Try again
+          </button>
+        </div>
+      )}
+
       {/* Empty results */}
-      {!loading && loaded && results.length === 0 && (
+      {!loading && !loadError && loaded && results.length === 0 && (
         <EmptyState
           title={query ? "No Students Found" : "No Students Yet"}
           description={query ? `No students match "${query}".` : "Create your first student to get started."}

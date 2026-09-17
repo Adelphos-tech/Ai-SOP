@@ -370,11 +370,19 @@ export default function ApplicationWorkspacePage() {
   const firstMissingSlug = readiness?.sections.find(s => s.status === "missing")?.slug;
   const intakeComplete = readiness?.canGenerate ?? false;
 
-  // Determine the primary document (first document, or most advanced)
-  const primaryDoc = documents.length > 0 ? documents[0] : null;
+  // Determine the primary document — the most advanced one:
+  // approved > generated > in-progress/failed > not-started
+  const docRank = (d: Document) =>
+    d.reviewStatus === "APPROVED" ? 3 :
+    d.generationStatus === "GENERATED" ? 2 :
+    d.generationStatus === "GENERATING" || d.generationStatus === "FAILED" ? 1 : 0;
+  const primaryDoc = documents.length > 0
+    ? [...documents].sort((a, b) => docRank(b) - docRank(a))[0]
+    : null;
   const docWorkspaceHref = primaryDoc ? `/students/${studentId}/applications/${applicationId}/documents/${primaryDoc.id}` : null;
 
-  // State-based CTA: A=incomplete, B=ready+no docs, C=ready+doc NOT_STARTED, D=generated, E=approved
+  // State-based CTA: A=incomplete, B=ready+no docs, C=doc not started,
+  // D=generating/failed, E=generated, F=approved
   const intakeHref = firstMissingSlug
     ? `/students/${studentId}/applications/${applicationId}/intake/${firstMissingSlug}`
     : `/students/${studentId}/applications/${applicationId}/intake/student-details`;
@@ -384,12 +392,16 @@ export default function ApplicationWorkspacePage() {
     primaryCta = { label: "Complete Missing Information →", href: intakeHref };
   } else if (documents.length === 0) {
     primaryCta = { label: "Add Document →", href: "", onClick: () => setShowAddForm(true) };
-  } else if (primaryDoc && primaryDoc.generationStatus === "NOT_STARTED") {
-    primaryCta = { label: "Generate Document →", href: docWorkspaceHref! };
-  } else if (primaryDoc && (primaryDoc.generationStatus === "GENERATED" || primaryDoc.generationStatus === "IN_REVIEW")) {
-    primaryCta = { label: "Review Document →", href: docWorkspaceHref! };
   } else if (primaryDoc && primaryDoc.reviewStatus === "APPROVED") {
     primaryCta = { label: "Export Final Document →", href: docWorkspaceHref! };
+  } else if (primaryDoc && primaryDoc.generationStatus === "GENERATED") {
+    primaryCta = { label: "Review Document →", href: docWorkspaceHref! };
+  } else if (primaryDoc && primaryDoc.generationStatus === "GENERATING") {
+    primaryCta = { label: "Generation in Progress — Open Document →", href: docWorkspaceHref! };
+  } else if (primaryDoc && primaryDoc.generationStatus === "FAILED") {
+    primaryCta = { label: "Retry Generation →", href: docWorkspaceHref! };
+  } else if (primaryDoc && primaryDoc.generationStatus === "NOT_STARTED") {
+    primaryCta = { label: "Generate Document →", href: docWorkspaceHref! };
   }
 
   return (
@@ -747,7 +759,15 @@ export default function ApplicationWorkspacePage() {
         <EmptyState
           title="No Documents Yet"
           description={intakeComplete ? "Add an SOP, essay, personal statement or other writing task." : "Complete the intake first, then add a document."}
-          action={<PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>}
+          action={
+            intakeComplete ? (
+              <PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>
+            ) : (
+              <Link href={intakeHref}>
+                <SecondaryButton>Complete Intake First →</SecondaryButton>
+              </Link>
+            )
+          }
         />
       ) : (
         <div className="space-y-4">
@@ -755,18 +775,21 @@ export default function ApplicationWorkspacePage() {
             const docHref = `/students/${studentId}/applications/${applicationId}/documents/${doc.id}`;
             let actionLabel = "Open";
             let actionColor = "text-dvivid-text-secondary";
-            if (doc.generationStatus === "NOT_STARTED") {
-              actionLabel = "Generate →";
+            if (doc.reviewStatus === "APPROVED") {
+              actionLabel = "Export / Open →";
+              actionColor = "text-dvivid-success font-medium";
+            } else if (doc.generationStatus === "GENERATED") {
+              actionLabel = "Review →";
               actionColor = "text-dvivid-primary font-medium";
             } else if (doc.generationStatus === "GENERATING") {
               actionLabel = "Generating...";
               actionColor = "text-dvivid-warning";
-            } else if (doc.generationStatus === "GENERATED" || doc.generationStatus === "IN_REVIEW") {
-              actionLabel = "Review →";
+            } else if (doc.generationStatus === "FAILED") {
+              actionLabel = "Retry →";
+              actionColor = "text-dvivid-error font-medium";
+            } else if (doc.generationStatus === "NOT_STARTED") {
+              actionLabel = "Generate →";
               actionColor = "text-dvivid-primary font-medium";
-            } else if (doc.reviewStatus === "APPROVED") {
-              actionLabel = "Export / Open →";
-              actionColor = "text-dvivid-success font-medium";
             }
             return (
               <Link

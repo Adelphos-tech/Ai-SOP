@@ -6,7 +6,8 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { createDocument, getDocument, listApplicationDocuments } from "@/lib/application/application-repository";
+import { createDocument, createOfficialDocument, getDocument, listApplicationDocuments } from "@/lib/application/application-repository";
+import { getDefaultTemplate } from "@/lib/application/default-templates";
 import {
   CreateDocumentInput,
   isValidDocumentType,
@@ -54,23 +55,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Server-resolved prompt sources (OFFICIAL_VERIFIED, DVIVID_DEFAULT_TEMPLATE)
+    // are produced by the resolve-prompt flow. They must go through
+    // createOfficialDocument with verification, not the user-settable
+    // createDocument path which rejects them.
+    let effectivePromptSource = promptSource;
+    let useOfficialCreate = false;
+
     if (promptSource === "OFFICIAL_VERIFIED") {
-      // Only allowed when a writingRequirementId is provided (from verified requirement)
       if (!body.writingRequirementId) {
         return NextResponse.json(
-          { error: "OFFICIAL_VERIFIED prompt source can only be set by the server when linked to a verified writing requirement" },
-          { status: 403 },
+          { error: "OFFICIAL_VERIFIED prompt source requires a verified writing requirement. Use Auto-Resolve or select an official requirement.", code: "MISSING_WRITING_REQUIREMENT" },
+          { status: 400 },
         );
       }
+      // Verify the writing requirement exists and matches the document type
+      const { getWritingRequirement } = await import("@/lib/application/requirements-repository");
+      const wr = await getWritingRequirement(body.writingRequirementId);
+      if (!wr) {
+        return NextResponse.json(
+          { error: "The selected official requirement was not found.", code: "WRITING_REQUIREMENT_NOT_FOUND" },
+          { status: 400 },
+        );
+      }
+      if (wr.documentType !== body.documentType) {
+        return NextResponse.json(
+          { error: "The selected official requirement does not match this document type.", code: "WRITING_REQUIREMENT_TYPE_MISMATCH" },
+          { status: 400 },
+        );
+      }
+      useOfficialCreate = true;
     }
 
     if (promptSource === "DVIVID_DEFAULT_TEMPLATE") {
-      // Only allowed when the server's resolve-prompt flow applies it
-      if (!body.writingRequirementId) {
-        return NextResponse.json(
-          { error: "DVIVID_DEFAULT_TEMPLATE prompt source is server-controlled and applied by the resolve-prompt flow" },
-          { status: 403 },
-        );
+      // Verify the prompt actually is the server's default template for this
+      // document type. If the consultant edited the template text, the source
+      // is effectively consultant-provided — store it that way instead.
+      const template = getDefaultTemplate(body.documentType);
+      if (body.promptText.trim() === template.promptText.trim()) {
+        useOfficialCreate = true;
+      } else {
+        effectivePromptSource = "CONSULTANT_PROVIDED";
       }
     }
 
@@ -79,7 +104,7 @@ export async function POST(request: NextRequest) {
       documentType: body.documentType,
       documentTitle: body.documentTitle || body.documentType,
       promptText: body.promptText,
-      promptSource,
+      promptSource: effectivePromptSource,
       wordMin: body.wordMin,
       wordMax: body.wordMax,
       characterLimit: body.characterLimit,
@@ -89,7 +114,9 @@ export async function POST(request: NextRequest) {
       formattingInstructions: body.formattingInstructions,
     };
 
-    const document = await createDocument(docInput);
+    const document = useOfficialCreate
+      ? await createOfficialDocument(docInput)
+      : await createDocument(docInput);
 
     // Link document to writing requirement if provided
     if (body.writingRequirementId) {

@@ -20,7 +20,6 @@ import {
   getCountryQuestionnaire,
   getAvailableCountries,
 } from "@/lib/application/country-questionnaire";
-import { randomUUID } from "crypto";
 
 // ============================================================
 // 9-SECTION INTAKE PAGE
@@ -58,6 +57,7 @@ export default function IntakePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
 
   // Load profile + application
@@ -105,11 +105,18 @@ export default function IntakePage() {
       });
       if (res.ok) {
         setSaveStatus("saved");
+        setDirty(false);
         setTimeout(() => setSaveStatus("idle"), 2000);
       } else {
-        const errText = await res.text().catch(() => "Save failed");
+        let msg = "Save failed. Please try again.";
+        try {
+          const data = await res.json();
+          msg = data.error || data.message || msg;
+        } catch {
+          await res.text().catch(() => undefined);
+        }
         setSaveStatus("error");
-        throw new Error(errText);
+        throw new Error(msg);
       }
     } catch (e: any) {
       setSaveStatus("error");
@@ -119,8 +126,10 @@ export default function IntakePage() {
     }
   }, [studentId]);
 
-  // Update profile helper
+  // Update profile helper — marks the form dirty so the save indicator
+  // only shows "Unsaved changes" after an actual edit
   const updateProfile = useCallback((updater: (prev: any) => any) => {
+    setDirty(true);
     setProfile((prev: any) => {
       const next = updater(prev || {});
       return next;
@@ -169,7 +178,16 @@ export default function IntakePage() {
   }
 
   if (!currentSection) {
-    return <PageContainer><div className="text-center py-12 text-dvivid-error">Invalid intake section.</div></PageContainer>;
+    return (
+      <PageContainer>
+        <div className="text-center py-12">
+          <p className="text-sm text-dvivid-error mb-4">Invalid intake section.</p>
+          <Link href={`/students/${studentId}/applications/${applicationId}`} className="text-sm text-dvivid-primary hover:underline">
+            ← Back to application
+          </Link>
+        </div>
+      </PageContainer>
+    );
   }
 
   const completions = calculateIntakeCompletion(profile, application);
@@ -206,7 +224,7 @@ export default function IntakePage() {
             <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-muted">Optional</span>
           )}
         </div>
-        <SaveStatusIndicator status={saveStatus} saving={saving} />
+        <SaveStatusIndicator status={saveStatus} saving={saving} dirty={dirty} />
       </div>
 
       <p className="text-sm text-dvivid-text-secondary mb-6">{currentSection.description}</p>
@@ -248,12 +266,18 @@ export default function IntakePage() {
           </Link>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+          <Link
+            href={`/students/${studentId}/applications/${applicationId}`}
+            className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+          >
+            Exit to application
+          </Link>
           {currentSection.optional && (
             <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
           )}
           <PrimaryButton onClick={handleSaveAndContinue} disabled={saving}>
-            {saving ? "Saving..." : "Save & Continue →"}
+            {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
           </PrimaryButton>
         </div>
       </div>
@@ -264,7 +288,7 @@ export default function IntakePage() {
 // ============================================================
 // SAVE STATUS INDICATOR
 // ============================================================
-function SaveStatusIndicator({ status, saving }: { status: string; saving: boolean }) {
+function SaveStatusIndicator({ status, saving, dirty }: { status: string; saving: boolean; dirty: boolean }) {
   if (saving || status === "saving") {
     return <span className="text-sm text-dvivid-text-muted">Saving...</span>;
   }
@@ -274,7 +298,11 @@ function SaveStatusIndicator({ status, saving }: { status: string; saving: boole
   if (status === "error") {
     return <span className="text-sm text-dvivid-error">Save failed</span>;
   }
-  return <span className="text-sm text-dvivid-text-muted">Unsaved changes</span>;
+  // idle: only show "Unsaved changes" when the profile was actually edited
+  if (dirty) {
+    return <span className="text-sm text-dvivid-text-muted">Unsaved changes</span>;
+  }
+  return null;
 }
 
 // ============================================================
@@ -625,7 +653,19 @@ function WorkExperienceSection({ profile, updateProfile }: { profile: any; updat
         <button onClick={addExperience} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Experience</button>
       </div>
       {experience.length === 0 ? (
-        <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No experience records yet.</p>
+        <div className="py-4 px-4 bg-gray-50 rounded-input space-y-3">
+          <p className="text-sm text-dvivid-text-muted text-center">No experience records yet.</p>
+          <label className="flex items-center justify-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={profile.noWorkExperience === true}
+              onChange={e => updateProfile(p => ({ ...p, noWorkExperience: e.target.checked }))}
+            />
+            <span className="text-sm text-dvivid-text-secondary">
+              This applicant has no work experience (e.g., fresher applying directly after bachelor's)
+            </span>
+          </label>
+        </div>
       ) : (
         <div className="space-y-4">
           {experience.map((exp: any, i: number) => (

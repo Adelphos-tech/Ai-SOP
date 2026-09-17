@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { PROMPT_SOURCE_LABELS } from "@/lib/application/application-types";
+import { getProfileReadiness } from "@/lib/application/intake-completion";
 import {
   PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
   SectionCard, StatusBadge, PromptSourceBadge,
@@ -123,6 +124,8 @@ export default function DocumentWorkspacePage() {
   const [generationStage, setGenerationStage] = useState(0);
   const [generationResult, setGenerationResult] = useState<GenerationResult | null>(null);
   const [generationError, setGenerationError] = useState("");
+  const [generationBlockReasons, setGenerationBlockReasons] = useState<string[]>([]);
+  const [profile, setProfile] = useState<any>(null);
 
   const [editorContent, setEditorContent] = useState("");
   const [editorBaseVersionId, setEditorBaseVersionId] = useState<string | null>(null);
@@ -176,6 +179,12 @@ export default function DocumentWorkspacePage() {
           const studentData = await studentRes.json();
           setStudent(studentData.student);
         }
+        // Fetch profile for pre-generation readiness display
+        const profileRes = await fetch(`/api/application/profile?studentId=${studentId}`);
+        if (profileRes.ok) {
+          const profileData = await profileRes.json();
+          setProfile(profileData.profile);
+        }
       }
     } catch {
       setError("Failed to load document");
@@ -191,6 +200,7 @@ export default function DocumentWorkspacePage() {
   async function handleGenerate() {
     setGenerating(true);
     setGenerationError("");
+    setGenerationBlockReasons([]);
     setGenerationResult(null);
     setGenerationStage(0);
 
@@ -208,6 +218,13 @@ export default function DocumentWorkspacePage() {
       clearInterval(stageInterval);
       setGenerationStage(generationStageLabels.length - 1);
       if (!res.ok) {
+        // Surface structured blocking reasons so the consultant knows
+        // exactly what to fix, not just "generation is blocked".
+        if (data.error === "GENERATION_BLOCKED" && Array.isArray(data.blockReasons)) {
+          setGenerationBlockReasons(data.blockReasons);
+        } else {
+          setGenerationBlockReasons([]);
+        }
         setGenerationError(data.message || data.error || "Generation failed");
         return;
       }
@@ -319,8 +336,9 @@ export default function DocumentWorkspacePage() {
     }
   }
 
-  async function handleExport(format: "PDF" | "DOCX", mode: "PREVIEW" | "FINAL") {
-    if (!selectedVersion) return;
+  async function handleExport(format: "PDF" | "DOCX", mode: "PREVIEW" | "FINAL", explicitVersionId?: string) {
+    const versionId = explicitVersionId || selectedVersion?.id;
+    if (!versionId) return;
     setExporting(true);
     setExportError("");
     try {
@@ -331,7 +349,7 @@ export default function DocumentWorkspacePage() {
           studentId,
           applicationId,
           documentId,
-          versionId: selectedVersion.id,
+          versionId,
           format,
           mode,
         }),
@@ -381,6 +399,10 @@ export default function DocumentWorkspacePage() {
   const canGenerate = document?.generationStatus !== "GENERATING" && !generating;
   const isApproved = document?.reviewStatus === "APPROVED";
   const approvedVersion = versions.find(v => v.id === document?.approvedVersionId);
+  // Pre-generation readiness — only gate when profile was actually loaded.
+  // If the profile fetch failed, let the server decide (it returns 422 with reasons).
+  const readiness = profile ? getProfileReadiness(profile, application) : null;
+  const readinessBlocked = readiness ? !readiness.canGenerate : false;
 
   return (
     <PageContainer>
@@ -444,15 +466,84 @@ export default function DocumentWorkspacePage() {
         </SectionCard>
       )}
 
+      {/* Generation in progress (persisted status, e.g. after reload) */}
+      {document?.generationStatus === "GENERATING" && !generating && (
+        <SectionCard title="Generation In Progress" className="mb-8">
+          <p className="text-sm text-dvivid-text-secondary mb-4">
+            A generation run is marked in progress for this document. It may still be running,
+            or it may have been interrupted.
+          </p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <SecondaryButton onClick={loadDocument}>Refresh Status</SecondaryButton>
+          </div>
+        </SectionCard>
+      )}
+
       {/* Generation Section (only if no versions yet) */}
-      {versions.length === 0 && !generating && (
+      {versions.length === 0 && !generating && document?.generationStatus !== "GENERATING" && (
         <SectionCard title="Generate Document" description="Generate a first draft using the AI pipeline." className="mb-8">
-          <PrimaryButton onClick={handleGenerate} disabled={!canGenerate} className="w-full">
+          {document?.generationStatus === "FAILED" && (
+            <div className="mb-4 p-4 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input">
+              <p className="text-sm text-dvivid-warning">
+                A previous generation attempt failed. You can try again — if it fails repeatedly,
+                check the readiness items below.
+              </p>
+            </div>
+          )}
+
+          {/* Pre-generation readiness */}
+          {readiness && (
+            readiness.canGenerate ? (
+              <div className="mb-4 p-4 bg-dvivid-success-light border border-dvivid-success/20 rounded-input">
+                <p className="text-sm font-medium text-dvivid-success mb-1">Ready to generate</p>
+                <p className="text-xs text-dvivid-text-secondary">
+                  Applicant profile: {readiness.requiredComplete}/{readiness.requiredTotal} required sections complete.
+                </p>
+              </div>
+            ) : (
+              <div className="mb-4 p-4 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input">
+                <p className="text-sm font-medium text-dvivid-warning mb-2">Before you can generate:</p>
+                <ul className="space-y-1.5">
+                  {readiness.sections
+                    .filter(s => !s.optional && s.status !== "complete")
+                    .map(s => (
+                      <li key={s.slug} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="text-dvivid-text-primary">! {s.label} is incomplete</span>
+                        <Link
+                          href={`/students/${studentId}/applications/${applicationId}/intake/${s.slug}`}
+                          className="text-xs text-dvivid-primary hover:underline whitespace-nowrap"
+                        >
+                          Complete {s.label} →
+                        </Link>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            )
+          )}
+
+          <PrimaryButton
+            onClick={handleGenerate}
+            disabled={!canGenerate || readinessBlocked}
+            className="w-full"
+          >
             Generate Document
           </PrimaryButton>
+          {readinessBlocked && (
+            <p className="mt-2 text-xs text-dvivid-text-muted text-center">
+              Complete the required intake sections above to enable generation.
+            </p>
+          )}
           {generationError && (
             <div className="mt-4 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
-              <p className="text-sm text-dvivid-error">{generationError}</p>
+              <p className="text-sm text-dvivid-error font-medium">{generationError}</p>
+              {generationBlockReasons.length > 0 && (
+                <ul className="mt-2 space-y-1 list-disc list-inside">
+                  {generationBlockReasons.map((r, i) => (
+                    <li key={i} className="text-sm text-dvivid-error">{r}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </SectionCard>
@@ -533,9 +624,19 @@ export default function DocumentWorkspacePage() {
                 <PrimaryButton onClick={handleSaveNewVersion} disabled={saving || !editorContent.trim()}>
                   {saving ? "Saving..." : "Save New Version"}
                 </PrimaryButton>
+                {document?.generationStatus !== "GENERATING" && (
+                  <SecondaryButton onClick={handleGenerate} disabled={generating}>
+                    {generating ? "Generating..." : "Regenerate with AI"}
+                  </SecondaryButton>
+                )}
                 {saveSuccess && <span className="text-sm text-dvivid-success font-medium">✓ Version saved</span>}
                 {saveError && <span className="text-sm text-dvivid-error">{saveError}</span>}
               </div>
+              {generationError && (
+                <div className="mt-3 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
+                  <p className="text-sm text-dvivid-error">{generationError}</p>
+                </div>
+              )}
 
               {/* Approval section */}
               <div className="mt-6 pt-6 border-t border-dvivid-border-light">
@@ -716,14 +817,14 @@ export default function DocumentWorkspacePage() {
                     </p>
                     <div className="flex flex-col gap-2">
                       <button
-                        onClick={() => { setSelectedVersion(approvedVersion); handleExport("PDF", "FINAL"); }}
+                        onClick={() => handleExport("PDF", "FINAL", approvedVersion.id)}
                         disabled={exporting}
                         className="w-full px-5 py-2.5 bg-dvivid-success text-white rounded-button font-medium text-sm hover:opacity-90 transition-colors disabled:opacity-50"
                       >
                         Download Final PDF
                       </button>
                       <button
-                        onClick={() => { setSelectedVersion(approvedVersion); handleExport("DOCX", "FINAL"); }}
+                        onClick={() => handleExport("DOCX", "FINAL", approvedVersion.id)}
                         disabled={exporting}
                         className="w-full px-5 py-2.5 bg-dvivid-success text-white rounded-button font-medium text-sm hover:opacity-90 transition-colors disabled:opacity-50"
                       >

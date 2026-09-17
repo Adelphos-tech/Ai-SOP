@@ -67,7 +67,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Logout button — calls /api/auth/logout then redirects to /login.
+ * Logout button — calls POST /api/auth/session (destroys session)
+ * then redirects to /login.
  */
 export function LogoutButton() {
   const router = useRouter();
@@ -76,7 +77,7 @@ export function LogoutButton() {
   const handleLogout = async () => {
     setLoading(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/session", { method: "POST" });
     } finally {
       router.replace("/login");
     }

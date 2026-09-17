@@ -126,7 +126,8 @@ export async function generateApplicationDocument(
     }));
     return {
       ok: false,
-      status: 403,
+      // 422 — business prerequisites incomplete, not an authorization failure.
+      status: 422,
       body: {
         error: "GENERATION_BLOCKED",
         message: "Generation is blocked due to pre-generation completeness issues.",

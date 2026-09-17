@@ -97,10 +97,13 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json() as ResolvePromptRequest;
 
-    // Validate required fields
-    if (!body.university || !body.program || !body.degree || !body.intake || !body.intakeYear) {
+    // Validate required fields.
+    // intake/intakeYear are OPTIONAL — they are not required at application
+    // creation time, and the DB lookup + template fallback work without them.
+    // When absent, requirement-set matching simply returns NOT_FOUND.
+    if (!body.university || !body.program || !body.degree) {
       return NextResponse.json(
-        { error: "university, program, degree, intake, and intakeYear are required" },
+        { error: "university, program, and degree are required" },
         { status: 400 },
       );
     }
@@ -142,8 +145,8 @@ export async function POST(req: NextRequest) {
       university: body.university,
       program: body.program,
       degree: body.degree,
-      intake: body.intake,
-      intakeYear: body.intakeYear,
+      intake: body.intake || "",
+      intakeYear: body.intakeYear || "",
     };
 
     const dbResult = await findRequirementSetByAppIdentity(lookupReq);
@@ -185,8 +188,8 @@ export async function POST(req: NextRequest) {
           university: body.university,
           program: body.program,
           degree: body.degree,
-          intake: body.intake,
-          intakeYear: body.intakeYear,
+          intake: body.intake || "",
+          intakeYear: body.intakeYear || "",
           country: body.country || "USA",
         };
 
