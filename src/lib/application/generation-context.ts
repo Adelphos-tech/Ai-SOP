@@ -166,10 +166,12 @@ export async function loadDocumentGenerationContext(
   if (profile) {
     const anyProfile = profile as any;
     const hasExplicitApproval = anyProfile.factSheetApproval?.approved === true;
-    const hasBasicData = anyProfile.personalData?.firstName &&
-                         anyProfile.personalData?.lastName &&
-                         Array.isArray(anyProfile.education) &&
-                         anyProfile.education.length > 0;
+    const hasBasicData = !!(
+      anyProfile.personalData?.firstName &&
+      anyProfile.personalData?.lastName &&
+      Array.isArray(anyProfile.education) &&
+      anyProfile.education.length > 0
+    );
     factSheetApproved = hasExplicitApproval || hasBasicData;
   }
 
