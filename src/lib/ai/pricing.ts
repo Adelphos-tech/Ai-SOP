@@ -18,10 +18,17 @@ const GPT_56_SOL_PRICING: ModelPricing = {
   outputPerMillion: 20.00,
 };
 
+// GPT-5.6 Terra pricing — confirmed rates, NOT a Sol placeholder
+const GPT_56_TERRA_PRICING: ModelPricing = {
+  inputPerMillion: 2.00,
+  cachedInputPerMillion: 0.20,
+  outputPerMillion: 12.00,
+};
+
 // Pricing registry — keyed by model name
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.6-sol": GPT_56_SOL_PRICING,
-  "gpt-5.6-terra": GPT_56_SOL_PRICING, // placeholder — update when Terra pricing confirmed
+  "gpt-5.6-terra": GPT_56_TERRA_PRICING,
   "gpt-5.6-luna": GPT_56_SOL_PRICING,  // placeholder — update when Luna pricing confirmed
 };
 

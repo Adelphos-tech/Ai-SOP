@@ -80,6 +80,15 @@ Be conservative: if a claim asserts specific software, dates, grades, methods, o
 DO NOT rewrite the document. You are a reviewer, not an editor. Return findings only.
 
 Return exactly one componentScores entry per response component, with no missing, extra or duplicate components.
+${!process.env.DISABLE_COMPACT_REVIEWS ? `
+COMPACT OUTPUT RULES (reduce output tokens):
+- feedback: maximum 40 words.
+- overall_feedback: maximum 40 words.
+- reason fields (topicCoverage, factualRiskClaims): maximum 10 words each. For SUPPORTED claims use "-".
+- supportingEvidenceIds: maximum 3 IDs.
+- For SUPPORTED claims set unsupportedMotivation, novelSpecificity, contextShift all to false without explanation.
+- majorIssues and recommendedEdits: maximum 5 items each, each under 15 words.
+` : ""}
 For EVERY component return topicCoverage with exactly one entry for EACH exact required topic string listed for that component. No paraphrased, omitted, duplicate or extra topics. Use [] when that component has no required topics.
 covered must be an explicit boolean based on that component's own text, independent of its score and the global compliance flag. Never use a different component's coverage.
 For each covered:false topic, return candidateEvidence from the supplied Evidence Ledger that might support repairing THAT topic. For each candidate, classify suitability as:

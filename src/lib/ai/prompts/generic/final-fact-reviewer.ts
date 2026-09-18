@@ -80,6 +80,12 @@ INTERPRETIVE_ELABORATION may pass ONLY if:
 
 If these conditions are not met, classify as AMBIGUOUS, ALTERED_FACT, or INVENTED_FACT as appropriate.
 Do NOT set overallPass to true contrary to the totals. The pipeline will deterministically recalculate overallPass from the totals.
+${!process.env.DISABLE_COMPACT_REVIEWS ? `
+COMPACT OUTPUT RULES (reduce output tokens):
+- claim text: quote the claim concisely, maximum 20 words each.
+- supportingFactIds and supportingSourceIds: maximum 3 IDs each.
+- Do not include explanatory prose outside the schema fields.
+` : ""}
 
 Return ONLY valid JSON:
 {

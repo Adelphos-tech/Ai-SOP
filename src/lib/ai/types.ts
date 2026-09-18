@@ -66,6 +66,16 @@ export interface StageUsage {
   reasoningTokens: number;
   estimatedCostUsd: number;
   success: boolean;
+  /**
+   * Pricing rates applied at generation time (USD per 1M tokens).
+   * Persisted so historical generation costs don't silently change
+   * when pricing.ts is updated later.
+   */
+  pricingRates?: {
+    inputPerMillion: number;
+    cachedInputPerMillion: number;
+    outputPerMillion: number;
+  };
 }
 
 export interface PipelineCost {

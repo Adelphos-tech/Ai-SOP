@@ -180,6 +180,14 @@ CRITICAL RULES:
 - Word and character constraints are exact — do NOT exceed them.
 ${hasApprovedFaculty ? `- Approved faculty: ${facultyNames}. Reference them only as approved. Do NOT claim contact, supervision, or lab placement.` : "- No approved faculty for this application."}
 ${closedWorldRules}
+${process.env.EXPERIMENT_WRITER_NARRATIVE ? `
+NARRATIVE QUALITY RULES (experiment):
+- Do NOT write skill-list or technology-enumeration paragraphs. Weave at most 3 named tools/technologies into any single paragraph, and only where they serve the story.
+- Select AT MOST 3 experiences as the narrative spine; other experiences get at most one supporting sentence or are omitted.
+- Every experience paragraph must contain at least one sentence of genuine reflection (what changed in the student's thinking or direction), not a formulaic closing phrase.
+- Order experiences THEMATICALLY to support the arc (curiosity -> experimentation -> realization -> production experience -> knowledge gap -> why this program), not chronologically.
+- Avoid repeating the same concept words more than twice across the essay (e.g., scalability, deployment, reliability, production, end-to-end).
+` : ""}
 ${writingInstructions}
 
 Return ONLY valid JSON:

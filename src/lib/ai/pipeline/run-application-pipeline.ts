@@ -88,7 +88,7 @@ import {
 } from "../bounded-finalizer";
 import { getUsdToInrRate } from "@/lib/currency/exchange-rate";
 import { getOpenAIClient } from "../openai-client";
-import { calculateStageCost } from "../pricing";
+import { calculateStageCost, getPricingForModel } from "../pricing";
 import { LanguageProfile, StageUsage, PipelineCost } from "../types";
 import { logUsage } from "../usage-logger";
 import { UsageLogEntry } from "../types";
@@ -101,6 +101,7 @@ import { runPreFinalRender } from "@/lib/render/pre-final-render";
 import { runFinalRender } from "@/lib/render/final-render";
 import { RenderFeedback, RenderLifecycleResult } from "@/lib/render/render-lifecycle-types";
 import { computeHash, CheckpointHashes } from "../pipeline-checkpoint";
+import { resolveNarrativeProfile, buildNarrativePlannerGuidance, buildNarrativeWriterRules, applyVisaReturnHomeRequirement } from "../../application/narrative-profile";
 import {
   createStageExecution,
   EXECUTION_STAGES,
@@ -273,6 +274,9 @@ async function callOpenAIForStage(
     reasoningTokens,
     estimatedCostUsd: cost.totalCostUsd,
     success: true,
+    // Persist the pricing used at generation time so historical cost
+    // records remain reproducible if pricing.ts changes later.
+    pricingRates: getPricingForModel(model),
   };
 
   await logUsage({
@@ -412,10 +416,29 @@ export async function runApplicationPipeline(
       return errorResult("MISSING_REQUIRED_STUDENT_INFORMATION", pipelineStart, renderCheckCount, generationId);
     }
 
+    // Phase COST-OPT: document-type narrative profile — default ON.
+    // Emergency rollback: DISABLE_NARRATIVE_PROFILES=1
+    const resolvedNarrative = process.env.DISABLE_NARRATIVE_PROFILES
+      ? null
+      : resolveNarrativeProfile(
+          input.documentTypeConfig?.documentType || "CUSTOM",
+          input.profile
+        );
+    const narrativeProfile = resolvedNarrative?.profile || null;
+    // VISA_SOP with supported return-home evidence: mark it as required
+    // content so Planner/Writer/QR/Finalizer all see and preserve it.
+    // Status RECOMMENDED — never blocks the mandatory-topic gate.
+    if (resolvedNarrative?.returnHomeRequired) {
+      applyVisaReturnHomeRequirement(input.responseComponents);
+      if (contract?.responseComponents) {
+        applyVisaReturnHomeRequirement(contract.responseComponents);
+      }
+    }
+
     // STAGE 1: PLANNER
     const plannerPrompt = buildGenericPlannerPrompt(
       studentFactsText, input.responseComponents, input.facultyAlignment, programFactsText,
-      input.documentTypeConfig ? `DOCUMENT TYPE: ${input.documentTypeConfig.displayName}\nWRITING PERSPECTIVE: ${input.documentTypeConfig.writingPerspective}\nDEFAULT STRUCTURE: ${input.documentTypeConfig.defaultStructure}\n${input.documentTypeConfig.promptFirst ? "ANSWER THE SUPPLIED PROMPT DIRECTLY — do NOT default to SOP structure." : ""}` : undefined
+      input.documentTypeConfig ? `DOCUMENT TYPE: ${input.documentTypeConfig.displayName}\nWRITING PERSPECTIVE: ${input.documentTypeConfig.writingPerspective}\nDEFAULT STRUCTURE: ${input.documentTypeConfig.defaultStructure}\n${input.documentTypeConfig.promptFirst ? "ANSWER THE SUPPLIED PROMPT DIRECTLY — do NOT default to SOP structure." : ""}${narrativeProfile ? `\n${buildNarrativePlannerGuidance(narrativeProfile)}` : ""}` : undefined
     );
     const plannerResult = await stageExecution.execute(
       "planner", plannerPrompt.system, plannerPrompt.user
@@ -426,8 +449,8 @@ export async function runApplicationPipeline(
     // STAGE 2: WRITER (Phase 14: closed-world with evidence packets)
     // Phase 33: Use document-type-specific writing instructions if provided
     const writingInstructions = input.pipelineWritingInstructions
-      ? `${input.pipelineWritingInstructions}\n\nDesired level: ${aiInput.writingPreferences.level || "Natural Professional"}. Tone: ${aiInput.writingPreferences.tone || "Professional & Personal"}.`
-      : `Desired level: ${aiInput.writingPreferences.level || "Natural Professional"}. Tone: ${aiInput.writingPreferences.tone || "Professional & Personal"}.`;
+      ? `${input.pipelineWritingInstructions}\n\nDesired level: ${aiInput.writingPreferences.level || "Natural Professional"}. Tone: ${aiInput.writingPreferences.tone || "Professional & Personal"}.${narrativeProfile ? `\n\n${buildNarrativeWriterRules(narrativeProfile)}` : ""}`
+      : `Desired level: ${aiInput.writingPreferences.level || "Natural Professional"}. Tone: ${aiInput.writingPreferences.tone || "Professional & Personal"}.${narrativeProfile ? `\n\n${buildNarrativeWriterRules(narrativeProfile)}` : ""}`;
 
     // Phase 14: Build per-component evidence packets
     // The Planner may return primaryEvidenceIds (proper IDs) or factsToUse (descriptive text).

@@ -52,9 +52,22 @@ It does NOT authorize inventing a leadership experience that is not in the evide
  * Inject the safety block into a system prompt string.
  * Returns the system prompt with the safety block prepended if not already present.
  */
+/**
+ * EXPERIMENT ONLY — prompt-caching shared prefix (Experiment C).
+ * When set via setExperimentSharedPrefix(), the identical string is
+ * prepended to every stage system prompt BEFORE the safety block,
+ * producing a long identical leading prefix across all 6 calls that
+ * OpenAI prompt caching can match. Not used in production paths.
+ */
+let experimentSharedPrefix: string | null = null;
+export function setExperimentSharedPrefix(text: string | null): void {
+  experimentSharedPrefix = text;
+}
+
 export function withSafetyBlock(systemPrompt: string): string {
+  const prefix = experimentSharedPrefix ? `${experimentSharedPrefix}\n\n` : "";
   if (systemPrompt.includes("SECURITY / DATA BOUNDARY")) {
-    return systemPrompt;
+    return `${prefix}${systemPrompt}`;
   }
-  return `${PROMPT_SAFETY_BLOCK}\n\n${systemPrompt}`;
+  return `${prefix}${PROMPT_SAFETY_BLOCK}\n\n${systemPrompt}`;
 }
