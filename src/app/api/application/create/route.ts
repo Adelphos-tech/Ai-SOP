@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
 
     const appInput: CreateApplicationInput = {
       studentId: body.studentId,
-      universityName: body.universityName,
+      universityName: String(body.universityName).trim(),
       programName: body.programName,
       degree: body.degree,
       department: body.department,

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass } from "@/components/ui/FormField";
+import { UniversitySelect } from "@/components/ui/UniversitySelect";
 
 interface Student {
   id: string;
@@ -234,7 +235,7 @@ export default function StudentWorkspacePage() {
         <SectionCard title="New Application" description="Create a new university application for this student." className="mb-8">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <FormField label="University" required>
-              <input className={inputClass} value={universityName} onChange={e => setUniversityName(e.target.value)} placeholder="Stanford University" />
+              <UniversitySelect value={universityName} onChange={setUniversityName} required placeholder="Search university..." />
             </FormField>
             <FormField label="Program" required>
               <input className={inputClass} value={programName} onChange={e => setProgramName(e.target.value)} placeholder="Civil Engineering" />
