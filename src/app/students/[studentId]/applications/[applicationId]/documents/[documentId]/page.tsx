@@ -11,6 +11,7 @@ import {
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { GenerationProgressCard } from "@/components/generation/GenerationProgressCard";
+import { DocumentRichEditor } from "@/components/documents/DocumentRichEditor";
 import { createSingleFlightSubmitter, requestGenerate, resolveVersionContent } from "@/lib/application/generate-client";
 
 interface Document {
@@ -167,7 +168,12 @@ export default function DocumentWorkspacePage() {
   const [editorContent, setEditorContent] = useState("");
   const [editorBaseVersionId, setEditorBaseVersionId] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"view" | "edit">("edit");
-  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+
+  function focusEditor() {
+    // ProseMirror's contentEditable div is the focusable surface.
+    (editorRef.current?.querySelector(".ProseMirror") as HTMLElement | null)?.focus();
+  }
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -457,7 +463,7 @@ export default function DocumentWorkspacePage() {
     setSaveError("");
     setSaveSuccess(false);
     editorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    editorRef.current?.focus({ preventScroll: true });
+    focusEditor();
   }
 
   // Single-flight guard — one click = one approval request.
@@ -826,23 +832,21 @@ export default function DocumentWorkspacePage() {
                     Viewing v{selectedVersion.versionNumber} — read-only.
                   </p>
                   <button
-                    onClick={() => { setEditorMode("edit"); editorRef.current?.focus(); }}
+                    onClick={() => { setEditorMode("edit"); setTimeout(focusEditor, 0); }}
                     className="text-sm text-dvivid-primary font-medium hover:underline"
                   >
                     Switch to edit
                   </button>
                 </div>
               )}
-              <textarea
-                ref={editorRef}
-                value={editorContent}
-                onChange={(e) => setEditorContent(e.target.value)}
-                readOnly={editorMode === "view"}
-                className={`w-full min-h-[400px] px-4 py-3 border border-dvivid-border rounded-input text-dvivid-text-primary focus:outline-none focus:ring-2 focus:ring-dvivid-primary/12 focus:border-dvivid-primary transition-colors text-sm leading-relaxed resize-y ${
-                  editorMode === "view" ? "bg-gray-50" : "bg-white"
-                }`}
-                placeholder="Edit document content..."
-              />
+              <div ref={editorRef}>
+                <DocumentRichEditor
+                  content={editorContent}
+                  onChange={setEditorContent}
+                  readOnly={editorMode === "view"}
+                  placeholder="Edit document content..."
+                />
+              </div>
 
               <div className="mt-4 flex items-center gap-3 flex-wrap">
                 {/* Single primary CTA per state:
