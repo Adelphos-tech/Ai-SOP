@@ -27,19 +27,37 @@ export const AI_MODELS: Record<StageName, string> = {
  * Other stages do NOT need this increase — their reasoning + output
  * fits within 8000 tokens.
  */
+/**
+ * Per-stage max_output_tokens policy (Responses API: reasoning +
+ * visible output count against the ceiling together).
+ *
+ * HEAVY stages (16,000): writer, qualityReviewer, factReviewer —
+ * real production usage hit/exhausted the 8,000 cap (writer 10,216
+ * total output; qualityReviewer returned incomplete at exactly 8,000;
+ * factReviewer historical max 7,502 = 94% of cap).
+ *
+ * LIGHT stages (8,000): planner, languageCalibrator, finalizer —
+ * historical output maxima 3,054 / 3,306 / 1,945 = large headroom.
+ *
+ * 16,000 is a safety CEILING, not a length target — prompts still
+ * control normal output size; the ceiling only prevents reasoning +
+ * structured output from truncating mid-JSON.
+ */
+const HEAVY_STAGE_BUDGET = 16_000;
+const LIGHT_STAGE_BUDGET = 8_000;
+
+function envBudget(envKey: string, fallback: number): number {
+  const v = parseInt(process.env[envKey] || "", 10);
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
 export const STAGE_MAX_COMPLETION_TOKENS: Record<StageName, number> = {
-  planner: 8000,
-  // Writer: Responses API counts reasoning + visible output against
-  // max_output_tokens. Historical: reasoning p95=2440/max=3060,
-  // visible p95=3658/max=4501 — but the failing doc used 4549
-  // reasoning, leaving ~3.4k visible under an 8000 cap → truncated
-  // JSON → provider "incomplete". 12000 covers reasoning ~4.5k +
-  // visible ~4.5k with headroom. Stage-specific — other stages keep 8000.
-  writer: 12000,
-  factReviewer: 8000,
-  qualityReviewer: 8000,
-  languageCalibrator: 8000,
-  finalizer: 8000,
+  planner: LIGHT_STAGE_BUDGET,
+  writer: envBudget("OPENAI_MAX_OUTPUT_WRITER", HEAVY_STAGE_BUDGET),
+  factReviewer: envBudget("OPENAI_MAX_OUTPUT_FACT_REVIEWER", HEAVY_STAGE_BUDGET),
+  qualityReviewer: envBudget("OPENAI_MAX_OUTPUT_QUALITY_REVIEWER", HEAVY_STAGE_BUDGET),
+  languageCalibrator: LIGHT_STAGE_BUDGET,
+  finalizer: LIGHT_STAGE_BUDGET,
 };
 
 export const AI_CONFIG = {

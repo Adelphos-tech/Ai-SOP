@@ -17,6 +17,8 @@ import {
   MockResponsesTransport,
   setStageTransport,
   buildResponsesCreateParams,
+  computeOutputUtilization,
+  logUtilizationWarning,
   JsonInstructionMissingError,
   ProviderInvalidRequestError,
   StageTimeoutError,
@@ -31,7 +33,7 @@ import {
   getStageSlaMs,
 } from "../src/lib/ai/openai-transport";
 import { callOpenAIForStageBackground } from "../src/lib/ai/pipeline/run-application-pipeline";
-import { getModelForStage, getMaxCompletionTokensForStage } from "../src/lib/ai/config";
+import { getModelForStage, getMaxCompletionTokensForStage, STAGE_MAX_COMPLETION_TOKENS } from "../src/lib/ai/config";
 import { createSingleFlightSubmitter } from "../src/lib/application/generate-client";
 import {
   createGenerationRun,
@@ -330,9 +332,9 @@ async function main() {
     check("RB2b format is json_object", (params.text as any).format.type === "json_object");
     check("RB3 finalizer budget 8000", params.max_output_tokens === 8000);
 
-    // B: writer uses the 12k budget.
+    // B: writer uses the 16k heavy-stage budget.
     const w = buildResponsesCreateParams("writer", "sys", "user");
-    check("RB4 writer budget 12000 unchanged", w.max_output_tokens === 12000);
+    check("RB4 writer budget 16000", w.max_output_tokens === 16000);
     check("RB5 background+store set", w.background === true && w.store === true);
 
     // C: instruction injection is skipped when prompt already says json.
@@ -393,6 +395,59 @@ async function main() {
     // Test L: after resolution a new explicit click fires a new request
     await submit();
     check("SS3 Try Again fires a NEW request", calls === 3);
+  }
+
+  // ---------- Token budget policy (A–F) ----------
+  console.log("Token budget policy — heavy 16k / light 8k");
+  {
+    check("BP-A writer 16000", STAGE_MAX_COMPLETION_TOKENS.writer === 16000);
+    check("BP-B qualityReviewer 16000", STAGE_MAX_COMPLETION_TOKENS.qualityReviewer === 16000);
+    check("BP-C factReviewer 16000", STAGE_MAX_COMPLETION_TOKENS.factReviewer === 16000);
+    check("BP-D planner 8000", STAGE_MAX_COMPLETION_TOKENS.planner === 8000);
+    check("BP-E languageCalibrator 8000", STAGE_MAX_COMPLETION_TOKENS.languageCalibrator === 8000);
+    check("BP-F finalizer 8000", STAGE_MAX_COMPLETION_TOKENS.finalizer === 8000);
+  }
+
+  // ---------- Utilization telemetry (G–I) ----------
+  console.log("Utilization — ratio + warning thresholds");
+  {
+    // G: 10216/16000 ≈ 0.6385
+    const u = computeOutputUtilization("writer", { outputTokens: 10216, reasoningTokens: 3624 });
+    check("UTIL-G ratio ≈0.6385", Math.abs(u.utilizationRatio - 0.6385) < 0.001, `got ${u.utilizationRatio}`);
+    check("UTIL-G visible output", u.visibleOutputTokens === 10216 - 3624);
+
+    // H/I: warning thresholds — capture console.warn
+    const warns: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (m: any) => { warns.push(String(m)); };
+    logUtilizationWarning({ stage: "writer", generationId: "g", totalOutputTokens: 13000, maxOutputTokens: 16000, utilizationRatio: 0.85 });
+    logUtilizationWarning({ stage: "writer", generationId: "g", totalOutputTokens: 15000, maxOutputTokens: 16000, utilizationRatio: 0.95 });
+    logUtilizationWarning({ stage: "writer", generationId: "g", totalOutputTokens: 8000, maxOutputTokens: 16000, utilizationRatio: 0.5 });
+    console.warn = origWarn;
+    check("UTIL-H ≥0.80 → HIGH", warns.some(w => w.includes("HIGH_OUTPUT_BUDGET_UTILIZATION")));
+    check("UTIL-I ≥0.90 → CRITICAL", warns.some(w => w.includes("CRITICAL_OUTPUT_BUDGET_UTILIZATION")));
+    check("UTIL no warning <0.80", warns.length === 2);
+  }
+
+  // ---------- Incomplete usage reconciliation (K) ----------
+  console.log("Incomplete with usage → persisted, not NULL");
+  {
+    const runId = await newRun();
+    const hashes = { ...HASHES, applicationSpecificFactsHash: `asfh-incu-${SUITE}` };
+    mock.seedResponse("__next__", {
+      statuses: ["incomplete"], errorCode: "max_output_tokens",
+      usage: { inputTokens: 8833, cachedInputTokens: 1759, outputTokens: 8000, reasoningTokens: 3485, totalTokens: 16833 },
+    });
+    let threw: any = null;
+    try { await callOpenAIForStageBackground("qualityReviewer", "sys", "user", { ...ctxFor(runId, { cancel: false }), hashes }); }
+    catch (e) { threw = e; }
+    check("INCU1 PROVIDER_MAX_OUTPUT_TOKENS", threw instanceof StageExecutionError && threw.code === "PROVIDER_MAX_OUTPUT_TOKENS", `got ${threw?.code}`);
+    const pool = getDbPool();
+    const [rows] = await pool.execute(
+      `SELECT input_tokens, output_tokens, reasoning_tokens, usage_status FROM generation_stage_responses ORDER BY created_at DESC LIMIT 1`,
+    );
+    const row = (rows as any[])[0];
+    check("INCU2 usage persisted (not NULL)", row?.output_tokens === 8000 && row?.reasoning_tokens === 3485 && row?.usage_status === "OK", JSON.stringify(row));
   }
 
   // ---------- Circuit breaker ----------

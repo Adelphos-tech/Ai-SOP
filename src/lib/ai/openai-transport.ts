@@ -108,6 +108,9 @@ export class GenerationTimeLimitError extends Error {
   }
 }
 export class ProviderTerminalError extends Error {
+  /** Usage present on a terminal (e.g. incomplete) response — the
+   * caller reconciles it instead of recording NULL. */
+  public providerUsage?: ProviderPollResult["usage"];
   constructor(public code: string, message: string, public retryable: boolean) {
     super(message);
     this.name = "ProviderTerminalError";
@@ -358,7 +361,9 @@ export class MockResponsesTransport implements StageTransport {
     return {
       status,
       outputText: status === "completed" ? (script.outputText ?? "{}") : undefined,
-      usage: status === "completed" ? script.usage : undefined,
+      // Provider may include usage on terminal non-completed states
+      // (e.g. incomplete) — return it whenever scripted.
+      usage: script.usage,
       errorCode: script.errorCode,
       errorMessage: script.errorMessage,
     };
@@ -445,11 +450,15 @@ export async function waitForBackgroundStage(opts: {
         reason === "max_messages" ? "MAX_MESSAGES" :
         reason === "steered" ? "STEERED" :
         "INCOMPLETE_UNKNOWN";
-      throw new ProviderTerminalError(
+      const err = new ProviderTerminalError(
         code,
         `Provider incomplete: ${reason || "unknown"}`,
         false,
       );
+      // Incomplete responses may still carry usage — attach it so the
+      // caller can reconcile instead of recording NULL.
+      err.providerUsage = result.usage;
+      throw err;
     }
     if (result.status === "failed") {
       const retryable = isTransientProviderError(result);
@@ -465,11 +474,51 @@ export async function waitForBackgroundStage(opts: {
 }
 
 /** Map a completed provider poll into the existing StageUsage contract. */
+/** Compute output-budget utilization for a stage. Responses API:
+ * reasoning + visible output share max_output_tokens. */
+export function computeOutputUtilization(stage: StageName, usage?: {
+  outputTokens: number; reasoningTokens: number;
+} | null): {
+  maxOutputTokens: number;
+  visibleOutputTokens: number;
+  utilizationRatio: number;
+} {
+  const maxOutputTokens = getMaxCompletionTokensForStage(stage);
+  const output = usage?.outputTokens ?? 0;
+  const reasoning = usage?.reasoningTokens ?? 0;
+  return {
+    maxOutputTokens,
+    visibleOutputTokens: Math.max(0, output - reasoning),
+    utilizationRatio: maxOutputTokens > 0 ? output / maxOutputTokens : 0,
+  };
+}
+
+/** Log internal utilization warnings (never shown to consultants). */
+export function logUtilizationWarning(opts: {
+  stage: StageName; generationId?: string | null;
+  totalOutputTokens: number; maxOutputTokens: number; utilizationRatio: number;
+}): void {
+  const { utilizationRatio } = opts;
+  if (utilizationRatio < 0.8) return;
+  const event = utilizationRatio >= 0.9
+    ? "CRITICAL_OUTPUT_BUDGET_UTILIZATION"
+    : "HIGH_OUTPUT_BUDGET_UTILIZATION";
+  console.warn(JSON.stringify({
+    event,
+    generationId: opts.generationId || null,
+    stage: opts.stage,
+    totalOutputTokens: opts.totalOutputTokens,
+    maxOutputTokens: opts.maxOutputTokens,
+    utilization: Number(utilizationRatio.toFixed(4)),
+  }));
+}
+
 export async function stageUsageFromProvider(opts: {
   stage: StageName;
   responseId: string;
   usage?: ProviderPollResult["usage"];
   durationMs: number;
+  generationId?: string | null;
 }): Promise<StageUsage> {
   const model = getModelForStage(opts.stage);
   const u = opts.usage;
@@ -487,12 +536,21 @@ export async function stageUsageFromProvider(opts: {
     };
   }
   const cost = calculateStageCost(model, u.inputTokens, u.cachedInputTokens, u.outputTokens);
+  const util = computeOutputUtilization(opts.stage, u);
+  logUtilizationWarning({
+    stage: opts.stage, generationId: opts.generationId,
+    totalOutputTokens: u.outputTokens, maxOutputTokens: util.maxOutputTokens,
+    utilizationRatio: util.utilizationRatio,
+  });
   await logUsage({
     timestamp: new Date().toISOString(), model, pipelineStage: opts.stage,
     inputTokens: u.inputTokens, cachedInputTokens: u.cachedInputTokens,
     outputTokens: u.outputTokens, totalTokens: u.totalTokens,
     reasoningTokens: u.reasoningTokens, estimatedCostUsd: cost.totalCostUsd,
     duration: opts.durationMs, success: true,
+    maxOutputTokens: util.maxOutputTokens,
+    visibleOutputTokens: util.visibleOutputTokens,
+    utilizationRatio: Number(util.utilizationRatio.toFixed(4)),
   } as UsageLogEntry);
   return {
     stage: opts.stage, model, responseId: opts.responseId, durationMs: opts.durationMs,

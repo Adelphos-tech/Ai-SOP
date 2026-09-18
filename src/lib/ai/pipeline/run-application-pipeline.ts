@@ -454,7 +454,10 @@ export async function callOpenAIForStageBackground(
           await setStageResponseUsage(responseId, result.usage || null);
         } catch { /* best-effort */ }
       }
-      const stageUsage = await stageUsageFromProvider({ stage, responseId, usage: result.usage, durationMs });
+      const stageUsage = await stageUsageFromProvider({
+        stage, responseId, usage: result.usage, durationMs,
+        generationId: ctx.generationRunId,
+      });
       return { content: result.outputText!, stageUsage };
     } catch (e: any) {
       lastError = e;
@@ -480,6 +483,11 @@ export async function callOpenAIForStageBackground(
               errorCode: e.code,
               incompleteReason: incompleteMatch?.[1],
             });
+            // Reconcile usage even on terminal failure when present.
+            if (e.providerUsage) {
+              await setProviderUsage(ctx.generationRunId, e.providerUsage);
+              await setStageResponseUsage(responseId!, e.providerUsage);
+            }
           } catch { /* best-effort */ }
         }
         if (e.code === "PROVIDER_CANCELLED") {

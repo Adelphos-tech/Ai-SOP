@@ -137,4 +137,10 @@ export interface UsageLogEntry {
   estimatedCostUsd: number;
   duration: number;
   success: boolean;
+  /** Token-budget telemetry (Responses API: reasoning + visible share
+   * the ceiling). Optional — absent on legacy entries. */
+  maxOutputTokens?: number;
+  visibleOutputTokens?: number;
+  utilizationRatio?: number;
+  note?: string;
 }
