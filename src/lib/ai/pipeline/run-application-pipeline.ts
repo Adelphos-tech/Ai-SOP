@@ -265,6 +265,54 @@ function buildCheckpointHashes(args: {
   };
 }
 
+/**
+ * Build calibrated claims from the Language Calibrator response.
+ * Compact contract: OMITTED rewrittenText = verbatim preserved
+ * (fallback to Writer text); null still means dropped → the claim
+ * preservation validator catches it as missing.
+ */
+export function buildCalibratedClaims(
+  calibrated: { responses?: any[]; componentPlans?: any[] },
+  writerClaims: Array<{ claimId: string; componentId: string; text: string; evidenceIds: string[] }>,
+): CalibratedClaim[] {
+  const calibratedClaims: CalibratedClaim[] = [];
+  const calResponses = calibrated.responses || calibrated.componentPlans || [];
+  for (const resp of calResponses) {
+    const claimMap = resp.claimMap || [];
+    for (const cm of claimMap) {
+      const wClaim = writerClaims.find(wc => wc.claimId === cm.claimId);
+      if (cm.rewrittenText !== null && cm.rewrittenText !== undefined) {
+        calibratedClaims.push({
+          claimId: cm.claimId,
+          componentId: resp.componentId,
+          rewrittenText: cm.rewrittenText,
+          evidenceIds: wClaim?.evidenceIds || [],
+        });
+      } else if (cm.rewrittenText === undefined && wClaim) {
+        calibratedClaims.push({
+          claimId: cm.claimId,
+          componentId: resp.componentId,
+          rewrittenText: wClaim.text,
+          evidenceIds: wClaim.evidenceIds || [],
+        });
+      }
+    }
+  }
+
+  // If no claimMap was returned, build calibrated claims from Writer claims (fallback)
+  if (calibratedClaims.length === 0 && writerClaims.length > 0) {
+    for (const wc of writerClaims) {
+      calibratedClaims.push({
+        claimId: wc.claimId,
+        componentId: wc.componentId,
+        rewrittenText: wc.text,
+        evidenceIds: wc.evidenceIds,
+      });
+    }
+  }
+  return calibratedClaims;
+}
+
 async function callOpenAIForStage(
   stage: StageName,
   systemPrompt: string,
@@ -846,34 +894,7 @@ export async function runApplicationPipeline(
     stageUsages.push(calibrateResult.stageUsage);
 
     // Phase 16: Build calibrated claims and validate Language Calibrator claim preservation
-    const calibratedClaims: CalibratedClaim[] = [];
-    const calResponses = calibrated.responses || calibrated.componentPlans || [];
-    for (const resp of calResponses) {
-      const claimMap = resp.claimMap || [];
-      for (const cm of claimMap) {
-        if (cm.rewrittenText !== null && cm.rewrittenText !== undefined) {
-          const wClaim = writerClaims.find(wc => wc.claimId === cm.claimId);
-          calibratedClaims.push({
-            claimId: cm.claimId,
-            componentId: resp.componentId,
-            rewrittenText: cm.rewrittenText,
-            evidenceIds: wClaim?.evidenceIds || [],
-          });
-        }
-      }
-    }
-
-    // If no claimMap was returned, build calibrated claims from Writer claims (fallback)
-    if (calibratedClaims.length === 0 && writerClaims.length > 0) {
-      for (const wc of writerClaims) {
-        calibratedClaims.push({
-          claimId: wc.claimId,
-          componentId: wc.componentId,
-          rewrittenText: wc.text,
-          evidenceIds: wc.evidenceIds,
-        });
-      }
-    }
+    const calibratedClaims = buildCalibratedClaims(calibrated, writerClaims);
 
     const languageCalibratorClaimValidation = validateLanguageCalibratorClaims({
       writerClaims,

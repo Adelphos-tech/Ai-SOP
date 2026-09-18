@@ -81,13 +81,14 @@ DO NOT rewrite the document. You are a reviewer, not an editor. Return findings 
 
 Return exactly one componentScores entry per response component, with no missing, extra or duplicate components.
 ${!process.env.DISABLE_COMPACT_REVIEWS ? `
-COMPACT OUTPUT RULES (reduce output tokens):
-- feedback: maximum 40 words.
-- overall_feedback: maximum 40 words.
-- reason fields (topicCoverage, factualRiskClaims): maximum 10 words each. For SUPPORTED claims use "-".
+COMPACT OUTPUT RULES (mandatory — machine actions, not essays):
+- factualRiskClaims must contain ONLY claims needing action: status POTENTIALLY_UNSUPPORTED, SEMANTIC_EXPANSION, or AMBIGUOUS. Do NOT emit SUPPORTED claims there — put their claimIds in verifiedClaimIds instead.
+- verifiedClaimIds: claimIds you verified as SUPPORTED. Every Writer claimId must appear in exactly one of factualRiskClaims or verifiedClaimIds.
+- reason fields: maximum 15 words each.
 - supportingEvidenceIds: maximum 3 IDs.
-- For SUPPORTED claims set unsupportedMotivation, novelSpecificity, contextShift all to false without explanation.
-- majorIssues and recommendedEdits: maximum 5 items each, each under 15 words.
+- Do NOT return feedback, overall_feedback, majorIssues, or recommendedEdits fields.
+- Do NOT restate the draft, evidence, rubric, or requirements.
+- For SEMANTIC_EXPANSION claims set the applicable flags: unsupportedMotivation, novelSpecificity, contextShift.
 ` : ""}
 For EVERY component return topicCoverage with exactly one entry for EACH exact required topic string listed for that component. No paraphrased, omitted, duplicate or extra topics. Use [] when that component has no required topics.
 covered must be an explicit boolean based on that component's own text, independent of its score and the global compliance flag. Never use a different component's coverage.
@@ -95,7 +96,7 @@ For each covered:false topic, return candidateEvidence from the supplied Evidenc
   SUITABLE — the evidence establishes the factual proposition AND the context required by the official topic (e.g., the specific project, experience, or situation the topic asks about)
   INSUFFICIENT — the evidence exists but does not establish the proposition in the required context (e.g., a general background fact that cannot be tied to the specific project/experience the topic requires)
   AMBIGUOUS — cannot determine from the evidence alone whether the context matches
-Do not select evidence by keyword overlap. If no SUITABLE evidence exists, or no ledger was supplied, return [] and report MISSING_REQUIRED_STUDENT_INFORMATION in majorIssues. Do not invent IDs or facts. For covered:true return candidateEvidence: [].
+Do not select evidence by keyword overlap. If no SUITABLE evidence exists, or no ledger was supplied, return []. Do not invent IDs or facts. For covered:true return candidateEvidence: [].
 These references propose topic-local provenance authorization; they do not certify semantic entailment. Independent stage-6 fact review remains mandatory.
 
 Return ONLY valid JSON:
@@ -104,7 +105,6 @@ Return ONLY valid JSON:
     {
       "componentId": "<id>",
       "score": 1-10,
-      "feedback": "<assessment>",
       "topicCoverage": [
         {
           "topic": "<exact required topic>",
@@ -113,33 +113,30 @@ Return ONLY valid JSON:
             {
               "evidenceId": "<ledger id>",
               "suitability": "SUITABLE" | "INSUFFICIENT" | "AMBIGUOUS",
-              "reason": "<why this classification>",
-              "supportedContext": "<the context the evidence actually establishes>",
-              "requiredContext": "<the context the official topic requires>"
+              "supportedContext": "<context the evidence establishes, <=10 words>"
             }
           ]
         }
       ],
       "factualRiskClaims": [
         {
-          "claimId": "<claim id from writer>",
+          "claimId": "<claim id from writer — non-SUPPORTED only>",
           "claim": "<the factual assertion>",
-          "claimType": "<claim type from writer>",
-          "status": "SUPPORTED" | "POTENTIALLY_UNSUPPORTED" | "SEMANTIC_EXPANSION" | "AMBIGUOUS",
+          "status": "POTENTIALLY_UNSUPPORTED" | "SEMANTIC_EXPANSION" | "AMBIGUOUS",
           "supportingEvidenceIds": [],
-          "reason": "<why this classification>",
+          "reason": "<why, <=15 words>",
           "unsupportedMotivation": true/false,
           "novelSpecificity": true/false,
           "contextShift": true/false
         }
       ],
+      "verifiedClaimIds": ["<claimId verified SUPPORTED>"],
       "wordCompliance": "PASS" | "FAIL" | "N/A",
       "characterCompliance": "PASS" | "FAIL" | "N/A",
       "pageCompliance": "RENDER_VALIDATION_REQUIRED" | "N/A"
     }
   ],
   "overall_score": 1-10,
-  "overall_feedback": "<overall assessment>",
   "requirementCompliance": {
     "documentStructure": "PASS/FAIL",
     "responseComponentCount": "PASS/FAIL",
@@ -149,9 +146,7 @@ Return ONLY valid JSON:
     "pageLimit": "RENDER_VALIDATION_REQUIRED",
     "wordLimit": "PASS/FAIL/N/A",
     "characterLimit": "PASS/FAIL/N/A"
-  },
-  "majorIssues": ["..."],
-  "recommendedEdits": ["..."]
+  }
 }`;
 
   let evidenceSection: string;

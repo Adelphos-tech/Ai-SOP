@@ -59,7 +59,7 @@ Return ONLY valid JSON:
       "claimMap": [
         {
           "claimId": "<original claimId from Writer>",
-          "rewrittenText": "<the rewritten version of this claim's text — MUST be non-null>"
+          "rewrittenText": "<ONLY if you changed the claim's wording — omit when preserved verbatim>"
         }
       ]
     }
@@ -67,7 +67,8 @@ Return ONLY valid JSON:
 }
 
 The claimMap MUST preserve every claimId from the Writer output. For each claim:
-- rewrittenText MUST be a non-null string (the rewritten or preserved original text)
+- If you REWROTE the claim's wording: include rewrittenText (non-null string).
+- If the claim text appears VERBATIM in your calibrated text: omit rewrittenText entirely (do not repeat it — the original wording is used).
 - You may NOT set rewrittenText to null
 - You may NOT introduce a new claimId that was not in the Writer output
 - The set of claimIds in your output MUST exactly equal the set of claimIds in the Writer output`;

@@ -513,6 +513,14 @@ export function logUtilizationWarning(opts: {
   }));
 }
 
+/** Internal verbosity regression warnings — non-blocking, based on
+ * compact-contract targets. Logs only; never fails generation. */
+const VERBOSITY_WARN_TOKENS: Partial<Record<StageName, { limit: number; event: string }>> = {
+  qualityReviewer: { limit: 4000, event: "REVIEWER_OUTPUT_VERBOSE" },
+  factReviewer: { limit: 3500, event: "FACT_REVIEW_OUTPUT_VERBOSE" },
+  languageCalibrator: { limit: 2500, event: "LANGUAGE_OUTPUT_VERBOSE" },
+};
+
 export async function stageUsageFromProvider(opts: {
   stage: StageName;
   responseId: string;
@@ -537,6 +545,14 @@ export async function stageUsageFromProvider(opts: {
   }
   const cost = calculateStageCost(model, u.inputTokens, u.cachedInputTokens, u.outputTokens);
   const util = computeOutputUtilization(opts.stage, u);
+  const vWarn = VERBOSITY_WARN_TOKENS[opts.stage];
+  if (vWarn && u.outputTokens > vWarn.limit) {
+    console.warn(JSON.stringify({
+      event: vWarn.event, generationId: opts.generationId || null,
+      stage: opts.stage, totalOutputTokens: u.outputTokens,
+      compactTarget: vWarn.limit,
+    }));
+  }
   logUtilizationWarning({
     stage: opts.stage, generationId: opts.generationId,
     totalOutputTokens: u.outputTokens, maxOutputTokens: util.maxOutputTokens,

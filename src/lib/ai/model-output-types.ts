@@ -23,9 +23,11 @@ export type PageComplianceStatus = "RENDER_VALIDATION_REQUIRED" | "N/A";
 export interface CandidateEvidence {
   evidenceId: string;
   suitability: EvidenceSuitability;
-  reason: string;
+  /** reason/requiredContext are optional diagnostics — supportedContext
+   * is consumed by the action planner's context scope. */
+  reason?: string;
   supportedContext: string;
-  requiredContext: string;
+  requiredContext?: string;
 }
 
 export interface TopicCoverage {
@@ -37,21 +39,26 @@ export interface TopicCoverage {
 export interface FactualRiskClaim {
   claimId: string;
   claim: string;
-  claimType: string;
+  claimType?: string;
   status: ClaimRiskStatus;
   supportingEvidenceIds: string[];
   reason: string;
-  unsupportedMotivation: boolean;
-  novelSpecificity: boolean;
-  contextShift: boolean;
+  unsupportedMotivation?: boolean;
+  novelSpecificity?: boolean;
+  contextShift?: boolean;
 }
 
 export interface QualityComponentScore {
   componentId: string;
   score: number;
-  feedback: string;
+  /** Optional prose — never consumed downstream. */
+  feedback?: string;
   topicCoverage: TopicCoverage[];
+  /** Compact contract: only claims needing action (status !== SUPPORTED).
+   * SUPPORTED claims are reported as IDs in verifiedClaimIds. */
   factualRiskClaims: FactualRiskClaim[];
+  /** IDs of claims verified SUPPORTED — provenance without restating text. */
+  verifiedClaimIds?: string[];
   wordCompliance: ComplianceStatus;
   characterCompliance: ComplianceStatus;
   pageCompliance: PageComplianceStatus;
@@ -71,10 +78,12 @@ export interface RequirementCompliance {
 export interface QualityReviewOutput {
   componentScores: QualityComponentScore[];
   overall_score: number;
-  overall_feedback: string;
+  /** Optional prose — never consumed downstream. */
+  overall_feedback?: string;
   requirementCompliance: RequirementCompliance;
-  majorIssues: string[];
-  recommendedEdits: string[];
+  /** Optional advisory lists — never consumed downstream. */
+  majorIssues?: string[];
+  recommendedEdits?: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -98,7 +107,8 @@ export interface FactClaim {
   text?: string;
   classification: FactClassification;
   supportingFactIds: string[];
-  supportingSourceIds: string[];
+  /** Unused downstream — optional (compact contract drops it). */
+  supportingSourceIds?: string[];
   severity: FactSeverity;
 }
 
@@ -106,18 +116,20 @@ export interface FactReviewComponent {
   componentId: string;
   pass: boolean;
   claims: FactClaim[];
-  inventedCount: number;
-  alteredCount: number;
-  elaborationCount: number;
-  ambiguousCount: number;
+  /** Derived server-side by deriveFactReviewTotals — model may omit. */
+  inventedCount?: number;
+  alteredCount?: number;
+  elaborationCount?: number;
+  ambiguousCount?: number;
 }
 
 export interface FactReviewOutput {
   components: FactReviewComponent[];
-  totalInventedFacts: number;
-  totalAlteredFacts: number;
-  totalInterpretiveElaborations: number;
-  totalAmbiguousClaims: number;
+  /** Derived server-side by deriveFactReviewTotals — model may omit. */
+  totalInventedFacts?: number;
+  totalAlteredFacts?: number;
+  totalInterpretiveElaborations?: number;
+  totalAmbiguousClaims?: number;
   overallPass: boolean;
   blockingReason: string | null;
 }
@@ -161,22 +173,26 @@ export function validateQualityReviewOutput(raw: unknown): ValidationResult {
       const cs = o.componentScores[i] as Record<string, unknown>;
       if (!isString(cs?.componentId)) errors.push(`componentScores[${i}].componentId must be string`);
       if (!isNumber(cs?.score)) errors.push(`componentScores[${i}].score must be number`);
-      if (!isString(cs?.feedback)) errors.push(`componentScores[${i}].feedback must be string`);
+      // feedback is optional — never consumed downstream.
+      if (cs?.feedback !== undefined && !isString(cs.feedback)) errors.push(`componentScores[${i}].feedback must be string`);
       if (!isArray(cs?.topicCoverage)) errors.push(`componentScores[${i}].topicCoverage must be array`);
+      if (cs?.verifiedClaimIds !== undefined && !isStringArray(cs.verifiedClaimIds))
+        errors.push(`componentScores[${i}].verifiedClaimIds must be string[]`);
       if (!isArray(cs?.factualRiskClaims)) errors.push(`componentScores[${i}].factualRiskClaims must be array`);
       else {
         for (let j = 0; j < (cs.factualRiskClaims as unknown[]).length; j++) {
           const fc = (cs.factualRiskClaims as Record<string, unknown>[])[j];
           if (!isString(fc?.claimId)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].claimId must be string`);
           if (!isString(fc?.claim)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].claim must be string`);
-          if (!isString(fc?.claimType)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].claimType must be string`);
           if (!isString(fc?.status) || !VALID_RISK_STATUSES.includes(fc.status as ClaimRiskStatus))
             errors.push(`componentScores[${i}].factualRiskClaims[${j}].status must be one of ${VALID_RISK_STATUSES.join("|")}`);
           if (!isStringArray(fc?.supportingEvidenceIds)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].supportingEvidenceIds must be string[]`);
           if (!isString(fc?.reason)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].reason must be string`);
-          if (!isBoolean(fc?.unsupportedMotivation)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].unsupportedMotivation must be boolean`);
-          if (!isBoolean(fc?.novelSpecificity)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].novelSpecificity must be boolean`);
-          if (!isBoolean(fc?.contextShift)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].contextShift must be boolean`);
+          // claimType + expansion booleans are optional diagnostic flags.
+          if (fc?.claimType !== undefined && !isString(fc.claimType)) errors.push(`componentScores[${i}].factualRiskClaims[${j}].claimType must be string`);
+          for (const flag of ["unsupportedMotivation", "novelSpecificity", "contextShift"] as const) {
+            if (fc?.[flag] !== undefined && !isBoolean(fc[flag])) errors.push(`componentScores[${i}].factualRiskClaims[${j}].${flag} must be boolean`);
+          }
         }
       }
       if (!isString(cs?.wordCompliance) || !VALID_COMPLIANCE.includes(cs.wordCompliance as ComplianceStatus))
@@ -187,10 +203,12 @@ export function validateQualityReviewOutput(raw: unknown): ValidationResult {
   }
 
   if (!isNumber(o.overall_score)) errors.push("overall_score must be number");
-  if (!isString(o.overall_feedback)) errors.push("overall_feedback must be string");
+  // overall_feedback / majorIssues / recommendedEdits — optional advisory
+  // fields never consumed downstream.
+  if (o.overall_feedback !== undefined && !isString(o.overall_feedback)) errors.push("overall_feedback must be string");
   if (!o.requirementCompliance || typeof o.requirementCompliance !== "object") errors.push("requirementCompliance must be object");
-  if (!isArray(o.majorIssues)) errors.push("majorIssues must be array");
-  if (!isArray(o.recommendedEdits)) errors.push("recommendedEdits must be array");
+  if (o.majorIssues !== undefined && !isArray(o.majorIssues)) errors.push("majorIssues must be array");
+  if (o.recommendedEdits !== undefined && !isArray(o.recommendedEdits)) errors.push("recommendedEdits must be array");
 
   return { valid: errors.length === 0, errors };
 }
@@ -210,6 +228,10 @@ export function validateFactReviewOutput(raw: unknown): ValidationResult {
       const comp = o.components[i] as Record<string, unknown>;
       if (!isString(comp?.componentId)) errors.push(`components[${i}].componentId must be string`);
       if (!isBoolean(comp?.pass)) errors.push(`components[${i}].pass must be boolean`);
+      // Per-component counts are derived server-side — model may omit.
+      for (const cnt of ["inventedCount", "alteredCount", "elaborationCount", "ambiguousCount"] as const) {
+        if (comp?.[cnt] !== undefined && !isNumber(comp[cnt])) errors.push(`components[${i}].${cnt} must be number`);
+      }
       if (!isArray(comp?.claims)) errors.push(`components[${i}].claims must be array`);
       else {
         for (let j = 0; j < (comp.claims as unknown[]).length; j++) {
@@ -218,7 +240,9 @@ export function validateFactReviewOutput(raw: unknown): ValidationResult {
           if (!isString(cl?.classification) || !VALID_FACT_CLASSIFICATIONS.includes(cl.classification as FactClassification))
             errors.push(`components[${i}].claims[${j}].classification must be one of ${VALID_FACT_CLASSIFICATIONS.join("|")}`);
           if (!isStringArray(cl?.supportingFactIds)) errors.push(`components[${i}].claims[${j}].supportingFactIds must be string[]`);
-          if (!isStringArray(cl?.supportingSourceIds)) errors.push(`components[${i}].claims[${j}].supportingSourceIds must be string[]`);
+          // supportingSourceIds is unused downstream — optional.
+          if (cl?.supportingSourceIds !== undefined && !isStringArray(cl.supportingSourceIds))
+            errors.push(`components[${i}].claims[${j}].supportingSourceIds must be string[]`);
           if (!isString(cl?.severity) || !VALID_SEVERITY.includes(cl.severity as FactSeverity))
             errors.push(`components[${i}].claims[${j}].severity must be one of ${VALID_SEVERITY.join("|")}`);
         }
@@ -226,10 +250,10 @@ export function validateFactReviewOutput(raw: unknown): ValidationResult {
     }
   }
 
-  if (!isNumber(o.totalInventedFacts)) errors.push("totalInventedFacts must be number");
-  if (!isNumber(o.totalAlteredFacts)) errors.push("totalAlteredFacts must be number");
-  if (!isNumber(o.totalInterpretiveElaborations)) errors.push("totalInterpretiveElaborations must be number");
-  if (!isNumber(o.totalAmbiguousClaims)) errors.push("totalAmbiguousClaims must be number");
+  // Totals are derived server-side — model-reported values optional.
+  for (const t of ["totalInventedFacts", "totalAlteredFacts", "totalInterpretiveElaborations", "totalAmbiguousClaims"] as const) {
+    if (o[t] !== undefined && !isNumber(o[t])) errors.push(`${t} must be number`);
+  }
   if (!isBoolean(o.overallPass)) errors.push("overallPass must be boolean");
   if (o.blockingReason !== null && !isString(o.blockingReason)) errors.push("blockingReason must be string or null");
 

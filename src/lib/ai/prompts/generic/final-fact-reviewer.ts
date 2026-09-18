@@ -81,10 +81,13 @@ INTERPRETIVE_ELABORATION may pass ONLY if:
 If these conditions are not met, classify as AMBIGUOUS, ALTERED_FACT, or INVENTED_FACT as appropriate.
 Do NOT set overallPass to true contrary to the totals. The pipeline will deterministically recalculate overallPass from the totals.
 ${!process.env.DISABLE_COMPACT_REVIEWS ? `
-COMPACT OUTPUT RULES (reduce output tokens):
+COMPACT OUTPUT RULES (mandatory — verification metadata only):
 - claim text: quote the claim concisely, maximum 20 words each.
-- supportingFactIds and supportingSourceIds: maximum 3 IDs each.
-- Do not include explanatory prose outside the schema fields.
+- supportingFactIds: maximum 3 IDs.
+- Do NOT return supportingSourceIds — they are not used.
+- Do NOT return inventedCount/alteredCount/elaborationCount/ambiguousCount per component — they are derived server-side.
+- Do NOT return totalInventedFacts/totalAlteredFacts/totalInterpretiveElaborations/totalAmbiguousClaims — they are derived server-side.
+- Do NOT restate the document, evidence, or requirements.
 ` : ""}
 
 Return ONLY valid JSON:
@@ -98,20 +101,11 @@ Return ONLY valid JSON:
           "claim": "<exact claim text>",
           "classification": "SUPPORTED_STUDENT_FACT|SUPPORTED_PROGRAM_FACT|SUPPORTED_FACULTY_FACT|INTERPRETIVE_ELABORATION|ALTERED_FACT|INVENTED_FACT|AMBIGUOUS",
           "supportingFactIds": ["..."],
-          "supportingSourceIds": ["..."],
           "severity": "INFO|WARNING|BLOCKING"
         }
-      ],
-      "inventedCount": 0,
-      "alteredCount": 0,
-      "elaborationCount": 0,
-      "ambiguousCount": 0
+      ]
     }
   ],
-  "totalInventedFacts": 0,
-  "totalAlteredFacts": 0,
-  "totalInterpretiveElaborations": 0,
-  "totalAmbiguousClaims": 0,
   "overallPass": true/false,
   "blockingReason": null or "reason if invented/altered facts exist"
 }`;
