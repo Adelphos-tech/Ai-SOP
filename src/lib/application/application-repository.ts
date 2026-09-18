@@ -772,29 +772,59 @@ export async function saveConsultantVersion(
  * Does NOT alter version text.
  * Validates hard constraints (word min/max, character limit) before approval.
  */
+export interface ApprovalWarning {
+  code: string;
+  message: string;
+}
+
+/** Compute non-blocking approval warnings. Consultant has final
+ * authority — these inform, never block. */
+export function computeApprovalWarnings(
+  doc: Pick<ApplicationDocument, "wordMin" | "wordMax" | "characterLimit">,
+  content: string,
+): ApprovalWarning[] {
+  const warnings: ApprovalWarning[] = [];
+  const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+  const charCount = content.length;
+  if (doc.wordMin && wordCount < doc.wordMin) {
+    warnings.push({
+      code: "WORD_COUNT_BELOW_MINIMUM",
+      message: `${wordCount} words is ${doc.wordMin - wordCount} below the recommended minimum of ${doc.wordMin}`,
+    });
+  }
+  if (doc.wordMax && wordCount > doc.wordMax) {
+    warnings.push({
+      code: "WORD_COUNT_ABOVE_MAXIMUM",
+      message: `${wordCount} words is ${wordCount - doc.wordMax} above the recommended maximum of ${doc.wordMax}`,
+    });
+  }
+  if (doc.characterLimit && charCount > doc.characterLimit) {
+    warnings.push({
+      code: "CHARACTER_LIMIT_EXCEEDED",
+      message: `${charCount} characters exceeds the recommended limit of ${doc.characterLimit}`,
+    });
+  }
+  return warnings;
+}
+
 export async function approveDocumentVersion(
   documentId: string,
   versionId: string,
-): Promise<{ document: ApplicationDocument; version: DocumentVersion }> {
-  // Validate version belongs to document
+): Promise<{ document: ApplicationDocument; version: DocumentVersion; warningsOverridden: ApprovalWarning[] }> {
+  // Validate version belongs to document — real hard block
   const version = await validateVersionOwnership(versionId, documentId);
   const doc = await getDocument(documentId);
   if (!doc) {
     throw new Error("Document not found");
   }
+  // Empty/corrupted version — real hard block
+  if (!version.content || !version.content.trim()) {
+    throw new Error("Cannot approve an empty version");
+  }
 
-  // Validate hard constraints
-  const wordCount = version.content.trim().split(/\s+/).filter(Boolean).length;
-  const charCount = version.content.length;
-  if (doc.wordMin && wordCount < doc.wordMin) {
-    throw new Error(`Approval blocked: ${wordCount} words is below the minimum of ${doc.wordMin}`);
-  }
-  if (doc.wordMax && wordCount > doc.wordMax) {
-    throw new Error(`Approval blocked: ${wordCount} words exceeds the maximum of ${doc.wordMax}`);
-  }
-  if (doc.characterLimit && charCount > doc.characterLimit) {
-    throw new Error(`Approval blocked: ${charCount} characters exceeds the limit of ${doc.characterLimit}`);
-  }
+  // Word/character constraints are WARNING ONLY — the consultant may
+  // always override. Computed for audit, never thrown.
+  const warnings = computeApprovalWarnings(doc, version.content);
 
   const pool = getDbPool();
   const conn = await pool.getConnection();
@@ -821,5 +851,5 @@ export async function approveDocumentVersion(
   }
 
   const updatedDoc = await getDocument(documentId);
-  return { document: updatedDoc!, version };
+  return { document: updatedDoc!, version, warningsOverridden: warnings };
 }

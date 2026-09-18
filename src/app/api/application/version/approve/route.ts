@@ -58,14 +58,16 @@ export async function POST(request: NextRequest) {
       success: true,
       document: result.document,
       version: result.version,
+      // Warnings the consultant overrode — audit trail for the UI.
+      warningsOverridden: result.warningsOverridden,
     });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     const message = error?.message || "Internal server error";
-    // Constraint violations are 400 (client error), not 500
-    if (message.includes("Approval blocked")) {
-      return NextResponse.json({ error: message }, { status: 400 });
-    }
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Only real technical/data problems fail — never quality warnings.
+    const isHardFailure =
+      message.includes("not found") || message.includes("empty version") ||
+      message.includes("Access denied") || message.includes("does not belong");
+    return NextResponse.json({ error: message }, { status: isHardFailure ? 400 : 500 });
   }
 }

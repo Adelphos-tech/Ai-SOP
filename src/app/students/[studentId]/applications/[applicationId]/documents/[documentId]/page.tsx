@@ -372,6 +372,18 @@ export default function DocumentWorkspacePage() {
   const wordCount = useMemo(() => countWords(editorContent), [editorContent]);
   const charCount = editorContent.length;
 
+  // Non-blocking approval warnings — inform the consultant, never block.
+  const approvalWarnings = useMemo(() => {
+    const w: string[] = [];
+    if (document?.wordMin && wordCount < document.wordMin) {
+      w.push(`This document is ${document.wordMin - wordCount} words below the stated minimum.`);
+    }
+    if (document?.wordMax && wordCount > document.wordMax) {
+      w.push(`This document is ${wordCount - document.wordMax} words above the stated maximum.`);
+    }
+    return w;
+  }, [document?.wordMin, document?.wordMax, wordCount]);
+
   const hasUnsavedChanges = useMemo(() => {
     if (!selectedVersion) return editorContent.trim().length > 0;
     return editorContent !== selectedVersion.content;
@@ -448,8 +460,12 @@ export default function DocumentWorkspacePage() {
     editorRef.current?.focus({ preventScroll: true });
   }
 
+  // Single-flight guard — one click = one approval request.
+  const approveInFlight = useRef(false);
+
   async function handleApprove() {
-    if (!selectedVersion) return;
+    if (!selectedVersion || approveInFlight.current) return;
+    approveInFlight.current = true;
     setApproving(true);
     setApproveError("");
     try {
@@ -461,6 +477,7 @@ export default function DocumentWorkspacePage() {
           applicationId,
           documentId,
           versionId: selectedVersion.id,
+          overrideWarnings: true,
         }),
       });
       const data = await res.json();
@@ -473,6 +490,7 @@ export default function DocumentWorkspacePage() {
     } catch (err: any) {
       setApproveError(err?.message || "Approval failed");
     } finally {
+      approveInFlight.current = false;
       setApproving(false);
     }
   }
@@ -790,15 +808,15 @@ export default function DocumentWorkspacePage() {
                 </div>
               }
             >
-              {/* Word limit warnings */}
+              {/* Word limit warnings — advisory only, never block approval */}
               {document?.wordMax && wordCount > document.wordMax && (
-                <div className="mb-3 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input text-sm text-dvivid-error">
-                  ⚠ {wordCount} words exceeds the maximum of {document.wordMax}. Approval will be blocked.
+                <div className="mb-3 p-3 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input text-sm text-dvivid-warning">
+                  ⚠ {wordCount} words — {wordCount - document.wordMax} above the recommended maximum of {document.wordMax}.
                 </div>
               )}
               {document?.wordMin && wordCount < document.wordMin && (
                 <div className="mb-3 p-3 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input text-sm text-dvivid-warning">
-                  ⚠ {wordCount} words is below the minimum of {document.wordMin}.
+                  ⚠ {wordCount} words — {document.wordMin - wordCount} below the recommended minimum of {document.wordMin}.
                 </div>
               )}
 
@@ -878,7 +896,7 @@ export default function DocumentWorkspacePage() {
                   </div>
                   {(!isApproved || approvedVersion?.id !== selectedVersion?.id) && (
                     <PrimaryButton onClick={() => setShowApproveConfirm(true)} disabled={hasUnsavedChanges}>
-                      Approve Document
+                      {approvalWarnings.length > 0 ? "Approve Anyway" : "Approve Document"}
                     </PrimaryButton>
                   )}
                   {hasUnsavedChanges && (
@@ -1078,12 +1096,21 @@ export default function DocumentWorkspacePage() {
             <h3 className="text-card-title text-dvivid-text-primary mb-2">Confirm Approval</h3>
             <p className="text-sm text-dvivid-text-secondary mb-4">
               Approve Version {selectedVersion?.versionNumber} as the final document?
-              {document?.wordMax && (
-                <span className="block mt-2 text-sm">
-                  Current: {wordCount} words · Maximum: {document.wordMax} words
-                </span>
-              )}
             </p>
+            {(document?.wordMin || document?.wordMax) && (
+              <p className="text-sm text-dvivid-text-secondary mb-3">
+                Current: {wordCount} words
+                {document.wordMin ? ` · Recommended minimum: ${document.wordMin}` : ""}
+                {document.wordMax ? ` · Recommended maximum: ${document.wordMax}` : ""}
+              </p>
+            )}
+            {approvalWarnings.length > 0 && (
+              <div className="mb-4 p-3 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input">
+                {approvalWarnings.map((w, i) => (
+                  <p key={i} className="text-sm text-dvivid-warning">⚠ {w}</p>
+                ))}
+              </div>
+            )}
             {approveError && <p className="mb-3 text-sm text-dvivid-error">{approveError}</p>}
             <div className="flex gap-3 justify-end">
               <SecondaryButton onClick={() => { setShowApproveConfirm(false); setApproveError(""); }} disabled={approving}>
@@ -1094,7 +1121,7 @@ export default function DocumentWorkspacePage() {
                 disabled={approving}
                 className="px-5 py-2.5 bg-dvivid-success text-white rounded-button font-medium text-sm hover:opacity-90 transition-colors disabled:opacity-50"
               >
-                {approving ? "Approving..." : "Approve"}
+                {approving ? "Approving..." : approvalWarnings.length > 0 ? "Approve Anyway" : "Approve"}
               </button>
             </div>
           </div>

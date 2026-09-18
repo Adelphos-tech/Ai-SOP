@@ -12,7 +12,8 @@ import {
 } from "../src/lib/ai/model-output-types";
 import { planComponentActions } from "../src/lib/ai/component-action-planner";
 import { buildCalibratedClaims } from "../src/lib/ai/pipeline/run-application-pipeline";
-import { resolveVersionContent } from "../src/lib/application/generate-client";
+import { resolveVersionContent, createSingleFlightSubmitter } from "../src/lib/application/generate-client";
+import { computeApprovalWarnings } from "../src/lib/application/application-repository";
 
 let passed = 0, failed = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -211,6 +212,29 @@ async function main() {
     check("VER-empty → visible error", !resolveVersionContent({ content: "" }).ok);
     const bad = resolveVersionContent(undefined);
     check("VER-error message present", !bad.ok && bad.error.includes("Could not load"));
+  }
+
+  // ---------- Approval override — warnings never block ----------
+  console.log("Approval override — warnings only, consultant authority");
+  {
+    const words = (n: number) => Array(n).fill("word").join(" ");
+    // A: below minimum → warning, not block
+    const below = computeApprovalWarnings({ wordMin: 750 }, words(707));
+    check("APP-A below min → warning only", below.length === 1 && below[0].code === "WORD_COUNT_BELOW_MINIMUM" && below[0].message.includes("43"));
+    // C: above maximum → warning only
+    const above = computeApprovalWarnings({ wordMax: 1000 }, words(1100));
+    check("APP-C above max → warning only", above.length === 1 && above[0].code === "WORD_COUNT_ABOVE_MAXIMUM");
+    // D: valid count → no warnings
+    check("APP-D valid → no warnings", computeApprovalWarnings({ wordMin: 500, wordMax: 1000 }, words(700)).length === 0);
+    // no limits → no warnings
+    check("APP no limits → no warnings", computeApprovalWarnings({}, words(5)).length === 0);
+    // E: single-flight approve → 1 request
+    let approveCalls = 0;
+    const submit = createSingleFlightSubmitter(async () => { approveCalls++; await new Promise(r => setTimeout(r, 10)); return { ok: true, status: 200, data: {} }; });
+    await Promise.all([submit(), submit(), submit()]);
+    check("APP-E triple-click → 1 request", approveCalls === 1);
+    await submit();
+    check("APP second explicit click → new request", approveCalls === 2);
   }
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
