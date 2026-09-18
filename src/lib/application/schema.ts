@@ -114,6 +114,32 @@ CREATE TABLE IF NOT EXISTS application_documents (
     REFERENCES applications(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Generation runs table — per-attempt lifecycle record.
+-- application_documents.generation_status remains the document-level
+-- lock/summary; this table carries stage progress, heartbeat and
+-- cancellation state for the active attempt.
+CREATE TABLE IF NOT EXISTS generation_runs (
+  id VARCHAR(36) PRIMARY KEY,
+  document_id VARCHAR(36) NOT NULL,
+  application_id VARCHAR(36) NOT NULL,
+  student_id VARCHAR(36) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'RUNNING',
+  current_stage VARCHAR(40) DEFAULT NULL,
+  current_stage_started_at DATETIME(3) DEFAULT NULL,
+  completed_stages INT NOT NULL DEFAULT 0,
+  total_stages INT NOT NULL DEFAULT 6,
+  generation_started_at DATETIME(3) DEFAULT NULL,
+  last_heartbeat_at DATETIME(3) DEFAULT NULL,
+  cancel_requested_at DATETIME(3) DEFAULT NULL,
+  cancelled_at DATETIME(3) DEFAULT NULL,
+  completed_at DATETIME(3) DEFAULT NULL,
+  failed_at DATETIME(3) DEFAULT NULL,
+  failure_message TEXT DEFAULT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT NOW(3),
+  INDEX idx_runs_document (document_id, created_at),
+  INDEX idx_runs_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Document versions table
 CREATE TABLE IF NOT EXISTS document_versions (
   id VARCHAR(36) PRIMARY KEY,

@@ -160,6 +160,7 @@ export function PromptSourceBadge({ source }: { source: string }) {
   const map: Record<string, { label: string; bg: string; text: string }> = {
     OFFICIAL_VERIFIED: { label: "Official Requirement", bg: "bg-dvivid-primary-light", text: "text-dvivid-primary" },
     APPLICATION_PORTAL: { label: "Application Portal", bg: "bg-dvivid-primary-light", text: "text-dvivid-primary" },
+    USER_PROVIDED_PORTAL_PROMPT: { label: "Prompt provided by user", bg: "bg-dvivid-primary-light", text: "text-dvivid-primary" },
     CONSULTANT_PROVIDED: { label: "Consultant Provided", bg: "bg-purple-50", text: "text-purple-700" },
     DVIVID_DEFAULT_TEMPLATE: { label: "D-Vivid Template", bg: "bg-gray-100", text: "text-dvivid-text-secondary" },
     CUSTOM: { label: "Custom", bg: "bg-gray-100", text: "text-dvivid-text-secondary" },

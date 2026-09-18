@@ -27,6 +27,7 @@ import { loadDocumentGenerationContext, buildPipelineWritingInstructions } from 
 import { adaptProfile } from "@/lib/application/profile-adapter";
 import { buildQualityRubricInstructions } from "@/lib/application/document-type-config";
 import { updateDocumentStatus, createDocumentVersion, acquireGenerationLock } from "@/lib/application/application-repository";
+import { createGenerationRun, cancelRun, completeRun, failRun } from "@/lib/application/generation-lifecycle";
 import { runApplicationPipeline, ApplicationPipelineInput } from "@/lib/ai/pipeline/run-application-pipeline";
 import { isApiKeyConfigured } from "@/lib/ai/openai-client";
 import {
@@ -276,14 +277,49 @@ export async function generateApplicationDocument(
     generationContract: contract,
     execution: {
       generationId,
+      generationRunId: generationId,
       mode: "CONTENT_REGENERATION" as const,
     },
   };
 
+  // ===== PERSIST GENERATION RUN (stage progress + cancellation) =====
+  try {
+    await createGenerationRun({
+      id: generationId,
+      documentId,
+      applicationId,
+      studentId,
+    });
+  } catch (e) {
+    // Lifecycle persistence must not block generation — the pipeline
+    // still enforces boundaries only when the row exists.
+    console.error(JSON.stringify({ event: "generation_run_create_failed", requestId, generationId, documentId }));
+  }
+
   // ===== RUN SIX-STAGE PIPELINE =====
   const result = await runApplicationPipeline(pipelineInput);
 
+  // ===== CANCELLED — authoritative stop, release lock =====
+  if (result.status === "cancelled") {
+    await cancelRun(generationId);
+    // Release the document generation lock — back to pre-generation state.
+    await updateDocumentStatus(documentId, undefined, "NOT_STARTED");
+    console.log(JSON.stringify({
+      event: "generation_cancelled",
+      requestId,
+      generationId,
+      documentId,
+      durationMs: Date.now() - startTime,
+    }));
+    return {
+      ok: true,
+      status: 200,
+      body: { status: "cancelled", generationId, documentId },
+    };
+  }
+
   if (result.status === "error") {
+    await failRun(generationId, result.error || "PIPELINE_ERROR");
     await updateDocumentStatus(documentId, undefined, "FAILED");
     console.log(JSON.stringify({
       event: "generation_pipeline_error",
@@ -334,6 +370,10 @@ export async function generateApplicationDocument(
   });
 
   // ===== UPDATE GENERATION STATUS =====
+  // completeRun is a CAS — if a cancel request raced the final stage
+  // boundary, the run stays CANCELLED/COMPLETED atomically; a CANCELLED
+  // state is never overwritten back to COMPLETED.
+  await completeRun(generationId);
   await updateDocumentStatus(documentId, undefined, "GENERATED");
 
   console.log(JSON.stringify({

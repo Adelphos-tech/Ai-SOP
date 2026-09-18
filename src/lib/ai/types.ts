@@ -97,7 +97,7 @@ export interface PipelineCost {
 }
 
 export interface PipelineResult {
-  status: "success" | "error" | "partial";
+  status: "success" | "error" | "partial" | "cancelled";
   planner: PlannerOutput | null;
   draft: string;
   // Phase 38A: factReview/qualityReview now use typed contracts from model-output-types.ts.

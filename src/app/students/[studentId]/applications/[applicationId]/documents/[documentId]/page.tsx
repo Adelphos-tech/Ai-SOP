@@ -7,7 +7,7 @@ import { PROMPT_SOURCE_LABELS } from "@/lib/application/application-types";
 import { getProfileReadiness } from "@/lib/application/intake-completion";
 import {
   PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
-  SectionCard, StatusBadge, PromptSourceBadge,
+  SectionCard, StatusBadge,
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 
@@ -116,14 +116,23 @@ function humanizeBlockReason(reason: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// Consultant-facing stage labels — never expose internal stage names.
 const generationStageLabels = [
-  "Preparing your document",
-  "Drafting",
-  "Reviewing quality",
-  "Adjusting language",
-  "Finalizing",
+  "Preparing document",
+  "Writing draft",
+  "Checking quality",
+  "Improving language",
+  "Finalizing document",
   "Verifying facts",
 ];
+
+function formatElapsed(startedAt?: string | null): string {
+  if (!startedAt) return "";
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 
 export default function DocumentWorkspacePage() {
   const params = useParams();
@@ -139,7 +148,6 @@ export default function DocumentWorkspacePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [generationStage, setGenerationStage] = useState(0);
   const [generationResult, setGenerationResult] = useState<GenerationResult | null>(null);
   const [generationError, setGenerationError] = useState("");
   const [generationBlockReasons, setGenerationBlockReasons] = useState<string[]>([]);
@@ -156,6 +164,11 @@ export default function DocumentWorkspacePage() {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+  // Live generation status polled from the server — the authoritative
+  // source for stage progress, heartbeat, and cancellation state.
+  const [liveStatus, setLiveStatus] = useState<any>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [, setElapsedTick] = useState(0);
 
   const loadDocument = useCallback(async () => {
     setLoading(true);
@@ -215,16 +228,55 @@ export default function DocumentWorkspacePage() {
     loadDocument();
   }, [loadDocument]);
 
+  // ===== Live generation status polling =====
+  // While the server reports an active run (QUEUED/RUNNING/
+  // CANCEL_REQUESTED) — or the document is marked GENERATING — poll a
+  // lightweight status endpoint every 2s. Progress, heartbeat and
+  // cancellation all come from the server; nothing is faked locally.
+  const generationActive =
+    generating ||
+    document?.generationStatus === "GENERATING" ||
+    liveStatus?.active === true;
+
+  useEffect(() => {
+    if (!generationActive) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `/api/application/document/generation-status?documentId=${documentId}&studentId=${studentId}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok || stopped) return;
+        const data = await res.json();
+        setLiveStatus(data);
+        if (data.status === "COMPLETED" || data.status === "FAILED" || data.status === "CANCELLED") {
+          setGenerating(false);
+          if (data.status === "COMPLETED") {
+            await loadDocument();
+          }
+        }
+      } catch { /* transient poll error — keep polling */ }
+    };
+    tick();
+    const iv = setInterval(tick, 2000);
+    return () => { stopped = true; clearInterval(iv); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generationActive, documentId, studentId]);
+
+  // 1s tick for the elapsed-time display only (not progress).
+  useEffect(() => {
+    if (!generationActive) return;
+    const iv = setInterval(() => setElapsedTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, [generationActive]);
+
   async function handleGenerate() {
     setGenerating(true);
     setGenerationError("");
     setGenerationBlockReasons([]);
     setGenerationResult(null);
-    setGenerationStage(0);
-
-    const stageInterval = setInterval(() => {
-      setGenerationStage(s => Math.min(s + 1, generationStageLabels.length - 1));
-    }, 5000);
+    setLiveStatus(null);
 
     try {
       const res = await fetch("/api/application/document/generate", {
@@ -233,8 +285,10 @@ export default function DocumentWorkspacePage() {
         body: JSON.stringify({ studentId, applicationId, documentId }),
       });
       const data = await res.json();
-      clearInterval(stageInterval);
-      setGenerationStage(generationStageLabels.length - 1);
+      if (data.status === "cancelled") {
+        await loadDocument();
+        return;
+      }
       if (!res.ok) {
         // Surface structured blocking reasons so the consultant knows
         // exactly what to fix, not just "generation is blocked".
@@ -249,10 +303,26 @@ export default function DocumentWorkspacePage() {
       setGenerationResult(data);
       await loadDocument();
     } catch (err: any) {
-      clearInterval(stageInterval);
       setGenerationError(err?.message || "Generation failed");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleCancelGeneration() {
+    setCancelling(true);
+    setGenerationError("");
+    try {
+      await fetch("/api/application/document/generation/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId, applicationId, documentId }),
+      });
+      // The status poll picks up CANCEL_REQUESTED → CANCELLED.
+    } catch {
+      setGenerationError("Cancellation request failed — try again.");
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -447,9 +517,15 @@ export default function DocumentWorkspacePage() {
             )}
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <PromptSourceBadge source={document?.promptSource || ""} />
-            <StatusBadge status={document?.generationStatus || "NOT_GENERATED"} />
-            <StatusBadge status={document?.reviewStatus || "DRAFT"} />
+            {/* One clear status — never "Generating + Draft" together */}
+            {generationActive ? (
+              <StatusBadge status="IN_REVIEW" label="Generating" />
+            ) : (
+              <>
+                <StatusBadge status={document?.generationStatus || "NOT_GENERATED"} />
+                <StatusBadge status={document?.reviewStatus || "DRAFT"} />
+              </>
+            )}
           </div>
         </div>
         {approvedVersion && (
@@ -461,40 +537,90 @@ export default function DocumentWorkspacePage() {
         )}
       </div>
 
-      {/* Generation Progress */}
-      {generating && (
+      {/* Live generation progress — driven by server status, not timers */}
+      {generationActive && (
         <SectionCard className="mb-8">
-          <div className="bg-dvivid-primary-light border border-dvivid-primary-border rounded-input p-5">
-            <p className="text-sm font-medium text-dvivid-primary mb-3">Generating your document...</p>
-            <div className="space-y-2">
-              {generationStageLabels.map((label, i) => (
-                <div key={i} className={`flex items-center gap-2.5 text-sm ${i <= generationStage ? "text-dvivid-text-primary" : "text-dvivid-text-muted"}`}>
-                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
-                    i < generationStage ? "bg-dvivid-primary text-white" :
-                    i === generationStage ? "border-2 border-dvivid-primary text-dvivid-primary" :
-                    "border-2 border-dvivid-border"
-                  }`}>
-                    {i < generationStage ? "✓" : i === generationStage ? "●" : ""}
-                  </span>
-                  <span>{label}</span>
+          {(() => {
+            const completed = liveStatus?.completedStages ?? 0;
+            const total = liveStatus?.totalStages ?? 6;
+            const activeIdx = Math.min(completed, total - 1);
+            const cancelRequested = liveStatus?.status === "CANCEL_REQUESTED" || cancelling;
+            const stale = liveStatus?.heartbeatStale === true;
+            return (
+              <div className={`border rounded-input p-5 ${
+                stale ? "bg-dvivid-warning-light border-dvivid-warning/20" : "bg-dvivid-primary-light border-dvivid-primary-border"
+              }`}>
+                <p className="text-sm font-medium text-dvivid-primary mb-1">
+                  Generating {document?.documentTitle || "document"}
+                </p>
+                <p className="text-xs text-dvivid-text-secondary mb-3">
+                  Stage {activeIdx + 1} of {total} · {completed} stage{completed !== 1 ? "s" : ""} complete
+                  {liveStatus?.startedAt ? ` · Elapsed: ${formatElapsed(liveStatus.startedAt)}` : ""}
+                </p>
+                <div className="space-y-2">
+                  {generationStageLabels.map((label, i) => (
+                    <div key={i} className={`flex items-center gap-2.5 text-sm ${
+                      i <= completed || i === activeIdx ? "text-dvivid-text-primary" : "text-dvivid-text-muted"
+                    }`}>
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${
+                        i < completed ? "bg-dvivid-primary text-white" :
+                        i === activeIdx ? "border-2 border-dvivid-primary text-dvivid-primary animate-pulse" :
+                        "border-2 border-dvivid-border"
+                      }`}>
+                        {i < completed ? "✓" : i === activeIdx ? "●" : ""}
+                      </span>
+                      <span>{label}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
+
+                {stale ? (
+                  <div className="mt-4 pt-4 border-t border-dvivid-warning/30">
+                    <p className="text-sm text-dvivid-warning font-medium mb-3">
+                      Generation connection appears interrupted.
+                    </p>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <SecondaryButton onClick={loadDocument}>Check Again</SecondaryButton>
+                      <button
+                        onClick={handleCancelGeneration}
+                        disabled={cancelling}
+                        className="px-4 py-2 text-sm font-medium text-dvivid-error border border-dvivid-error/30 rounded-button hover:bg-dvivid-error-light transition-colors disabled:opacity-50"
+                      >
+                        {cancelling ? "Cancelling..." : "Cancel / Reset Generation"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 pt-4 border-t border-dvivid-primary-border/40">
+                    <button
+                      onClick={handleCancelGeneration}
+                      disabled={cancelRequested}
+                      className="px-4 py-2 text-sm font-medium text-dvivid-error border border-dvivid-error/30 rounded-button hover:bg-dvivid-error-light transition-colors disabled:opacity-50"
+                    >
+                      {cancelRequested ? "Stopping..." : "Cancel Generation"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </SectionCard>
       )}
 
-      {/* Generation in progress (persisted status, e.g. after reload) */}
-      {document?.generationStatus === "GENERATING" && !generating && (
-        <SectionCard title="Generation In Progress" className="mb-8">
-          <p className="text-sm text-dvivid-text-secondary mb-4">
-            A generation run is marked in progress for this document. It may still be running,
-            or it may have been interrupted.
-          </p>
-          <div className="flex items-center gap-3 flex-wrap">
-            <SecondaryButton onClick={loadDocument}>Refresh Status</SecondaryButton>
-          </div>
-        </SectionCard>
+      {/* Cancelled — terminal notice */}
+      {!generationActive && liveStatus?.status === "CANCELLED" && (
+        <div className="mb-8 p-4 bg-gray-50 border border-dvivid-border rounded-input">
+          <p className="text-sm font-medium text-dvivid-text-primary mb-1">Generation cancelled.</p>
+          <p className="text-sm text-dvivid-text-secondary">No draft was saved. You can generate again whenever you're ready.</p>
+        </div>
+      )}
+
+      {/* Failed — terminal notice */}
+      {!generationActive && liveStatus?.status === "FAILED" && document?.generationStatus !== "GENERATED" && versions.length === 0 && (
+        <div className="mb-8 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
+          <p className="text-sm font-medium text-dvivid-error mb-1">Generation stopped because of an error.</p>
+          <p className="text-sm text-dvivid-text-secondary">You can try again — if it keeps failing, check that the applicant information is complete.</p>
+        </div>
       )}
 
       {/* Generation Section (only if no versions yet) */}

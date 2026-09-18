@@ -103,11 +103,19 @@ import { RenderFeedback, RenderLifecycleResult } from "@/lib/render/render-lifec
 import { computeHash, CheckpointHashes } from "../pipeline-checkpoint";
 import { resolveNarrativeProfile, buildNarrativePlannerGuidance, buildNarrativeWriterRules, applyVisaReturnHomeRequirement } from "../../application/narrative-profile";
 import {
+  markStageStarted,
+  markStageCompleted,
+  heartbeatRun,
+  isCancelRequested,
+  GenerationCancelledError,
+} from "../../application/generation-lifecycle";
+import {
   createStageExecution,
   EXECUTION_STAGES,
   ExecutionStage,
   ExecutionMode,
   StageExecution,
+  StageExecutionResult,
   StageExecutionError,
 } from "./stage-execution";
 import { AttemptAccounting } from "../attempt-accounting";
@@ -118,6 +126,12 @@ import { promises as fs } from "fs";
 export interface ApplicationPipelineExecution {
   generationId: string;
   mode: ExecutionMode;
+  /**
+   * Authoritative generation run id (generation_runs row). When set,
+   * the pipeline persists stage progress, heartbeats, and enforces
+   * cancellation boundaries before/after every stage.
+   */
+  generationRunId?: string;
 }
 
 export interface ApplicationPipelineInput {
@@ -150,7 +164,7 @@ export interface ApplicationResponseItem {
 }
 
 export interface ApplicationPipelineResult {
-  status: "success" | "error";
+  status: "success" | "error" | "cancelled";
   error?: string;
   generationId?: string;
   planner: any;
@@ -231,7 +245,8 @@ function buildCheckpointHashes(args: {
 async function callOpenAIForStage(
   stage: StageName,
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  abortSignal?: AbortSignal
 ): Promise<{ content: string; stageUsage: StageUsage }> {
   const client = getOpenAIClient();
   if (!client) throw new Error("OpenAI client not available");
@@ -247,7 +262,7 @@ async function callOpenAIForStage(
     ],
     max_completion_tokens: AI_CONFIG.maxCompletionTokensJson,
     response_format: { type: "json_object" },
-  });
+  }, abortSignal ? { signal: abortSignal } : undefined);
 
   const content = response.choices[0]?.message?.content || "";
   if (!content) throw new Error(`${stage} returned empty content`);
@@ -361,9 +376,16 @@ export async function runApplicationPipeline(
       exchangeRate: fxInfo.rate > 0 ? fxInfo.rate : 1,
       maxTechnicalRetries: 2,
       call: async (stage, system, user, onUsage) => {
-        const result = await callOpenAIForStage(stage as StageName, system, user);
-        await onUsage(result.stageUsage);
-        return result;
+        try {
+          const result = await callOpenAIForStage(stage as StageName, system, user, abortController.signal);
+          await onUsage(result.stageUsage);
+          return result;
+        } catch (e: any) {
+          if (abortController.signal.aborted || e?.name === "AbortError") {
+            throw new GenerationCancelledError(stage);
+          }
+          throw e;
+        }
       },
     });
   } catch (error: any) {
@@ -374,6 +396,52 @@ export async function runApplicationPipeline(
   }
 
   const stageUsages: StageUsage[] = [];
+
+  // ===== Generation lifecycle: stage progress + cancellation =====
+  // When execution.generationRunId is set, stage boundaries are
+  // persisted to generation_runs and cancellation is enforced before
+  // AND after every stage — no new stage may start after a cancel
+  // request. An AbortController also aborts the in-flight SDK call.
+  const generationRunId = input.execution?.generationRunId || null;
+  const abortController = new AbortController();
+  let lifecycleInterval: ReturnType<typeof setInterval> | null = null;
+
+  async function throwIfCancelled(stage?: string): Promise<void> {
+    if (!generationRunId) return;
+    if (abortController.signal.aborted) throw new GenerationCancelledError(stage);
+    if (await isCancelRequested(generationRunId)) {
+      abortController.abort();
+      throw new GenerationCancelledError(stage);
+    }
+  }
+
+  if (generationRunId) {
+    lifecycleInterval = setInterval(async () => {
+      try {
+        await heartbeatRun(generationRunId);
+        if (await isCancelRequested(generationRunId)) abortController.abort();
+      } catch { /* heartbeat is best-effort */ }
+    }, 8000);
+    if (lifecycleInterval.unref) lifecycleInterval.unref();
+  }
+
+  async function execStage(
+    stage: ExecutionStage,
+    system: string,
+    user: string,
+    context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }
+  ): Promise<StageExecutionResult> {
+    await throwIfCancelled(stage);
+    if (generationRunId) {
+      try { await markStageStarted(generationRunId, stage); } catch { /* progress is best-effort */ }
+    }
+    const result = await stageExecution.execute(stage, system, user, context);
+    if (generationRunId) {
+      try { await markStageCompleted(generationRunId); } catch { /* best-effort */ }
+    }
+    await throwIfCancelled(stage);
+    return result;
+  }
 
   const buildCost = async (duration: number): Promise<PipelineCost> => {
     const totalInputTokens = stageUsages.reduce((s, x) => s + x.inputTokens, 0);
@@ -440,7 +508,7 @@ export async function runApplicationPipeline(
       studentFactsText, input.responseComponents, input.facultyAlignment, programFactsText,
       input.documentTypeConfig ? `DOCUMENT TYPE: ${input.documentTypeConfig.displayName}\nWRITING PERSPECTIVE: ${input.documentTypeConfig.writingPerspective}\nDEFAULT STRUCTURE: ${input.documentTypeConfig.defaultStructure}\n${input.documentTypeConfig.promptFirst ? "ANSWER THE SUPPLIED PROMPT DIRECTLY — do NOT default to SOP structure." : ""}${narrativeProfile ? `\n${buildNarrativePlannerGuidance(narrativeProfile)}` : ""}` : undefined
     );
-    const plannerResult = await stageExecution.execute(
+    const plannerResult = await execStage(
       "planner", plannerPrompt.system, plannerPrompt.user
     );
     const plan = JSON.parse(plannerResult.content);
@@ -475,7 +543,7 @@ export async function runApplicationPipeline(
     const writerPrompt = buildGenericWriterPrompt(
       plan, studentFactsText, input.responseComponents, input.facultyAlignment, writingInstructions, evidencePackets
     );
-    const writerResult = await stageExecution.execute(
+    const writerResult = await execStage(
       "writer", writerPrompt.system, writerPrompt.user
     );
     const writerOutput = JSON.parse(writerResult.content);
@@ -523,7 +591,7 @@ export async function runApplicationPipeline(
     const qualityPrompt = buildGenericQualityReviewerPrompt(
       writerOutput, input.responseComponents, input.facultyAlignment, evidenceLedger, evidencePackets, input.qualityRubricInstructions
     );
-    const qualityResult = await stageExecution.execute(
+    const qualityResult = await execStage(
       "qualityReviewer", qualityPrompt.system, qualityPrompt.user
     );
     const qualityReview: QualityReviewOutput = JSON.parse(qualityResult.content);
@@ -554,7 +622,7 @@ export async function runApplicationPipeline(
       },
     } as LanguageProfile;
     const calibratePrompt = buildGenericLanguageCalibratorPrompt(writerOutput, languageProfile);
-    const calibrateResult = await stageExecution.execute(
+    const calibrateResult = await execStage(
       "languageCalibrator", calibratePrompt.system, calibratePrompt.user
     );
     const calibrated = JSON.parse(calibrateResult.content);
@@ -712,7 +780,7 @@ export async function runApplicationPipeline(
     const maxFinalizerRetries = 2;
     while (true) {
       try {
-        finalizerResult = await stageExecution.execute(
+        finalizerResult = await execStage(
           "finalizer", finalizerPrompt.system, finalizerPrompt.user,
           { freezeComponentIds, expectedClaimIds: expectedClaimIdsMap }
         );
@@ -859,7 +927,7 @@ export async function runApplicationPipeline(
       studentFactsText, programFactsText, input.facultyAlignment, input.responseComponents,
       input.documentTypeConfig ? `DOCUMENT TYPE: ${input.documentTypeConfig.displayName}\nWRITING PERSPECTIVE: ${input.documentTypeConfig.writingPerspective}\n${input.documentTypeConfig.recommenderPerspectiveRequired ? "RECOMMENDER SAFETY: Claims about recommender observations, relationship duration, courses taught, or performance rankings must be supported by approved evidence." : ""}${input.documentTypeConfig.visaSpecificEvidence ? "VISA SAFETY: Claims about financial assets, family obligations, property, or immigration intent must be supported by approved evidence." : ""}` : undefined
     );
-    const factResult = await stageExecution.execute(
+    const factResult = await execStage(
       "factReviewer", factPrompt.system, factPrompt.user
     );
     const factReview: FactReviewOutput = JSON.parse(factResult.content);
@@ -1012,6 +1080,22 @@ export async function runApplicationPipeline(
     try { await stageExecution.finish(false); } catch {}
     try { await stageExecution.close(); } catch {}
     const accounting = (() => { try { return stageExecution.accounting(); } catch { return undefined; } })();
+
+    // Cancellation is a first-class outcome, not an error.
+    if (error instanceof GenerationCancelledError || abortController.signal.aborted) {
+      return {
+        status: "cancelled",
+        error: "GENERATION_CANCELLED",
+        generationId,
+        planner: null, writerOutput: null, qualityReview: null, factReview: null,
+        calibratedOutput: null, finalizedOutput: null,
+        compliance: null, responses: [], finalText: "",
+        renderLifecycle: null, preFinalRenderFeedback: null, finalRenderFeedback: null,
+        accounting,
+        metrics: { wordCount: 0, model: "", stages: stageUsages.length, duration, cost, renderChecks: renderCheckCount },
+      };
+    }
+
     return {
       status: "error",
       error: error?.message || "PIPELINE_ERROR",
@@ -1023,6 +1107,8 @@ export async function runApplicationPipeline(
       accounting,
       metrics: { wordCount: 0, model: "", stages: stageUsages.length, duration, cost, renderChecks: renderCheckCount },
     };
+  } finally {
+    if (lifecycleInterval) clearInterval(lifecycleInterval);
   }
 }
 
