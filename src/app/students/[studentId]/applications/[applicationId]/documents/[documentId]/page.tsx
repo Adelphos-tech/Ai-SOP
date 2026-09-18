@@ -10,6 +10,7 @@ import {
   SectionCard, StatusBadge,
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
+import { GenerationProgressCard } from "@/components/generation/GenerationProgressCard";
 
 interface Document {
   id: string;
@@ -116,24 +117,6 @@ function humanizeBlockReason(reason: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// Consultant-facing stage labels — never expose internal stage names.
-const generationStageLabels = [
-  "Preparing document",
-  "Writing draft",
-  "Checking quality",
-  "Improving language",
-  "Finalizing document",
-  "Verifying facts",
-];
-
-function formatElapsed(startedAt?: string | null): string {
-  if (!startedAt) return "";
-  const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
 export default function DocumentWorkspacePage() {
   const params = useParams();
   const studentId = params.studentId as string;
@@ -168,7 +151,6 @@ export default function DocumentWorkspacePage() {
   // source for stage progress, heartbeat, and cancellation state.
   const [liveStatus, setLiveStatus] = useState<any>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [, setElapsedTick] = useState(0);
 
   const loadDocument = useCallback(async () => {
     setLoading(true);
@@ -263,13 +245,6 @@ export default function DocumentWorkspacePage() {
     return () => { stopped = true; clearInterval(iv); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generationActive, documentId, studentId]);
-
-  // 1s tick for the elapsed-time display only (not progress).
-  useEffect(() => {
-    if (!generationActive) return;
-    const iv = setInterval(() => setElapsedTick(t => t + 1), 1000);
-    return () => clearInterval(iv);
-  }, [generationActive]);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -537,74 +512,15 @@ export default function DocumentWorkspacePage() {
         )}
       </div>
 
-      {/* Live generation progress — driven by server status, not timers */}
+      {/* Live generation progress — animated, backend-driven */}
       {generationActive && (
-        <SectionCard className="mb-8">
-          {(() => {
-            const completed = liveStatus?.completedStages ?? 0;
-            const total = liveStatus?.totalStages ?? 6;
-            const activeIdx = Math.min(completed, total - 1);
-            const cancelRequested = liveStatus?.status === "CANCEL_REQUESTED" || cancelling;
-            const stale = liveStatus?.heartbeatStale === true;
-            return (
-              <div className={`border rounded-input p-5 ${
-                stale ? "bg-dvivid-warning-light border-dvivid-warning/20" : "bg-dvivid-primary-light border-dvivid-primary-border"
-              }`}>
-                <p className="text-sm font-medium text-dvivid-primary mb-1">
-                  Generating {document?.documentTitle || "document"}
-                </p>
-                <p className="text-xs text-dvivid-text-secondary mb-3">
-                  Stage {activeIdx + 1} of {total} · {completed} stage{completed !== 1 ? "s" : ""} complete
-                  {liveStatus?.startedAt ? ` · Elapsed: ${formatElapsed(liveStatus.startedAt)}` : ""}
-                </p>
-                <div className="space-y-2">
-                  {generationStageLabels.map((label, i) => (
-                    <div key={i} className={`flex items-center gap-2.5 text-sm ${
-                      i <= completed || i === activeIdx ? "text-dvivid-text-primary" : "text-dvivid-text-muted"
-                    }`}>
-                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 ${
-                        i < completed ? "bg-dvivid-primary text-white" :
-                        i === activeIdx ? "border-2 border-dvivid-primary text-dvivid-primary animate-pulse" :
-                        "border-2 border-dvivid-border"
-                      }`}>
-                        {i < completed ? "✓" : i === activeIdx ? "●" : ""}
-                      </span>
-                      <span>{label}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {stale ? (
-                  <div className="mt-4 pt-4 border-t border-dvivid-warning/30">
-                    <p className="text-sm text-dvivid-warning font-medium mb-3">
-                      Generation connection appears interrupted.
-                    </p>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <SecondaryButton onClick={loadDocument}>Check Again</SecondaryButton>
-                      <button
-                        onClick={handleCancelGeneration}
-                        disabled={cancelling}
-                        className="px-4 py-2 text-sm font-medium text-dvivid-error border border-dvivid-error/30 rounded-button hover:bg-dvivid-error-light transition-colors disabled:opacity-50"
-                      >
-                        {cancelling ? "Cancelling..." : "Cancel / Reset Generation"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-4 pt-4 border-t border-dvivid-primary-border/40">
-                    <button
-                      onClick={handleCancelGeneration}
-                      disabled={cancelRequested}
-                      className="px-4 py-2 text-sm font-medium text-dvivid-error border border-dvivid-error/30 rounded-button hover:bg-dvivid-error-light transition-colors disabled:opacity-50"
-                    >
-                      {cancelRequested ? "Stopping..." : "Cancel Generation"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-        </SectionCard>
+        <GenerationProgressCard
+          documentTitle={document?.documentTitle}
+          status={liveStatus}
+          cancelling={cancelling}
+          onCancel={handleCancelGeneration}
+          onCheckAgain={loadDocument}
+        />
       )}
 
       {/* Cancelled — terminal notice */}
