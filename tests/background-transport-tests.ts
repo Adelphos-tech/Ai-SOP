@@ -16,6 +16,9 @@ import { randomUUID } from "crypto";
 import {
   MockResponsesTransport,
   setStageTransport,
+  buildResponsesCreateParams,
+  JsonInstructionMissingError,
+  ProviderInvalidRequestError,
   StageTimeoutError,
   GenerationTimeLimitError,
   ProviderTerminalError,
@@ -28,7 +31,8 @@ import {
   getStageSlaMs,
 } from "../src/lib/ai/openai-transport";
 import { callOpenAIForStageBackground } from "../src/lib/ai/pipeline/run-application-pipeline";
-import { getModelForStage } from "../src/lib/ai/config";
+import { getModelForStage, getMaxCompletionTokensForStage } from "../src/lib/ai/config";
+import { createSingleFlightSubmitter } from "../src/lib/application/generate-client";
 import {
   createGenerationRun,
   getRun,
@@ -312,6 +316,81 @@ async function main() {
       check(`INC ${c.reason} → reason persisted`, run?.providerIncompleteReason === c.reason, `got ${run?.providerIncompleteReason}`);
       check(`INC ${c.reason} → error code persisted`, run?.providerErrorCode === c.code.replace("PROVIDER_", ""));
     }
+  }
+
+  // ---------- JSON instruction preflight + request builder ----------
+  console.log("Responses request builder — JSON instruction guarantee");
+  {
+    // A: json_object without JSON instruction → auto-injected (never throws,
+    //    never reaches OpenAI as a 400).
+    const params = buildResponsesCreateParams("finalizer", "Fix the draft. No json word here.".replace(" json", " structured"), "Some user content without the word");
+    check("RB1 instructions contain explicit JSON directive", /Return the final result as a valid JSON object only/i.test(params.instructions as string));
+    check("RB2 format is json_object", (params.text as any).format.type === "json_object");
+    check("RB3 finalizer budget 8000", params.max_output_tokens === 8000);
+
+    // B: writer uses the 12k budget.
+    const w = buildResponsesCreateParams("writer", "sys", "user");
+    check("RB4 writer budget 12000 unchanged", w.max_output_tokens === 12000);
+    check("RB5 background+store set", w.background === true && w.store === true);
+
+    // C: instruction injection is skipped when prompt already says json.
+    const p2 = buildResponsesCreateParams("planner", "Output must be JSON.", "content");
+    check("RB6 no duplicate injection", !(p2.instructions as string).includes("Return the final result as a valid JSON object only"));
+
+    // D: all six stages produce valid request params.
+    const stages = ["planner", "writer", "qualityReviewer", "languageCalibrator", "finalizer", "factReviewer"] as const;
+    let allValid = true;
+    for (const s of stages) {
+      try {
+        const p = buildResponsesCreateParams(s as any, "system prompt for " + s, "user content for " + s);
+        if (!/json/i.test(p.instructions as string) || (p.text as any).format.type !== "json_object" || !p.model || !p.max_output_tokens) allValid = false;
+      } catch { allValid = false; }
+    }
+    check("RB7 all six stage params valid", allValid);
+  }
+
+  // Preflight guard exists and produces the required code.
+  {
+    const e = new JsonInstructionMissingError();
+    check("PF1 preflight error code", e.message === "OPENAI_JSON_INSTRUCTION_MISSING" && e.name === "JsonInstructionMissingError");
+  }
+
+  // ---------- PROVIDER_INVALID_REQUEST — zero retry ----------
+  console.log("Invalid request → PROVIDER_INVALID_REQUEST, 0 retries");
+  {
+    const runId = await newRun();
+    const hashes = { ...HASHES, applicationSpecificFactsHash: `asfh-inv-${SUITE}` };
+    const err = new ProviderInvalidRequestError("400 bad request");
+    mock.seedResponse("__next__", { statuses: ["completed"], startError: err });
+    const startsBefore = mock.calls.start;
+    let threw: any = null;
+    try { await callOpenAIForStageBackground("writer", "sys", "user", { ...ctxFor(runId, { cancel: false }), hashes }); }
+    catch (e) { threw = e; }
+    check("INV1 PROVIDER_INVALID_REQUEST", threw instanceof StageExecutionError && threw.code === "PROVIDER_INVALID_REQUEST", `got ${threw?.code}`);
+    check("INV2 zero retry (1 create)", mock.calls.start === startsBefore + 1);
+  }
+
+  // ---------- Single-submit guarantee ----------
+  console.log("Single-submit — one click, one request");
+  {
+    let calls = 0;
+    const submit = createSingleFlightSubmitter(async () => {
+      calls++;
+      await new Promise(r => setTimeout(r, 20));
+      return { ok: true, status: 200, data: { status: "success" } };
+    });
+    // Test I: one click
+    await submit();
+    check("SS1 one click → 1 request", calls === 1);
+    // Test J: rapid double-click shares the in-flight promise
+    const p1 = submit();
+    const p2 = submit();
+    const p3 = submit();
+    await Promise.all([p1, p2, p3]);
+    check("SS2 triple-click → still 1 request", calls === 2, `calls=${calls}`);
+    // Test L: after resolution a new explicit click fires a new request
+    await submit();
+    check("SS3 Try Again fires a NEW request", calls === 3);
   }
 
   // ---------- Circuit breaker ----------

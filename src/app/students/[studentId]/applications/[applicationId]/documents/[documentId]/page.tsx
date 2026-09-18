@@ -11,6 +11,7 @@ import {
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { GenerationProgressCard } from "@/components/generation/GenerationProgressCard";
+import { createSingleFlightSubmitter, requestGenerate } from "@/lib/application/generate-client";
 
 interface Document {
   id: string;
@@ -287,6 +288,13 @@ export default function DocumentWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generationActive, documentId, studentId]);
 
+  // Single-flight submitter — a second click while a request is in
+  // flight returns the same promise; no duplicate POST can fire.
+  const submitGenerate = useMemo(
+    () => createSingleFlightSubmitter(requestGenerate),
+    [],
+  );
+
   async function handleGenerate() {
     setGenerating(true);
     setGenerationError("");
@@ -295,17 +303,20 @@ export default function DocumentWorkspacePage() {
     setLiveStatus(null);
 
     try {
-      const res = await fetch("/api/application/document/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId, applicationId, documentId }),
-      });
-      const data = await res.json();
+      const res = await submitGenerate({ studentId, applicationId, documentId });
+      const data = res.data;
       if (data.status === "cancelled") {
         await loadDocument();
         return;
       }
       if (!res.ok) {
+        // 409 — a real generation is already active. Reconcile with it:
+        // load the run state; the poll resumes live progress. Never
+        // show "Generation failed" when generation is actually running.
+        if (data.error === "GENERATION_ALREADY_IN_PROGRESS") {
+          await loadDocument();
+          return;
+        }
         // Surface structured blocking reasons so the consultant knows
         // exactly what to fix, not just "generation is blocked".
         if (data.error === "GENERATION_BLOCKED" && Array.isArray(data.blockReasons)) {
@@ -313,10 +324,12 @@ export default function DocumentWorkspacePage() {
         } else {
           setGenerationBlockReasons([]);
         }
-        setGenerationError(data.message || data.error || "Generation failed");
+        setGenerationError(data.error === "PROVIDER_INVALID_REQUEST"
+          ? "We couldn't start this generation because of a configuration error."
+          : (data.message || data.error || "Generation failed"));
         return;
       }
-      setGenerationResult(data);
+      setGenerationResult(data as any);
       await loadDocument();
     } catch (err: any) {
       setGenerationError(err?.message || "Generation failed");

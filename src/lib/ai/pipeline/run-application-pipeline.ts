@@ -406,7 +406,15 @@ export async function callOpenAIForStageBackground(
   let lastError: any = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!responseId) {
-      responseId = await transport.startBackgroundStage(stage, systemPrompt, userPrompt);
+      try {
+        responseId = await transport.startBackgroundStage(stage, systemPrompt, userPrompt);
+      } catch (e: any) {
+        // Malformed request / missing JSON instruction — zero retry.
+        if (e?.name === "ProviderInvalidRequestError" || e?.name === "JsonInstructionMissingError") {
+          throw new StageExecutionError("PROVIDER_INVALID_REQUEST", "PROVIDER_INVALID_REQUEST", false);
+        }
+        throw e;
+      }
       await persistResponse(responseId, "queued");
     }
     try {
@@ -476,6 +484,10 @@ export async function callOpenAIForStageBackground(
         // One controlled retry — create a fresh response for identical work.
         responseId = null;
         continue;
+      }
+      if (e?.name === "ProviderInvalidRequestError" || e?.name === "JsonInstructionMissingError") {
+        // Malformed request — zero retry, no circuit, safe code only.
+        throw new StageExecutionError("PROVIDER_INVALID_REQUEST", "PROVIDER_INVALID_REQUEST", false);
       }
       // Unclassified retrieval failure — retryable once via the same response.
       if (attempt === 1) throw new StageExecutionError("PROVIDER_POLL_FAILED", e?.message || "provider poll failed", false);

@@ -174,23 +174,70 @@ export function getFingerprintFailureCount(fp: string): number {
 
 // ---------- real transport ----------
 
+/** Required when using text.format=json_object — OpenAI rejects the
+ * request unless the input/instructions mention "json". Injected
+ * deterministically by the transport; never left to prompt authors. */
+const JSON_OUTPUT_INSTRUCTION =
+  "Return the final result as a valid JSON object only.";
+
+export class JsonInstructionMissingError extends Error {
+  constructor() {
+    super("OPENAI_JSON_INSTRUCTION_MISSING");
+    this.name = "JsonInstructionMissingError";
+  }
+}
+export class ProviderInvalidRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderInvalidRequestError";
+  }
+}
+
+/**
+ * Build the Responses create params for a stage. Deterministic:
+ * json_object gets the canonical JSON instruction appended when the
+ * system prompt lacks it; preflight throws before any provider call
+ * if the effective payload still lacks an explicit JSON instruction.
+ */
+export function buildResponsesCreateParams(
+  stage: StageName, systemPrompt: string, userPrompt: string,
+): Record<string, unknown> {
+  const instructions = /json/i.test(systemPrompt)
+    ? systemPrompt
+    : `${systemPrompt}\n\n${JSON_OUTPUT_INSTRUCTION}`;
+  if (!/json/i.test(instructions + "\n" + userPrompt)) {
+    throw new JsonInstructionMissingError();
+  }
+  return {
+    model: getModelForStage(stage),
+    instructions,
+    input: [{ role: "user", content: [{ type: "input_text", text: userPrompt }] }],
+    background: true,
+    store: true,
+    max_output_tokens: getMaxCompletionTokensForStage(stage),
+    text: { format: { type: "json_object" } },
+  };
+}
+
 export class OpenAIResponsesTransport implements StageTransport {
   async startBackgroundStage(stage: StageName, systemPrompt: string, userPrompt: string): Promise<string> {
+    // Preflight runs BEFORE the client check — a malformed request
+    // must never reach OpenAI as a 400.
+    const params = buildResponsesCreateParams(stage, systemPrompt, userPrompt);
     const client = getOpenAIClient();
     if (!client) throw new Error("OpenAI client not available");
-    const model = getModelForStage(stage);
-    const response = await client.responses.create(
-      {
-        model,
-        instructions: systemPrompt,
-        input: [{ role: "user", content: [{ type: "input_text", text: userPrompt }] }],
-        background: true,
-        store: true,
-        max_output_tokens: getMaxCompletionTokensForStage(stage),
-        text: { format: { type: "json_object" } },
-      } as any,
-      { timeout: PROVIDER_HTTP_TIMEOUT_MS, maxRetries: 1 },
-    );
+    let response: any;
+    try {
+      response = await client.responses.create(params as any, {
+        timeout: PROVIDER_HTTP_TIMEOUT_MS, maxRetries: 0,
+      });
+    } catch (e: any) {
+      // Malformed requests are not transient — zero retry, no circuit.
+      if (e?.status === 400 || /invalid_request/i.test(e?.code || "")) {
+        throw new ProviderInvalidRequestError(e?.message || "Invalid request");
+      }
+      throw e;
+    }
     const id = (response as any)?.id;
     if (!id) throw new Error("Provider did not return a response id");
     return id;
