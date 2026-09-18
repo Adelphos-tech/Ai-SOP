@@ -11,7 +11,7 @@ import {
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { GenerationProgressCard } from "@/components/generation/GenerationProgressCard";
-import { createSingleFlightSubmitter, requestGenerate } from "@/lib/application/generate-client";
+import { createSingleFlightSubmitter, requestGenerate, resolveVersionContent } from "@/lib/application/generate-client";
 
 interface Document {
   id: string;
@@ -166,6 +166,8 @@ export default function DocumentWorkspacePage() {
 
   const [editorContent, setEditorContent] = useState("");
   const [editorBaseVersionId, setEditorBaseVersionId] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<"view" | "edit">("edit");
+  const editorRef = useRef<HTMLTextAreaElement>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -416,11 +418,16 @@ export default function DocumentWorkspacePage() {
         return;
       }
     }
+    const resolved = resolveVersionContent(v);
+    if (!resolved.ok) { setSaveError(resolved.error); return; }
     setSelectedVersion(v);
-    setEditorContent(v.content);
+    setEditorContent(resolved.content);
     setEditorBaseVersionId(v.id);
+    setEditorMode("view");
     setSaveError("");
     setSaveSuccess(false);
+    // Always visible feedback — scroll the editor into view.
+    editorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   function handleEditFromVersion(v: Version) {
@@ -429,11 +436,16 @@ export default function DocumentWorkspacePage() {
         return;
       }
     }
+    const resolved = resolveVersionContent(v);
+    if (!resolved.ok) { setSaveError(resolved.error); return; }
     setSelectedVersion(v);
-    setEditorContent(v.content);
+    setEditorContent(resolved.content);
     setEditorBaseVersionId(v.id);
+    setEditorMode("edit");
     setSaveError("");
     setSaveSuccess(false);
+    editorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    editorRef.current?.focus({ preventScroll: true });
   }
 
   async function handleApprove() {
@@ -760,7 +772,11 @@ export default function DocumentWorkspacePage() {
           {/* Editor */}
           {versions.length > 0 && (
             <SectionCard
-              title={selectedVersion ? `Editor (editing from v${selectedVersion.versionNumber})` : "Editor"}
+              title={selectedVersion
+                ? editorMode === "view"
+                  ? `Viewing v${selectedVersion.versionNumber} (read-only)`
+                  : `Editor (editing from v${selectedVersion.versionNumber})`
+                : "Editor"}
               action={
                 <div className="flex items-center gap-3 text-sm">
                   <span className="text-dvivid-text-muted">
@@ -786,10 +802,27 @@ export default function DocumentWorkspacePage() {
                 </div>
               )}
 
+              {editorMode === "view" && selectedVersion && (
+                <div className="mb-3 p-3 bg-gray-50 border border-dvivid-border-light rounded-input flex items-center justify-between">
+                  <p className="text-sm text-dvivid-text-secondary">
+                    Viewing v{selectedVersion.versionNumber} — read-only.
+                  </p>
+                  <button
+                    onClick={() => { setEditorMode("edit"); editorRef.current?.focus(); }}
+                    className="text-sm text-dvivid-primary font-medium hover:underline"
+                  >
+                    Switch to edit
+                  </button>
+                </div>
+              )}
               <textarea
+                ref={editorRef}
                 value={editorContent}
                 onChange={(e) => setEditorContent(e.target.value)}
-                className="w-full min-h-[400px] px-4 py-3 border border-dvivid-border rounded-input bg-white text-dvivid-text-primary focus:outline-none focus:ring-2 focus:ring-dvivid-primary/12 focus:border-dvivid-primary transition-colors text-sm leading-relaxed resize-y"
+                readOnly={editorMode === "view"}
+                className={`w-full min-h-[400px] px-4 py-3 border border-dvivid-border rounded-input text-dvivid-text-primary focus:outline-none focus:ring-2 focus:ring-dvivid-primary/12 focus:border-dvivid-primary transition-colors text-sm leading-relaxed resize-y ${
+                  editorMode === "view" ? "bg-gray-50" : "bg-white"
+                }`}
                 placeholder="Edit document content..."
               />
 

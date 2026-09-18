@@ -12,6 +12,7 @@ import {
 } from "../src/lib/ai/model-output-types";
 import { planComponentActions } from "../src/lib/ai/component-action-planner";
 import { buildCalibratedClaims } from "../src/lib/ai/pipeline/run-application-pipeline";
+import { resolveVersionContent } from "../src/lib/application/generate-client";
 
 let passed = 0, failed = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -194,6 +195,22 @@ async function main() {
     const full = JSON.stringify(fullQR()).length;
     const comp = JSON.stringify(compactQR(fullQR())).length;
     check("SIZE1 compact QR smaller", comp < full * 0.75, `${full}→${comp}`);
+  }
+
+  // ---------- Version View / Edit-from-here actions ----------
+  console.log("Version actions — always resolve, no status rules");
+  {
+    // A/B: any version with content resolves — regardless of status
+    for (const status of ["APPROVED", "DRAFT", "CURRENT", "HISTORICAL", "FAILED_GEN", "COMPLETED_GEN"]) {
+      const r = resolveVersionContent({ content: `content for ${status}` });
+      check(`VER-${status} resolves`, r.ok && r.content === `content for ${status}`);
+    }
+    // J: missing/empty content → visible error, never silent no-op
+    check("VER-null → visible error", !resolveVersionContent(null).ok);
+    check("VER-no-content → visible error", !resolveVersionContent({}).ok);
+    check("VER-empty → visible error", !resolveVersionContent({ content: "" }).ok);
+    const bad = resolveVersionContent(undefined);
+    check("VER-error message present", !bad.ok && bad.error.includes("Could not load"));
   }
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
