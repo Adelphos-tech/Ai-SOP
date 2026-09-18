@@ -232,7 +232,8 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
   }
   const dependenciesHash = computeHash(hashes);
   if (options.mode === "CONTENT_REGENERATION") {
-    await fs.mkdir(basePath, { mode: 0o700 });
+    // recursive: a restarted/resumed attempt may already have this dir.
+    await fs.mkdir(basePath, { mode: 0o700, recursive: true });
     await syncDirectory(path.dirname(basePath));
   } else {
     const stat = await fs.lstat(basePath);

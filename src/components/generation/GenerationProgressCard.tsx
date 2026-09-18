@@ -171,6 +171,12 @@ export function GenerationProgressCard({ documentTitle, status, cancelling, onCa
               >
                 <p className="text-base font-semibold text-dvivid-text-primary">{active.title}</p>
                 <p className="text-sm text-dvivid-text-secondary mt-0.5">{active.desc}</p>
+                {status?.currentStageStartedAt &&
+                  Date.now() - new Date(status.currentStageStartedAt).getTime() > 90_000 && (
+                  <p className="text-xs text-dvivid-text-secondary mt-1">
+                    This stage is taking a little longer than usual, but generation is still active.
+                  </p>
+                )}
                 <p className="text-xs text-dvivid-text-muted mt-2">
                   {status?.startedAt ? `${fmtElapsed(status.startedAt)} elapsed` : "Starting..."}
                   {reduce ? " · In progress" : ""}

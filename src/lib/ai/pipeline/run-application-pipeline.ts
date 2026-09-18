@@ -107,8 +107,29 @@ import {
   markStageCompleted,
   heartbeatRun,
   isCancelRequested,
+  getRun,
+  setProviderState,
+  updateProviderCheck,
+  setProviderUsage,
+  recordStageResponse,
+  updateStageResponseStatus,
+  setStageResponseUsage,
+  findReusableProviderResponse,
   GenerationCancelledError,
 } from "../../application/generation-lifecycle";
+import {
+  BACKGROUND_RESPONSES_ENABLED,
+  getStageTransport,
+  waitForBackgroundStage,
+  stageUsageFromProvider,
+  computeStageFingerprint,
+  getFingerprintFailureCount,
+  recordFingerprintFailure,
+  recordProviderTerminalFailure,
+  StageTimeoutError,
+  GenerationTimeLimitError,
+  ProviderTerminalError,
+} from "../openai-transport";
 import {
   createStageExecution,
   EXECUTION_STAGES,
@@ -132,6 +153,8 @@ export interface ApplicationPipelineExecution {
    * cancellation boundaries before/after every stage.
    */
   generationRunId?: string;
+  /** Document id — used to record provider stage responses for recovery. */
+  documentId?: string;
 }
 
 export interface ApplicationPipelineInput {
@@ -306,6 +329,148 @@ async function callOpenAIForStage(
 }
 
 /**
+ * Background-Responses stage call. The provider response id is
+ * persisted BEFORE polling so a PM2 restart can resume polling
+ * (or reuse the finished result) instead of double-billing.
+ * Throws StageExecutionError(technical=false) on terminal failures
+ * so the execution manager does not layer a third retry on top of
+ * the transport's own bounded single retry.
+ */
+export async function callOpenAIForStageBackground(
+  stage: StageName,
+  systemPrompt: string,
+  userPrompt: string,
+  ctx: {
+    generationRunId: string | null;
+    documentId: string;
+    hashes: CheckpointHashes;
+    generationStartedAtMs: number;
+    isCancelRequested: () => Promise<boolean>;
+  },
+): Promise<{ content: string; stageUsage: StageUsage }> {
+  const transport = getStageTransport();
+  const model = getModelForStage(stage);
+  const stageStartedAtMs = Date.now();
+  const fingerprint = computeStageFingerprint({
+    generationContractHash: ctx.hashes.generationContractHash,
+    stage,
+    model,
+    evidenceHash: ctx.hashes.applicationSpecificFactsHash,
+    promptHash: ctx.hashes.promptVersionHash,
+  });
+
+  // Repeated identical terminal failures → don't auto-resubmit.
+  if (getFingerprintFailureCount(fingerprint) >= 2) {
+    throw new StageExecutionError("REPEATED_STAGE_FAILURE", `${stage}: identical work failed repeatedly`, false);
+  }
+
+  // Reuse an in-flight/completed provider response for identical work
+  // (restart recovery + double-billing guard), preferring this run's
+  // own persisted state.
+  let responseId: string | null = null;
+  if (ctx.generationRunId) {
+    try {
+      const run = await getRun(ctx.generationRunId);
+      if (
+        run?.providerResponseId && run.providerStage === stage &&
+        run.stageFingerprint === fingerprint &&
+        ["queued", "in_progress", "completed"].includes(run.providerResponseStatus || "")
+      ) {
+        responseId = run.providerResponseId;
+      }
+    } catch { /* resume check is best-effort */ }
+  }
+  if (!responseId) {
+    try {
+      const reusable = await findReusableProviderResponse(stage, fingerprint);
+      if (reusable) {
+        responseId = reusable.responseId;
+        // Reflect the reused response on this run for visibility/recovery.
+        if (ctx.generationRunId) {
+          try {
+            await setProviderState(ctx.generationRunId, { stage, responseId, status: reusable.status, model, fingerprint });
+          } catch { /* best-effort */ }
+        }
+      }
+    } catch { /* dedup is best-effort */ }
+  }
+
+  const persistResponse = async (id: string, status: string) => {
+    if (!ctx.generationRunId) return;
+    try {
+      await setProviderState(ctx.generationRunId, { stage, responseId: id, status, model, fingerprint });
+      await recordStageResponse(ctx.generationRunId, ctx.documentId, { stage, fingerprint, responseId: id, status, model });
+    } catch { /* provider persistence is best-effort */ }
+  };
+
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!responseId) {
+      responseId = await transport.startBackgroundStage(stage, systemPrompt, userPrompt);
+      await persistResponse(responseId, "queued");
+    }
+    try {
+      const result = await waitForBackgroundStage({
+        transport,
+        responseId,
+        stage,
+        stageStartedAtMs,
+        generationStartedAtMs: ctx.generationStartedAtMs,
+        hooks: {
+          onTick: async () => {
+            if (await ctx.isCancelRequested()) {
+              await transport.cancelBackgroundStage(responseId!);
+              throw new GenerationCancelledError(stage);
+            }
+          },
+          onStatus: async (status) => {
+            if (!ctx.generationRunId) return;
+            try {
+              await updateProviderCheck(ctx.generationRunId, status);
+              await updateStageResponseStatus(responseId!, status);
+            } catch { /* best-effort */ }
+          },
+        },
+      });
+      const durationMs = Date.now() - stageStartedAtMs;
+      if (ctx.generationRunId) {
+        try {
+          await setProviderUsage(ctx.generationRunId, result.usage || null);
+          await setStageResponseUsage(responseId, result.usage || null);
+        } catch { /* best-effort */ }
+      }
+      const stageUsage = await stageUsageFromProvider({ stage, responseId, usage: result.usage, durationMs });
+      return { content: result.outputText!, stageUsage };
+    } catch (e: any) {
+      lastError = e;
+      // Cancellation must propagate as GenerationCancelledError so the
+      // outer pipeline catch produces a "cancelled" result.
+      if (e instanceof GenerationCancelledError) throw e;
+      if (e instanceof StageTimeoutError || e instanceof GenerationTimeLimitError) {
+        throw new StageExecutionError(e instanceof StageTimeoutError ? "STAGE_TIMEOUT" : "GENERATION_TIME_LIMIT", e.message, false);
+      }
+      if (e instanceof ProviderTerminalError) {
+        recordFingerprintFailure(fingerprint);
+        if (ctx.generationRunId) recordProviderTerminalFailure(ctx.generationRunId, e.retryable);
+        if (e.code === "PROVIDER_CANCELLED") {
+          throw new GenerationCancelledError(stage);
+        }
+        if (!e.retryable || attempt === 1) {
+          throw new StageExecutionError(`PROVIDER_${e.code}`, e.message, false);
+        }
+        // One controlled retry — create a fresh response for identical work.
+        responseId = null;
+        continue;
+      }
+      // Unclassified retrieval failure — retryable once via the same response.
+      if (attempt === 1) throw new StageExecutionError("PROVIDER_POLL_FAILED", e?.message || "provider poll failed", false);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  throw new StageExecutionError("PROVIDER_FAILED", lastError?.message || "provider failed", false);
+}
+
+/**
  * Map the legacy StageName to the ExecutionStage used by the checkpoint manager.
  * The execution manager enforces a single canonical stage order:
  *   planner, writer, qualityReviewer, languageCalibrator, finalizer, factReviewer
@@ -377,11 +542,21 @@ export async function runApplicationPipeline(
       maxTechnicalRetries: 2,
       call: async (stage, system, user, onUsage) => {
         try {
-          const result = await callOpenAIForStage(stage as StageName, system, user, abortController.signal);
+          const result = BACKGROUND_RESPONSES_ENABLED
+            ? await callOpenAIForStageBackground(stage as StageName, system, user, {
+                generationRunId,
+                documentId: input.execution?.documentId || "",
+                hashes,
+                generationStartedAtMs: pipelineStart,
+                isCancelRequested: async () =>
+                  abortController.signal.aborted ||
+                  (generationRunId ? await isCancelRequested(generationRunId) : false),
+              })
+            : await callOpenAIForStage(stage as StageName, system, user, abortController.signal);
           await onUsage(result.stageUsage);
           return result;
         } catch (e: any) {
-          if (abortController.signal.aborted || e?.name === "AbortError") {
+          if (abortController.signal.aborted || e?.name === "AbortError" || e instanceof GenerationCancelledError) {
             throw new GenerationCancelledError(stage);
           }
           throw e;

@@ -86,6 +86,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "CANCELLED" });
     }
 
+    // Cancel the in-flight provider response if one exists — applies
+    // to background responses (queued/in_progress are cancellable).
+    // Best-effort: the pipeline's poll loop also observes
+    // CANCEL_REQUESTED and cancels/finalizes from its side.
+    if (cancel.run?.providerResponseId) {
+      try {
+        const { getStageTransport } = await import("@/lib/ai/openai-transport");
+        await getStageTransport().cancelBackgroundStage(cancel.run.providerResponseId);
+      } catch { /* provider cancel is best-effort */ }
+    }
+
     // Heartbeat already stale → the process is gone; finalize now.
     if (cancel.run && isHeartbeatStale(cancel.run)) {
       await cancelRun(cancel.run.id);

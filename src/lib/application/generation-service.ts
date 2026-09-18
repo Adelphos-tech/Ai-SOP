@@ -30,6 +30,8 @@ import { updateDocumentStatus, createDocumentVersion, acquireGenerationLock } fr
 import { createGenerationRun, cancelRun, completeRun, failRun } from "@/lib/application/generation-lifecycle";
 import { runApplicationPipeline, ApplicationPipelineInput } from "@/lib/ai/pipeline/run-application-pipeline";
 import { isApiKeyConfigured } from "@/lib/ai/openai-client";
+import { isProviderCircuitOpen } from "@/lib/ai/openai-transport";
+import { markGenerationLive, unmarkGenerationLive } from "@/lib/application/generation-registry";
 import {
   ResponseComponent,
   PageLimitConstraint,
@@ -48,6 +50,9 @@ export interface GenerateDocumentInput {
   applicationId: string;
   documentId: string;
   requestId?: string; // optional trace ID from the transport layer
+  /** Restart-recovery: resume an existing active run instead of
+   * creating a new one (skips lock acquisition + run creation). */
+  resumeRunId?: string;
 }
 
 export interface GenerateDocumentResult {
@@ -71,13 +76,33 @@ export async function generateApplicationDocument(
   const { studentId, applicationId, documentId } = input;
   const requestId = input.requestId || randomUUID();
   const startTime = Date.now();
+  const resumeRunId = input.resumeRunId || null;
+
+  // In-process live marker — lets restart recovery distinguish a live
+  // execution from an orphaned run left by a dead process.
+  markGenerationLive(documentId);
+  try {
+    return await generateApplicationDocumentInner(input, requestId, startTime, resumeRunId);
+  } finally {
+    unmarkGenerationLive(documentId);
+  }
+}
+
+async function generateApplicationDocumentInner(
+  input: GenerateDocumentInput,
+  requestId: string,
+  startTime: number,
+  resumeRunId: string | null,
+): Promise<GenerateDocumentResult> {
+  const { studentId, applicationId, documentId } = input;
 
   console.log(JSON.stringify({
-    event: "generation_service_start",
+    event: resumeRunId ? "generation_service_resume" : "generation_service_start",
     requestId,
     studentId,
     applicationId,
     documentId,
+    resumeRunId,
     buildId: BUILD_ID,
   }));
 
@@ -138,8 +163,27 @@ export async function generateApplicationDocument(
     };
   }
 
+  // ===== PROVIDER CIRCUIT BREAKER =====
+  // Multiple independent generations hitting genuine provider
+  // failures → temporarily reject new generations. A slow document
+  // never opens the circuit — only terminal provider errors do.
+  if (!resumeRunId && isProviderCircuitOpen()) {
+    console.log(JSON.stringify({
+      event: "generation_circuit_open",
+      requestId,
+      documentId,
+      durationMs: Date.now() - startTime,
+    }));
+    return {
+      ok: false,
+      status: 503,
+      body: { error: "AI_SERVICE_TEMPORARILY_UNAVAILABLE", message: "The AI service is temporarily unavailable. Please try again shortly." },
+    };
+  }
+
   // ===== ACQUIRE GENERATION LOCK (atomic) =====
-  const acquired = await acquireGenerationLock(documentId);
+  // Resume path: the run already holds the lock — skip re-acquiring.
+  const acquired = resumeRunId ? true : await acquireGenerationLock(documentId);
   if (!acquired) {
     console.log(JSON.stringify({
       event: "generation_lock_conflict",
@@ -197,7 +241,7 @@ export async function generateApplicationDocument(
     ? `University: ${ctx.application.universityName}\nProgram: ${ctx.application.programName}\nDegree: ${ctx.application.degree}\nIntake: ${ctx.application.intake} ${ctx.application.intakeYear}\nCountry: ${ctx.application.country}`
     : "";
 
-  const generationId = randomUUID();
+  const generationId = resumeRunId || randomUUID();
 
   // ===== BUILD GENERATION CONTRACT =====
   const writingRequirement: ContractWritingRequirement = {
@@ -278,18 +322,22 @@ export async function generateApplicationDocument(
     execution: {
       generationId,
       generationRunId: generationId,
+      documentId,
       mode: "CONTENT_REGENERATION" as const,
     },
   };
 
   // ===== PERSIST GENERATION RUN (stage progress + cancellation) =====
+  // Resume path reuses the existing run row — no new attempt record.
   try {
-    await createGenerationRun({
-      id: generationId,
-      documentId,
-      applicationId,
-      studentId,
-    });
+    if (!resumeRunId) {
+      await createGenerationRun({
+        id: generationId,
+        documentId,
+        applicationId,
+        studentId,
+      });
+    }
   } catch (e) {
     // Lifecycle persistence must not block generation — the pipeline
     // still enforces boundaries only when the row exists.

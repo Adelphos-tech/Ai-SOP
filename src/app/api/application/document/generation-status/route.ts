@@ -23,6 +23,7 @@ import {
   isHeartbeatStale,
   ACTIVE_RUN_STATUSES,
 } from "@/lib/application/generation-lifecycle";
+import { maybeRecoverRun } from "@/lib/application/generation-recovery";
 
 export async function GET(req: NextRequest) {
   try {
@@ -79,6 +80,13 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Restart recovery: an active run whose heartbeat is old and has no
+    // live in-process execution is orphaned — resume its pipeline
+    // (fire-and-forget; the response still reflects current DB state).
+    if (ACTIVE_RUN_STATUSES.includes(run.status)) {
+      maybeRecoverRun(run);
+    }
+
     return NextResponse.json({
       generationId: run.id,
       status: run.status,
@@ -93,7 +101,7 @@ export async function GET(req: NextRequest) {
       completedAt: run.completedAt,
       failedAt: run.failedAt,
       cancelledAt: run.cancelledAt,
-      failureMessage: run.status === "FAILED" ? "Generation stopped because of an error." : null,
+      failureMessage: run.status === "FAILED" ? run.failureMessage : null,
       documentGenerationStatus: doc.generation_status,
       reviewStatus: doc.review_status,
       active: ACTIVE_RUN_STATUSES.includes(run.status),

@@ -16,6 +16,7 @@
 // ============================================================
 
 import { getDbPool } from "./db";
+import { randomUUID } from "crypto";
 
 export type GenerationRunStatus =
   | "QUEUED"
@@ -62,6 +63,20 @@ export interface GenerationRun {
   failedAt: string | null;
   failureMessage: string | null;
   createdAt: string;
+  // Provider (OpenAI background response) state — persisted so a
+  // PM2 restart can resume polling instead of double-billing.
+  providerResponseId: string | null;
+  providerResponseStatus: string | null;
+  providerStage: string | null;
+  providerStartedAt: string | null;
+  providerLastCheckedAt: string | null;
+  providerModel: string | null;
+  providerInputTokens: number | null;
+  providerOutputTokens: number | null;
+  providerReasoningTokens: number | null;
+  providerCachedInputTokens: number | null;
+  providerUsageStatus: string | null;
+  stageFingerprint: string | null;
 }
 
 // ---------- lazy table ensure (idempotent, once per process) ----------
@@ -87,9 +102,41 @@ async function ensureGenerationRunsTable(): Promise<void> {
         completed_at DATETIME(3) DEFAULT NULL,
         failed_at DATETIME(3) DEFAULT NULL,
         failure_message TEXT DEFAULT NULL,
+        provider_response_id VARCHAR(128) DEFAULT NULL,
+        provider_response_status VARCHAR(32) DEFAULT NULL,
+        provider_stage VARCHAR(40) DEFAULT NULL,
+        provider_started_at DATETIME(3) DEFAULT NULL,
+        provider_last_checked_at DATETIME(3) DEFAULT NULL,
+        provider_model VARCHAR(64) DEFAULT NULL,
+        provider_input_tokens INT DEFAULT NULL,
+        provider_output_tokens INT DEFAULT NULL,
+        provider_reasoning_tokens INT DEFAULT NULL,
+        provider_cached_input_tokens INT DEFAULT NULL,
+        provider_usage_status VARCHAR(24) DEFAULT NULL,
+        stage_fingerprint VARCHAR(64) DEFAULT NULL,
         created_at DATETIME(3) NOT NULL DEFAULT NOW(3),
         INDEX idx_runs_document (document_id, created_at),
         INDEX idx_runs_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+      await pool.execute(`CREATE TABLE IF NOT EXISTS generation_stage_responses (
+        id VARCHAR(36) PRIMARY KEY,
+        run_id VARCHAR(36) NOT NULL,
+        document_id VARCHAR(36) NOT NULL,
+        stage VARCHAR(40) NOT NULL,
+        stage_fingerprint VARCHAR(64) NOT NULL,
+        provider_response_id VARCHAR(128) NOT NULL,
+        provider_response_status VARCHAR(32) NOT NULL,
+        provider_model VARCHAR(64) DEFAULT NULL,
+        input_tokens INT DEFAULT NULL,
+        cached_input_tokens INT DEFAULT NULL,
+        output_tokens INT DEFAULT NULL,
+        reasoning_tokens INT DEFAULT NULL,
+        usage_status VARCHAR(24) DEFAULT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT NOW(3),
+        completed_at DATETIME(3) DEFAULT NULL,
+        INDEX idx_gsr_fingerprint (stage, stage_fingerprint, provider_response_status),
+        INDEX idx_gsr_run (run_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
     })();
   }
@@ -115,6 +162,18 @@ function rowToRun(row: any): GenerationRun {
     failedAt: row.failed_at ? new Date(row.failed_at).toISOString() : null,
     failureMessage: row.failure_message,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : "",
+    providerResponseId: row.provider_response_id ?? null,
+    providerResponseStatus: row.provider_response_status ?? null,
+    providerStage: row.provider_stage ?? null,
+    providerStartedAt: row.provider_started_at ? new Date(row.provider_started_at).toISOString() : null,
+    providerLastCheckedAt: row.provider_last_checked_at ? new Date(row.provider_last_checked_at).toISOString() : null,
+    providerModel: row.provider_model ?? null,
+    providerInputTokens: row.provider_input_tokens ?? null,
+    providerOutputTokens: row.provider_output_tokens ?? null,
+    providerReasoningTokens: row.provider_reasoning_tokens ?? null,
+    providerCachedInputTokens: row.provider_cached_input_tokens ?? null,
+    providerUsageStatus: row.provider_usage_status ?? null,
+    stageFingerprint: row.stage_fingerprint ?? null,
   };
 }
 
@@ -259,4 +318,123 @@ export class GenerationCancelledError extends Error {
     super(`Generation cancelled${stage ? ` before ${stage}` : ""}`);
     this.name = "GenerationCancelledError";
   }
+}
+
+// ---------- provider (background response) state ----------
+
+/** Persist provider response identity BEFORE polling starts — restart safety. */
+export async function setProviderState(runId: string, state: {
+  stage: string; responseId: string; status: string; model: string; fingerprint: string;
+}): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE generation_runs
+       SET provider_stage = ?, provider_response_id = ?, provider_response_status = ?,
+           provider_model = ?, stage_fingerprint = ?, provider_started_at = NOW(3),
+           provider_last_checked_at = NOW(3), provider_usage_status = NULL,
+           provider_input_tokens = NULL, provider_output_tokens = NULL,
+           provider_reasoning_tokens = NULL, provider_cached_input_tokens = NULL
+     WHERE id = ?`,
+    [state.stage, state.responseId, state.status, state.model, state.fingerprint, runId],
+  );
+}
+
+export async function updateProviderCheck(runId: string, status: string): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE generation_runs SET provider_response_status = ?, provider_last_checked_at = NOW(3) WHERE id = ?`,
+    [status, runId],
+  );
+}
+
+export async function setProviderUsage(runId: string, usage: {
+  inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningTokens: number;
+} | null): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE generation_runs
+       SET provider_input_tokens = ?, provider_output_tokens = ?, provider_reasoning_tokens = ?,
+           provider_cached_input_tokens = ?, provider_usage_status = ?
+     WHERE id = ?`,
+    usage
+      ? [usage.inputTokens, usage.outputTokens, usage.reasoningTokens, usage.cachedInputTokens, "OK", runId]
+      : [null, null, null, null, "USAGE_UNKNOWN", runId],
+  );
+}
+
+/** All runs in non-terminal states — used by restart recovery. */
+export async function getActiveRuns(): Promise<GenerationRun[]> {
+  await ensureGenerationRunsTable();
+  const pool = getDbPool();
+  const [rows] = await pool.execute(
+    `SELECT * FROM generation_runs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED') ORDER BY created_at`,
+  );
+  return (rows as any[]).map(rowToRun);
+}
+
+/**
+ * Find a provider response created for the same logical stage work
+ * (stage + fingerprint). Used for restart recovery AND to prevent
+ * double-billing: an existing queued/in_progress/completed response
+ * for identical work is reused instead of creating a new one.
+ */
+export async function findReusableProviderResponse(stage: string, fingerprint: string): Promise<{
+  runId: string; responseId: string; status: string;
+} | null> {
+  await ensureGenerationRunsTable();
+  const pool = getDbPool();
+  const [rows] = await pool.execute(
+    `SELECT run_id, provider_response_id, provider_response_status
+       FROM generation_stage_responses
+      WHERE stage = ? AND stage_fingerprint = ?
+        AND provider_response_status IN ('queued','in_progress','completed')
+      ORDER BY created_at DESC LIMIT 1`,
+    [stage, fingerprint],
+  );
+  const list = rows as any[];
+  if (!list.length) return null;
+  return {
+    runId: list[0].run_id,
+    responseId: list[0].provider_response_id,
+    status: list[0].provider_response_status,
+  };
+}
+
+/** Record a new provider response for a stage (one row per attempt). */
+export async function recordStageResponse(runId: string, documentId: string, state: {
+  stage: string; fingerprint: string; responseId: string; status: string; model: string;
+}): Promise<void> {
+  await ensureGenerationRunsTable();
+  const pool = getDbPool();
+  await pool.execute(
+    `INSERT INTO generation_stage_responses
+       (id, run_id, document_id, stage, stage_fingerprint, provider_response_id,
+        provider_response_status, provider_model)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [randomUUID(), runId, documentId, state.stage, state.fingerprint, state.responseId, state.status, state.model],
+  );
+}
+
+export async function updateStageResponseStatus(responseId: string, status: string): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE generation_stage_responses SET provider_response_status = ?,
+       completed_at = IF(? IN ('completed','failed','incomplete','cancelled'), NOW(3), completed_at)
+     WHERE provider_response_id = ?`,
+    [status, status, responseId],
+  );
+}
+
+export async function setStageResponseUsage(responseId: string, usage: {
+  inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningTokens: number;
+} | null): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE generation_stage_responses
+       SET input_tokens = ?, cached_input_tokens = ?, output_tokens = ?, reasoning_tokens = ?, usage_status = ?
+     WHERE provider_response_id = ?`,
+    usage
+      ? [usage.inputTokens, usage.cachedInputTokens, usage.outputTokens, usage.reasoningTokens, "OK", responseId]
+      : [null, null, null, null, "USAGE_UNKNOWN", responseId],
+  );
 }

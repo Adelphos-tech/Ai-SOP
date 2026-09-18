@@ -117,6 +117,21 @@ function humanizeBlockReason(reason: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** Map internal generation failure codes to consultant-facing copy. */
+function humanizeGenerationFailure(message?: string | null): string {
+  const m = message || "";
+  if (/STAGE_TIMEOUT|GENERATION_TIME_LIMIT/.test(m)) {
+    return "Generation stopped — a stage took longer than the allowed generation window.";
+  }
+  if (/AI_SERVICE_TEMPORARILY_UNAVAILABLE|PROVIDER_(FAILED|429|502|503|RATE)/i.test(m)) {
+    return "Generation stopped — the AI service is temporarily unavailable.";
+  }
+  if (/REPEATED_STAGE_FAILURE/.test(m)) {
+    return "Generation stopped — the same step failed repeatedly. Review the applicant information and try again.";
+  }
+  return "Generation stopped because of an error.";
+}
+
 export default function DocumentWorkspacePage() {
   const params = useParams();
   const studentId = params.studentId as string;
@@ -548,8 +563,16 @@ export default function DocumentWorkspacePage() {
       {/* Failed — terminal notice */}
       {!generationActive && liveStatus?.status === "FAILED" && document?.generationStatus !== "GENERATED" && versions.length === 0 && (
         <div className="mb-8 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
-          <p className="text-sm font-medium text-dvivid-error mb-1">Generation stopped because of an error.</p>
+          <p className="text-sm font-medium text-dvivid-error mb-1">
+            {humanizeGenerationFailure(liveStatus.failureMessage)}
+          </p>
           <p className="text-sm text-dvivid-text-secondary">You can try again — if it keeps failing, check that the applicant information is complete.</p>
+          {liveStatus.failureMessage && (
+            <details className="mt-2 text-xs text-dvivid-text-muted">
+              <summary className="cursor-pointer">View details</summary>
+              <p className="mt-1 font-mono break-all">{liveStatus.failureMessage}</p>
+            </details>
+          )}
         </div>
       )}
 
