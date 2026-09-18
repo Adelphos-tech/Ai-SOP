@@ -290,6 +290,30 @@ async function main() {
   console.log("M. structured-output validation preserved");
   check("M1 parseStage untouched (legacy path intact)", true);
 
+  // ---------- INCOMPLETE classification (production failure mode) ----------
+  console.log("Incomplete reasons — classified, never retried, never parsed as complete");
+  {
+    const cases: Array<{ reason: string; code: string }> = [
+      { reason: "max_output_tokens", code: "PROVIDER_MAX_OUTPUT_TOKENS" },
+      { reason: "content_filter", code: "PROVIDER_CONTENT_FILTER" },
+      { reason: "weird_new_reason", code: "PROVIDER_INCOMPLETE_UNKNOWN" },
+    ];
+    for (const c of cases) {
+      const runId = await newRun();
+      const hashes = { ...HASHES, applicationSpecificFactsHash: `asfh-inc-${c.reason}-${SUITE}` };
+      mock.seedResponse("__next__", { statuses: ["incomplete"], errorCode: c.reason });
+      const startsBefore = mock.calls.start;
+      let threw: any = null;
+      try { await callOpenAIForStageBackground("writer", "sys", "user", { ...ctxFor(runId, { cancel: false }), hashes }); }
+      catch (e) { threw = e; }
+      check(`INC ${c.reason} → ${c.code}`, threw instanceof StageExecutionError && threw.code === c.code, `got ${threw?.code}`);
+      check(`INC ${c.reason} → zero retry`, mock.calls.start === startsBefore + 1);
+      const run = await getRun(runId);
+      check(`INC ${c.reason} → reason persisted`, run?.providerIncompleteReason === c.reason, `got ${run?.providerIncompleteReason}`);
+      check(`INC ${c.reason} → error code persisted`, run?.providerErrorCode === c.code.replace("PROVIDER_", ""));
+    }
+  }
+
   // ---------- Circuit breaker ----------
   console.log("Circuit breaker — 3 distinct runs → open");
   {

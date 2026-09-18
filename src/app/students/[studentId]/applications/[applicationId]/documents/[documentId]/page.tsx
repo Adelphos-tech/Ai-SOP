@@ -129,6 +129,18 @@ function humanizeGenerationFailure(message?: string | null): string {
   if (/REPEATED_STAGE_FAILURE/.test(m)) {
     return "Generation stopped — the same step failed repeatedly. Review the applicant information and try again.";
   }
+  if (/PROVIDER_MAX_OUTPUT_TOKENS|MAX_OUTPUT_TOKENS/.test(m)) {
+    return "Generation stopped — the AI response exceeded its size limit. Try again; if it repeats, contact support.";
+  }
+  if (/PROVIDER_CONTENT_FILTER|CONTENT_FILTER/.test(m)) {
+    return "Generation stopped — the content was blocked by the AI provider's safety filter. Review the applicant information.";
+  }
+  if (/PROVIDER_MAX_MESSAGES|MAX_MESSAGES/.test(m)) {
+    return "Generation stopped — the AI conversation exceeded its length limit. Try again.";
+  }
+  if (/PROVIDER_INCOMPLETE|incomplete/i.test(m)) {
+    return "Generation stopped — the AI response ended early. Try again.";
+  }
   return "Generation stopped because of an error.";
 }
 
@@ -527,7 +539,11 @@ export default function DocumentWorkspacePage() {
             ) : (
               <>
                 <StatusBadge status={document?.generationStatus || "NOT_GENERATED"} />
-                <StatusBadge status={document?.reviewStatus || "DRAFT"} />
+                {/* Draft badge only when a draft actually exists — never
+                    unexplained "Failed + Draft" peer statuses. */}
+                {(versions.length > 0 || document?.generationStatus === "GENERATED") && (
+                  <StatusBadge status={document?.reviewStatus || "DRAFT"} />
+                )}
               </>
             )}
           </div>
@@ -560,26 +576,42 @@ export default function DocumentWorkspacePage() {
         </div>
       )}
 
-      {/* Failed — terminal notice */}
-      {!generationActive && liveStatus?.status === "FAILED" && document?.generationStatus !== "GENERATED" && versions.length === 0 && (
+      {/* Failed — single terminal card with clear reason + Try Again */}
+      {!generationActive && liveStatus?.status === "FAILED" && document?.generationStatus !== "GENERATED" && (
         <div className="mb-8 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
           <p className="text-sm font-medium text-dvivid-error mb-1">
             {humanizeGenerationFailure(liveStatus.failureMessage)}
           </p>
-          <p className="text-sm text-dvivid-text-secondary">You can try again — if it keeps failing, check that the applicant information is complete.</p>
-          {liveStatus.failureMessage && (
-            <details className="mt-2 text-xs text-dvivid-text-muted">
-              <summary className="cursor-pointer">View details</summary>
-              <p className="mt-1 font-mono break-all">{liveStatus.failureMessage}</p>
-            </details>
+          {versions.length > 0 && (
+            <p className="text-sm text-dvivid-text-secondary mb-1">An existing draft is available below.</p>
           )}
+          <div className="flex items-center gap-3 mt-2">
+            {versions.length === 0 && (
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                className="px-4 py-1.5 text-sm font-medium text-white bg-dvivid-error rounded-input hover:opacity-90 disabled:opacity-50"
+              >
+                Try Again
+              </button>
+            )}
+            {liveStatus.failureMessage && (
+              <details className="text-xs text-dvivid-text-muted">
+                <summary className="cursor-pointer">View details</summary>
+                <p className="mt-1 font-mono break-all">{liveStatus.failureMessage}</p>
+              </details>
+            )}
+          </div>
         </div>
       )}
 
       {/* Generation Section (only if no versions yet) */}
       {versions.length === 0 && !generating && document?.generationStatus !== "GENERATING" && (
         <SectionCard title="Generate Document" description="Generate a first draft using the AI pipeline." className="mb-8">
-          {document?.generationStatus === "FAILED" && (
+          {/* Failure messaging lives in the single FAILED card above —
+              don't duplicate it here. Show the banner only when the
+              terminal card isn't visible (e.g. no live status loaded). */}
+          {document?.generationStatus === "FAILED" && liveStatus?.status !== "FAILED" && (
             <div className="mb-4 p-4 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input">
               <p className="text-sm text-dvivid-warning">
                 A previous generation attempt failed. You can try again — if it fails repeatedly,

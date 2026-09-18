@@ -76,6 +76,8 @@ export interface GenerationRun {
   providerReasoningTokens: number | null;
   providerCachedInputTokens: number | null;
   providerUsageStatus: string | null;
+  providerErrorCode: string | null;
+  providerIncompleteReason: string | null;
   stageFingerprint: string | null;
 }
 
@@ -113,6 +115,8 @@ async function ensureGenerationRunsTable(): Promise<void> {
         provider_reasoning_tokens INT DEFAULT NULL,
         provider_cached_input_tokens INT DEFAULT NULL,
         provider_usage_status VARCHAR(24) DEFAULT NULL,
+        provider_error_code VARCHAR(64) DEFAULT NULL,
+        provider_incomplete_reason VARCHAR(64) DEFAULT NULL,
         stage_fingerprint VARCHAR(64) DEFAULT NULL,
         created_at DATETIME(3) NOT NULL DEFAULT NOW(3),
         INDEX idx_runs_document (document_id, created_at),
@@ -133,6 +137,8 @@ async function ensureGenerationRunsTable(): Promise<void> {
         output_tokens INT DEFAULT NULL,
         reasoning_tokens INT DEFAULT NULL,
         usage_status VARCHAR(24) DEFAULT NULL,
+        provider_error_code VARCHAR(64) DEFAULT NULL,
+        provider_incomplete_reason VARCHAR(64) DEFAULT NULL,
         created_at DATETIME(3) NOT NULL DEFAULT NOW(3),
         completed_at DATETIME(3) DEFAULT NULL,
         INDEX idx_gsr_fingerprint (stage, stage_fingerprint, provider_response_status),
@@ -173,6 +179,8 @@ function rowToRun(row: any): GenerationRun {
     providerReasoningTokens: row.provider_reasoning_tokens ?? null,
     providerCachedInputTokens: row.provider_cached_input_tokens ?? null,
     providerUsageStatus: row.provider_usage_status ?? null,
+    providerErrorCode: row.provider_error_code ?? null,
+    providerIncompleteReason: row.provider_incomplete_reason ?? null,
     stageFingerprint: row.stage_fingerprint ?? null,
   };
 }
@@ -339,11 +347,16 @@ export async function setProviderState(runId: string, state: {
   );
 }
 
-export async function updateProviderCheck(runId: string, status: string): Promise<void> {
+export async function updateProviderCheck(runId: string, status: string, terminal?: {
+  errorCode?: string; incompleteReason?: string;
+}): Promise<void> {
   const pool = getDbPool();
   await pool.execute(
-    `UPDATE generation_runs SET provider_response_status = ?, provider_last_checked_at = NOW(3) WHERE id = ?`,
-    [status, runId],
+    `UPDATE generation_runs SET provider_response_status = ?, provider_last_checked_at = NOW(3),
+       provider_error_code = COALESCE(?, provider_error_code),
+       provider_incomplete_reason = COALESCE(?, provider_incomplete_reason)
+     WHERE id = ?`,
+    [status, terminal?.errorCode || null, terminal?.incompleteReason || null, runId],
   );
 }
 
@@ -415,13 +428,17 @@ export async function recordStageResponse(runId: string, documentId: string, sta
   );
 }
 
-export async function updateStageResponseStatus(responseId: string, status: string): Promise<void> {
+export async function updateStageResponseStatus(responseId: string, status: string, terminal?: {
+  errorCode?: string; incompleteReason?: string;
+}): Promise<void> {
   const pool = getDbPool();
   await pool.execute(
     `UPDATE generation_stage_responses SET provider_response_status = ?,
-       completed_at = IF(? IN ('completed','failed','incomplete','cancelled'), NOW(3), completed_at)
+       completed_at = IF(? IN ('completed','failed','incomplete','cancelled'), NOW(3), completed_at),
+       provider_error_code = COALESCE(?, provider_error_code),
+       provider_incomplete_reason = COALESCE(?, provider_incomplete_reason)
      WHERE provider_response_id = ?`,
-    [status, status, responseId],
+    [status, status, terminal?.errorCode || null, terminal?.incompleteReason || null, responseId],
   );
 }
 

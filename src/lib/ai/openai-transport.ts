@@ -382,11 +382,28 @@ export async function waitForBackgroundStage(opts: {
     if (result.status === "cancelled") {
       throw new ProviderTerminalError("PROVIDER_CANCELLED", "Provider response cancelled", false);
     }
-    if (result.status === "failed" || result.status === "incomplete") {
+    if (result.status === "incomplete") {
+      // Classify the provider's incomplete_details.reason into stable
+      // internal codes — never collapse to generic PROVIDER_INCOMPLETE
+      // and never retry (budget/content issues aren't transient).
+      const reason = (result.errorCode || "").toLowerCase();
+      const code =
+        reason === "max_output_tokens" ? "MAX_OUTPUT_TOKENS" :
+        reason === "content_filter" ? "CONTENT_FILTER" :
+        reason === "max_messages" ? "MAX_MESSAGES" :
+        reason === "steered" ? "STEERED" :
+        "INCOMPLETE_UNKNOWN";
+      throw new ProviderTerminalError(
+        code,
+        `Provider incomplete: ${reason || "unknown"}`,
+        false,
+      );
+    }
+    if (result.status === "failed") {
       const retryable = isTransientProviderError(result);
       throw new ProviderTerminalError(
-        result.errorCode || result.status.toUpperCase(),
-        result.errorMessage || `Provider ${result.status}`,
+        result.errorCode || "FAILED",
+        result.errorMessage || "Provider failed",
         retryable,
       );
     }

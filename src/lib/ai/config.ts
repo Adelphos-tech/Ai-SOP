@@ -29,7 +29,13 @@ export const AI_MODELS: Record<StageName, string> = {
  */
 export const STAGE_MAX_COMPLETION_TOKENS: Record<StageName, number> = {
   planner: 8000,
-  writer: 8000,
+  // Writer: Responses API counts reasoning + visible output against
+  // max_output_tokens. Historical: reasoning p95=2440/max=3060,
+  // visible p95=3658/max=4501 — but the failing doc used 4549
+  // reasoning, leaving ~3.4k visible under an 8000 cap → truncated
+  // JSON → provider "incomplete". 12000 covers reasoning ~4.5k +
+  // visible ~4.5k with headroom. Stage-specific — other stages keep 8000.
+  writer: 12000,
   factReviewer: 8000,
   qualityReviewer: 8000,
   languageCalibrator: 8000,

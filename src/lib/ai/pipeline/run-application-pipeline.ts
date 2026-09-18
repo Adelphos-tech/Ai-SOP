@@ -451,7 +451,22 @@ export async function callOpenAIForStageBackground(
       }
       if (e instanceof ProviderTerminalError) {
         recordFingerprintFailure(fingerprint);
-        if (ctx.generationRunId) recordProviderTerminalFailure(ctx.generationRunId, e.retryable);
+        if (ctx.generationRunId) {
+          recordProviderTerminalFailure(ctx.generationRunId, e.retryable);
+          // Persist terminal classification (no applicant content).
+          try {
+            const incompleteMatch = e.message.match(/^Provider incomplete: (.+)$/);
+            const terminalStatus = incompleteMatch ? "incomplete" : "failed";
+            await updateProviderCheck(ctx.generationRunId, terminalStatus, {
+              errorCode: e.code,
+              incompleteReason: incompleteMatch?.[1],
+            });
+            await updateStageResponseStatus(responseId!, terminalStatus, {
+              errorCode: e.code,
+              incompleteReason: incompleteMatch?.[1],
+            });
+          } catch { /* best-effort */ }
+        }
         if (e.code === "PROVIDER_CANCELLED") {
           throw new GenerationCancelledError(stage);
         }
