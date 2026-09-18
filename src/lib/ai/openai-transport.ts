@@ -205,13 +205,18 @@ export function buildResponsesCreateParams(
   const instructions = /json/i.test(systemPrompt)
     ? systemPrompt
     : `${systemPrompt}\n\n${JSON_OUTPUT_INSTRUCTION}`;
-  if (!/json/i.test(instructions + "\n" + userPrompt)) {
+  // The "json" keyword check applies to INPUT messages — inject the
+  // directive into the user input as well when absent there.
+  const userText = /json/i.test(userPrompt)
+    ? userPrompt
+    : `${userPrompt}\n\n${JSON_OUTPUT_INSTRUCTION}`;
+  if (!/json/i.test(userText)) {
     throw new JsonInstructionMissingError();
   }
   return {
     model: getModelForStage(stage),
     instructions,
-    input: [{ role: "user", content: [{ type: "input_text", text: userPrompt }] }],
+    input: [{ role: "user", content: [{ type: "input_text", text: userText }] }],
     background: true,
     store: true,
     max_output_tokens: getMaxCompletionTokensForStage(stage),

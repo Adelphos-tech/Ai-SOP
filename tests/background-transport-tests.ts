@@ -323,9 +323,11 @@ async function main() {
   {
     // A: json_object without JSON instruction → auto-injected (never throws,
     //    never reaches OpenAI as a 400).
-    const params = buildResponsesCreateParams("finalizer", "Fix the draft. No json word here.".replace(" json", " structured"), "Some user content without the word");
+    const params = buildResponsesCreateParams("finalizer", "Fix the draft using structured output.", "Some user content without the word");
     check("RB1 instructions contain explicit JSON directive", /Return the final result as a valid JSON object only/i.test(params.instructions as string));
-    check("RB2 format is json_object", (params.text as any).format.type === "json_object");
+    const inputText = (params.input as any[])[0].content[0].text;
+    check("RB2 INPUT contains explicit JSON directive", /Return the final result as a valid JSON object only/i.test(inputText));
+    check("RB2b format is json_object", (params.text as any).format.type === "json_object");
     check("RB3 finalizer budget 8000", params.max_output_tokens === 8000);
 
     // B: writer uses the 12k budget.

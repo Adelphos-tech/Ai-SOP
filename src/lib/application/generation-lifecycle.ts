@@ -348,15 +348,17 @@ export async function setProviderState(runId: string, state: {
 }
 
 export async function updateProviderCheck(runId: string, status: string, terminal?: {
-  errorCode?: string; incompleteReason?: string;
+  errorCode?: string; incompleteReason?: string; errorMessage?: string;
 }): Promise<void> {
   const pool = getDbPool();
   await pool.execute(
     `UPDATE generation_runs SET provider_response_status = ?, provider_last_checked_at = NOW(3),
        provider_error_code = COALESCE(?, provider_error_code),
-       provider_incomplete_reason = COALESCE(?, provider_incomplete_reason)
+       provider_incomplete_reason = COALESCE(?, provider_incomplete_reason),
+       provider_error_message = COALESCE(?, provider_error_message)
      WHERE id = ?`,
-    [status, terminal?.errorCode || null, terminal?.incompleteReason || null, runId],
+    [status, terminal?.errorCode || null, terminal?.incompleteReason || null,
+     terminal?.errorMessage ? terminal.errorMessage.slice(0, 1000) : null, runId],
   );
 }
 

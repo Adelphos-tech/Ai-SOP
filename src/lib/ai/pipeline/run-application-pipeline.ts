@@ -411,6 +411,13 @@ export async function callOpenAIForStageBackground(
       } catch (e: any) {
         // Malformed request / missing JSON instruction — zero retry.
         if (e?.name === "ProviderInvalidRequestError" || e?.name === "JsonInstructionMissingError") {
+          if (ctx.generationRunId) {
+            try {
+              await updateProviderCheck(ctx.generationRunId, "failed", {
+                errorCode: "INVALID_REQUEST", errorMessage: e?.message,
+              });
+            } catch { /* best-effort */ }
+          }
           throw new StageExecutionError("PROVIDER_INVALID_REQUEST", "PROVIDER_INVALID_REQUEST", false);
         }
         throw e;
