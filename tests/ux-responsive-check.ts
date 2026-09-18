@@ -36,7 +36,7 @@ const PAGES: Array<{ name: string; path: string; primaryText?: RegExp }> = [
 ];
 
 async function main() {
-  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox"] });
+  const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
   let failures = 0;
 
   for (const page of PAGES) {
