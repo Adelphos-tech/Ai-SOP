@@ -199,6 +199,20 @@ export default function DocumentWorkspacePage() {
           setProfile(profileData.profile);
         }
       }
+
+      // One status fetch on load — surfaces a terminal run (CANCELLED/
+      // FAILED) on revisit, and restores an active run after refresh.
+      if (data.document?.generationStatus !== "GENERATING") {
+        try {
+          const sres = await fetch(`/api/application/document/generation-status?documentId=${documentId}&studentId=${studentId}`);
+          if (sres.ok) {
+            const sdata = await sres.json();
+            if (sdata?.status === "CANCELLED" || sdata?.status === "FAILED" || sdata?.active) {
+              setLiveStatus(sdata);
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
     } catch {
       setError("Failed to load document");
     } finally {
