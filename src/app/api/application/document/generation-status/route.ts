@@ -7,6 +7,10 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
+
+// Polling endpoint — must always return live status, never cached.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 import {
   requireConsultantSession,
   authorizeStudentAccess,

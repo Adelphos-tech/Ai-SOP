@@ -18,6 +18,10 @@ import {
 
 const GENERAL_UNIVERSITY = "General";
 
+// Always live — never serve a cached university list.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET(req: NextRequest) {
   try {
     try {
@@ -39,7 +43,6 @@ export async function GET(req: NextRequest) {
         WHERE university_name IS NOT NULL AND TRIM(university_name) != ''
         ORDER BY name`,
     );
-    console.log("universities-debug", JSON.stringify({ appRowCount: (appRows as any[]).length, sample: (appRows as any[]).slice(0, 3) }));
     for (const row of appRows as any[]) {
       const name = String(row.name).trim();
       if (name && !seen.has(name.toLowerCase())) {
