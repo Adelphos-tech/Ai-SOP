@@ -340,12 +340,10 @@ async function runTests() {
       model: "test-model",
     });
 
-    try {
-      await approveDocumentVersion(docWithMax.id, v.id);
-      assert(false, "Approval should be blocked by word max");
-    } catch (err: any) {
-      assert(err.message.includes("exceeds") || err.message.includes("maximum"), "Word max blocks approval");
-    }
+    // Word max is WARNING ONLY — consultant may always approve.
+    const res = await approveDocumentVersion(docWithMax.id, v.id);
+    assert(res.document.reviewStatus === "APPROVED", "Approval allowed despite word max warning");
+    assert(res.warningsOverridden.some(w => w.code === "WORD_COUNT_ABOVE_MAXIMUM"), "Warning recorded for audit");
   }
 
   // ===== P. Word min blocks approval =====
@@ -368,12 +366,10 @@ async function runTests() {
       model: "test-model",
     });
 
-    try {
-      await approveDocumentVersion(docWithMin.id, v.id);
-      assert(false, "Approval should be blocked by word min");
-    } catch (err: any) {
-      assert(err.message.includes("below") || err.message.includes("minimum"), "Word min blocks approval");
-    }
+    // Word min is WARNING ONLY.
+    const res = await approveDocumentVersion(docWithMin.id, v.id);
+    assert(res.document.reviewStatus === "APPROVED", "Approval allowed despite word min warning");
+    assert(res.warningsOverridden.some(w => w.code === "WORD_COUNT_BELOW_MINIMUM"), "Warning recorded for audit");
   }
 
   // ===== Q. Character limit blocks approval =====
@@ -396,12 +392,10 @@ async function runTests() {
       model: "test-model",
     });
 
-    try {
-      await approveDocumentVersion(docWithCharLimit.id, v.id);
-      assert(false, "Approval should be blocked by character limit");
-    } catch (err: any) {
-      assert(err.message.includes("character") || err.message.includes("limit"), "Character limit blocks approval");
-    }
+    // Character limit is WARNING ONLY.
+    const res = await approveDocumentVersion(docWithCharLimit.id, v.id);
+    assert(res.document.reviewStatus === "APPROVED", "Approval allowed despite character limit warning");
+    assert(res.warningsOverridden.some(w => w.code === "CHARACTER_LIMIT_EXCEEDED"), "Warning recorded for audit");
   }
 
   // ===== R. Corrected document can be approved =====
@@ -425,12 +419,9 @@ async function runTests() {
       model: "test-model",
     });
 
-    try {
-      await approveDocumentVersion(docCorrected.id, v1.id);
-      assert(false, "Long version should not be approvable");
-    } catch (err: any) {
-      assert(true, "Long version correctly blocked");
-    }
+    // Long version approves with a warning (consultant override).
+    const resLong = await approveDocumentVersion(docCorrected.id, v1.id);
+    assert(resLong.warningsOverridden.length > 0, "Long version approves with warning recorded");
 
     // Edit to correct length
     const shortContent = "Word ".repeat(80);
