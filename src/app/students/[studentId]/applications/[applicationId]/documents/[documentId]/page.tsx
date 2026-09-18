@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { PROMPT_SOURCE_LABELS } from "@/lib/application/application-types";
@@ -273,8 +273,16 @@ export default function DocumentWorkspacePage() {
         );
         if (!res.ok || stopped) return;
         const data = await res.json();
+        // Ignore terminal statuses from a run that predates the current
+        // submit — the new run row may not exist yet; flipping
+        // generating=false here would resurrect the stale FAILED card.
+        const isTerminal = data.status === "COMPLETED" || data.status === "FAILED" || data.status === "CANCELLED";
+        const staleTerminal =
+          isTerminal && generating &&
+          data.startedAt && new Date(data.startedAt).getTime() < lastSubmitAtRef.current - 2000;
+        if (staleTerminal) return;
         setLiveStatus(data);
-        if (data.status === "COMPLETED" || data.status === "FAILED" || data.status === "CANCELLED") {
+        if (isTerminal) {
           setGenerating(false);
           if (data.status === "COMPLETED") {
             await loadDocument();
@@ -294,8 +302,12 @@ export default function DocumentWorkspacePage() {
     () => createSingleFlightSubmitter(requestGenerate),
     [],
   );
+  // Timestamp of the current submit — lets the poll ignore terminal
+  // statuses belonging to a previous run.
+  const lastSubmitAtRef = useRef(0);
 
   async function handleGenerate() {
+    lastSubmitAtRef.current = Date.now();
     setGenerating(true);
     setGenerationError("");
     setGenerationBlockReasons([]);
