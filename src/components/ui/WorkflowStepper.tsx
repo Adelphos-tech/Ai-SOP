@@ -7,18 +7,19 @@ import { ProgressStepper, StepperStep } from "./ProgressStepper";
 // ============================================================
 // CANONICAL WORKFLOW TRACKER
 // ============================================================
-// 6-step consultant journey:
+// 4-step consultant journey (simplified):
 //   1. Applicant
-//   2. Application
-//   3. Intake
-//   4. Document
-//   5. Generate
-//   6. Review & Export
+//   2. Application   (includes completing missing information)
+//   3. Document      (create + generate)
+//   4. Review        (review & download)
+//
+// "Intake" is not a product destination — it is missing information
+// inside the Application step. "Generate" is an action inside the
+// Document step, not a navigation step.
 //
 // The active step is derived from BOTH the route AND known
-// workflow state (document generation/review status, intake
-// completion). Completed steps link only to canonical
-// database-backed pages — never to legacy/localStorage routes.
+// workflow state (document generation/review status). Completed
+// steps link only to canonical database-backed pages.
 // ============================================================
 
 // ============================================================
@@ -34,10 +35,8 @@ export interface CanonicalStepDef {
 export const CANONICAL_STEPS: CanonicalStepDef[] = [
   { label: "Applicant", index: 0 },
   { label: "Application", index: 1 },
-  { label: "Intake", index: 2 },
-  { label: "Document", index: 3 },
-  { label: "Generate", index: 4 },
-  { label: "Review & Export", index: 5 },
+  { label: "Document", index: 2 },
+  { label: "Review", index: 3 },
 ];
 
 // ============================================================
@@ -71,11 +70,12 @@ function parseRoute(pathname: string): RouteInfo {
   }
   m = pathname.match(INTAKE_RE);
   if (m) {
-    return { studentId: m[1], applicationId: m[2], documentId: null, routeStep: 2 };
+    // Intake = completing missing information inside the Application step
+    return { studentId: m[1], applicationId: m[2], documentId: null, routeStep: 1 };
   }
   m = pathname.match(DOCUMENT_RE);
   if (m) {
-    return { studentId: m[1], applicationId: m[2], documentId: m[3], routeStep: 3 };
+    return { studentId: m[1], applicationId: m[2], documentId: m[3], routeStep: 2 };
   }
   m = pathname.match(APPLICATION_WORKSPACE_RE);
   if (m) {
@@ -91,12 +91,11 @@ function parseRoute(pathname: string): RouteInfo {
 /**
  * Determine the effective active step from route + document state.
  *
- * On the document workspace route, the step depends on the document's
- * generation/review status:
- *   NOT_STARTED              → Document (step 3)
- *   IN_PROGRESS / GENERATING  → Generate (step 4)
- *   GENERATED / REVIEWED / FINALIZED / FAILED → Review & Export (step 5)
- *     (FAILED is treated as Review & Export so the consultant can retry)
+ * On the document workspace route (routeStep 2), the step depends on
+ * the document's generation/review status:
+ *   NOT_STARTED / IN_PROGRESS / GENERATING → Document (step 2)
+ *   GENERATED / REVIEWED / FINALIZED / FAILED → Review (step 3)
+ *     (FAILED is treated as Review so the consultant can retry)
  *
  * On other routes, the route step is used directly.
  */
@@ -106,19 +105,17 @@ function resolveActiveStep(
   generationStatus?: string,
   reviewStatus?: string,
 ): number {
-  if (routeStep !== 3 || !documentId) {
+  if (routeStep !== 2 || !documentId) {
     return routeStep;
   }
 
   // Document workspace — derive from document state
-  if (!generationStatus || generationStatus === "NOT_STARTED") {
-    return 3; // Document
+  if (!generationStatus || generationStatus === "NOT_STARTED" ||
+      generationStatus === "IN_PROGRESS" || generationStatus === "GENERATING") {
+    return 2; // Document (create/generate in progress)
   }
-  if (generationStatus === "IN_PROGRESS" || generationStatus === "GENERATING") {
-    return 4; // Generate
-  }
-  // GENERATED, REVIEWED, FINALIZED, FAILED → Review & Export
-  return 5;
+  // GENERATED, REVIEWED, FINALIZED, FAILED → Review
+  return 3;
 }
 
 // ============================================================
@@ -147,26 +144,13 @@ function stepHref(
       if (studentId && applicationId) return `/students/${studentId}/applications/${applicationId}`;
       return undefined;
 
-    case 2: // Intake → first incomplete section (or first section if all complete)
-      if (studentId && applicationId) {
-        const slug = firstIncompleteIntakeSlug || "student-details";
-        return `/students/${studentId}/applications/${applicationId}/intake/${slug}`;
-      }
-      return undefined;
-
-    case 3: // Document → document workspace
+    case 2: // Document → document workspace
       if (studentId && applicationId && documentId) {
         return `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
       }
       return undefined;
 
-    case 4: // Generate → document workspace
-      if (studentId && applicationId && documentId) {
-        return `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
-      }
-      return undefined;
-
-    case 5: // Review & Export → document workspace
+    case 3: // Review → document workspace
       if (studentId && applicationId && documentId) {
         return `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
       }

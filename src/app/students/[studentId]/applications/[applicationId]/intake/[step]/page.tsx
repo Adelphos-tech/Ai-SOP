@@ -48,8 +48,11 @@ export default function IntakePage() {
   const applicationId = params.applicationId as string;
   const stepSlug = params.step as string;
 
-  const currentSection = INTAKE_SECTIONS.find(s => s.slug === stepSlug);
-  const currentStep = currentSection?.id || 1;
+  // "missing" is a wizard mode: shows only the next missing required
+  // section, one at a time, until all required information is answered.
+  const wizardMode = stepSlug === "missing";
+  const routeSection = INTAKE_SECTIONS.find(s => s.slug === stepSlug);
+  const currentStep = routeSection?.id || 1;
 
   const [profile, setProfile] = useState<any>(null);
   const [profileRevision, setProfileRevision] = useState<number>(0);
@@ -136,13 +139,19 @@ export default function IntakePage() {
     });
   }, []);
 
-  // Save & Continue — blocks navigation if save fails
+  // Save & Continue — blocks navigation if save fails.
+  // Wizard mode stays on /intake/missing and reloads so the next
+  // missing required section becomes the current one.
   async function handleSaveAndContinue() {
     if (!profile) return;
     try {
       await saveProfile(profile);
     } catch (err: any) {
       setError(err?.message || "Failed to save. Please try again.");
+      return;
+    }
+    if (wizardMode) {
+      await loadAll();
       return;
     }
     // Navigate to next section
@@ -177,7 +186,7 @@ export default function IntakePage() {
     return <PageContainer><div className="text-center py-12 text-dvivid-text-secondary text-sm">Loading...</div></PageContainer>;
   }
 
-  if (!currentSection) {
+  if (!wizardMode && !routeSection) {
     return (
       <PageContainer>
         <div className="text-center py-12">
@@ -197,6 +206,29 @@ export default function IntakePage() {
   const prevSection = INTAKE_SECTIONS.find(s => s.id === currentStep - 1);
   const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
 
+  // Wizard mode: the "current" section is the first missing required one.
+  const missingRequired = readiness.sections.filter(s => !s.optional && s.status !== "complete");
+  const wizardSection = missingRequired.length > 0
+    ? INTAKE_SECTIONS.find(s => s.slug === missingRequired[0].slug) || null
+    : null;
+  const currentSection = wizardMode ? wizardSection : routeSection;
+  const displayStep = currentSection?.id || currentStep;
+
+  // Wizard completion state — all required information answered.
+  if (wizardMode && !wizardSection) {
+    return (
+      <PageContainer>
+        <div className="text-center py-16">
+          <p className="text-lg font-medium text-dvivid-success mb-2">✓ All required information complete</p>
+          <p className="text-sm text-dvivid-text-secondary mb-6">The applicant is ready for document generation.</p>
+          <Link href={`/students/${studentId}/applications/${applicationId}`}>
+            <PrimaryButton>Back to Application →</PrimaryButton>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
+
   return (
     <PageContainer>
       <WorkflowStepper
@@ -206,28 +238,38 @@ export default function IntakePage() {
       <Breadcrumb items={[
         { label: "Students", href: "/students" },
         { label: application?.universityName || "Application", href: `/students/${studentId}/applications/${applicationId}` },
-        { label: currentSection.label },
+        { label: wizardMode ? "Missing Information" : currentSection!.label },
       ]} />
 
-      <IntakeTracker
-        studentId={studentId}
-        applicationId={applicationId}
-        currentStep={currentStep}
-        completions={completions}
-      />
+      {!wizardMode && (
+        <IntakeTracker
+          studentId={studentId}
+          applicationId={applicationId}
+          currentStep={currentStep}
+          completions={completions}
+        />
+      )}
 
       {/* Save status indicator */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <h1 className="text-page-title text-dvivid-text-primary">{currentSection.label}</h1>
-          {currentSection.optional && (
+          <h1 className="text-page-title text-dvivid-text-primary">
+            {wizardMode ? "Complete missing information" : currentSection!.label}
+          </h1>
+          {currentSection!.optional && (
             <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-muted">Optional</span>
           )}
         </div>
         <SaveStatusIndicator status={saveStatus} saving={saving} dirty={dirty} />
       </div>
 
-      <p className="text-sm text-dvivid-text-secondary mb-6">{currentSection.description}</p>
+      {wizardMode ? (
+        <p className="text-sm text-dvivid-text-secondary mb-6">
+          <span className="font-medium text-dvivid-text-primary">{currentSection!.label}</span> — {missingRequired.length} required answer{missingRequired.length !== 1 ? "s" : ""} remaining. {currentSection!.description}
+        </p>
+      ) : (
+        <p className="text-sm text-dvivid-text-secondary mb-6">{currentSection!.description}</p>
+      )}
 
       {error && (
         <div className="mb-4 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input text-sm text-dvivid-error">
@@ -236,7 +278,7 @@ export default function IntakePage() {
       )}
 
       {/* CV Upload — only on Section 1 */}
-      {currentStep === 1 && (
+      {displayStep === 1 && (
         <div className="mb-6">
           <CVUpload
             studentId={studentId}
@@ -251,12 +293,16 @@ export default function IntakePage() {
 
       {/* Section content */}
       <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6 mb-6">
-        {profile && renderSection(currentStep, profile, updateProfile, application)}
+        {profile && renderSection(displayStep, profile, updateProfile, application)}
       </div>
 
       {/* Navigation */}
-      <div className="flex justify-between items-center">
-        {prevSection ? (
+      <div className="flex justify-between items-center flex-wrap gap-3">
+        {wizardMode ? (
+          <Link href={`/students/${studentId}/applications/${applicationId}`}>
+            <SecondaryButton>← Back to application</SecondaryButton>
+          </Link>
+        ) : prevSection ? (
           <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
             <SecondaryButton>← Back</SecondaryButton>
           </Link>
@@ -266,18 +312,29 @@ export default function IntakePage() {
           </Link>
         )}
 
-        <div className="flex gap-3 items-center">
-          <Link
-            href={`/students/${studentId}/applications/${applicationId}`}
-            className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
-          >
-            Exit to application
-          </Link>
-          {currentSection.optional && (
+        <div className="flex gap-3 items-center flex-wrap">
+          {wizardMode ? (
+            <Link
+              href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}
+              className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+            >
+              Review all information
+            </Link>
+          ) : (
+            <Link
+              href={`/students/${studentId}/applications/${applicationId}`}
+              className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+            >
+              Exit to application
+            </Link>
+          )}
+          {!wizardMode && currentSection!.optional && (
             <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
           )}
           <PrimaryButton onClick={handleSaveAndContinue} disabled={saving}>
-            {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
+            {saving ? "Saving..." : wizardMode
+              ? (missingRequired.length > 1 ? "Save & Next Missing Answer →" : "Save & Finish →")
+              : nextSection ? "Save & Continue →" : "Save & Finish →"}
           </PrimaryButton>
         </div>
       </div>

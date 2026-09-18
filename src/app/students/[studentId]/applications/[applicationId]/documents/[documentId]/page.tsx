@@ -98,6 +98,24 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+/** Convert internal blocking-reason codes into consultant-facing language. */
+function humanizeBlockReason(reason: string): string {
+  const text = reason.replace(/^[A-Z_]+:\s*/, "");
+  if (/fact.?sheet|facts must be approved/i.test(reason)) {
+    return "Applicant information hasn't been confirmed yet — review and confirm it in the intake.";
+  }
+  if (/no meaningful data|no student profile/i.test(reason)) {
+    return "Applicant information is incomplete.";
+  }
+  if (/recommender/i.test(reason)) {
+    return "Recommender details are required for a Letter of Recommendation.";
+  }
+  if (/visa/i.test(reason)) {
+    return "Visa-specific information is required for a Visa SOP.";
+  }
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 const generationStageLabels = [
   "Preparing your document",
   "Drafting",
@@ -135,7 +153,7 @@ export default function DocumentWorkspacePage() {
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState("");
-  const [promptExpanded, setPromptExpanded] = useState(true);
+  const [promptExpanded, setPromptExpanded] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
 
@@ -495,10 +513,12 @@ export default function DocumentWorkspacePage() {
           {readiness && (
             readiness.canGenerate ? (
               <div className="mb-4 p-4 bg-dvivid-success-light border border-dvivid-success/20 rounded-input">
-                <p className="text-sm font-medium text-dvivid-success mb-1">Ready to generate</p>
-                <p className="text-xs text-dvivid-text-secondary">
-                  Applicant profile: {readiness.requiredComplete}/{readiness.requiredTotal} required sections complete.
-                </p>
+                <p className="text-sm font-medium text-dvivid-success mb-1.5">Ready to generate</p>
+                <ul className="space-y-1 text-sm text-dvivid-text-secondary">
+                  <li>✓ Applicant information</li>
+                  <li>✓ Prompt / instructions</li>
+                  <li>✓ Requirements</li>
+                </ul>
               </div>
             ) : (
               <div className="mb-4 p-4 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input">
@@ -508,9 +528,9 @@ export default function DocumentWorkspacePage() {
                     .filter(s => !s.optional && s.status !== "complete")
                     .map(s => (
                       <li key={s.slug} className="flex items-center justify-between gap-3 text-sm">
-                        <span className="text-dvivid-text-primary">! {s.label} is incomplete</span>
+                        <span className="text-dvivid-text-primary">! {s.label} required</span>
                         <Link
-                          href={`/students/${studentId}/applications/${applicationId}/intake/${s.slug}`}
+                          href={`/students/${studentId}/applications/${applicationId}/intake/missing`}
                           className="text-xs text-dvivid-primary hover:underline whitespace-nowrap"
                         >
                           Complete {s.label} →
@@ -536,13 +556,23 @@ export default function DocumentWorkspacePage() {
           )}
           {generationError && (
             <div className="mt-4 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
-              <p className="text-sm text-dvivid-error font-medium">{generationError}</p>
-              {generationBlockReasons.length > 0 && (
-                <ul className="mt-2 space-y-1 list-disc list-inside">
+              <p className="text-sm text-dvivid-error font-medium">We couldn't generate the document.</p>
+              {generationBlockReasons.length > 0 ? (
+                <ul className="mt-2 space-y-1.5">
                   {generationBlockReasons.map((r, i) => (
-                    <li key={i} className="text-sm text-dvivid-error">{r}</li>
+                    <li key={i} className="text-sm text-dvivid-error flex items-center justify-between gap-3">
+                      <span>{humanizeBlockReason(r)}</span>
+                      <Link
+                        href={`/students/${studentId}/applications/${applicationId}/intake/missing`}
+                        className="text-xs text-dvivid-primary hover:underline whitespace-nowrap"
+                      >
+                        Complete missing information →
+                      </Link>
+                    </li>
                   ))}
                 </ul>
+              ) : (
+                <p className="mt-1 text-sm text-dvivid-error">{generationError}</p>
               )}
             </div>
           )}
@@ -552,32 +582,39 @@ export default function DocumentWorkspacePage() {
       {/* Generation Result */}
       {generationResult && (
         <SectionCard title={`Generation Result — Version ${generationResult.version.versionNumber}`} className="mb-8">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <div className="flex items-center gap-6 flex-wrap mb-4">
             <div>
               <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Words</p>
               <p className="text-sm font-medium text-dvivid-text-primary mt-1">{generationResult.version.wordCount}</p>
             </div>
-            <div>
-              <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Model</p>
-              <p className="text-sm font-medium text-dvivid-text-primary mt-1">{generationResult.version.model}</p>
-            </div>
-            <div>
-              <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Cost USD</p>
-              <p className="text-sm font-medium text-dvivid-text-primary mt-1">${generationResult.version.costUsd?.toFixed(4) || "—"}</p>
-            </div>
-            <div>
-              <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Cost INR</p>
-              <p className="text-sm font-medium text-dvivid-text-primary mt-1">₹{generationResult.version.costInr?.toFixed(2) || "—"}</p>
-            </div>
+            {generationResult.version.factReview && (
+              <div>
+                <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Fact check</p>
+                <p className="text-sm font-medium text-dvivid-text-primary mt-1">
+                  {generationResult.version.factReview.overallPass ? "✓ Passed" : "⚠ Needs review"} — invented: {generationResult.version.factReview.totalInventedFacts || 0}, altered: {generationResult.version.factReview.totalAlteredFacts || 0}
+                </p>
+              </div>
+            )}
           </div>
-          {generationResult.version.factReview && (
-            <div className="pt-4 border-t border-dvivid-border-light">
-              <p className="text-xs text-dvivid-text-muted uppercase tracking-wide mb-1">Fact Review</p>
-              <p className="text-sm text-dvivid-text-primary">
-                Invented: {generationResult.version.factReview.totalInventedFacts || 0} · Altered: {generationResult.version.factReview.totalAlteredFacts || 0} · Pass: {generationResult.version.factReview.overallPass ? "YES" : "NO"}
-              </p>
+          <details className="group">
+            <summary className="text-xs text-dvivid-text-muted cursor-pointer list-none flex items-center gap-1.5">
+              <span className="group-open:rotate-90 transition-transform inline-block">▸</span> View details (model, cost)
+            </summary>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3 pt-3 border-t border-dvivid-border-light">
+              <div>
+                <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Model</p>
+                <p className="text-sm font-medium text-dvivid-text-primary mt-1">{generationResult.version.model}</p>
+              </div>
+              <div>
+                <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Cost USD</p>
+                <p className="text-sm font-medium text-dvivid-text-primary mt-1">${generationResult.version.costUsd?.toFixed(4) || "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Cost INR</p>
+                <p className="text-sm font-medium text-dvivid-text-primary mt-1">₹{generationResult.version.costInr?.toFixed(2) || "—"}</p>
+              </div>
             </div>
-          )}
+          </details>
         </SectionCard>
       )}
 
@@ -621,20 +658,39 @@ export default function DocumentWorkspacePage() {
               />
 
               <div className="mt-4 flex items-center gap-3 flex-wrap">
-                <PrimaryButton onClick={handleSaveNewVersion} disabled={saving || !editorContent.trim()}>
-                  {saving ? "Saving..." : "Save New Version"}
-                </PrimaryButton>
-                {document?.generationStatus !== "GENERATING" && (
-                  <SecondaryButton onClick={handleGenerate} disabled={generating}>
-                    {generating ? "Generating..." : "Regenerate with AI"}
+                {/* Single primary CTA per state:
+                    unsaved changes → Save Changes
+                    saved & unapproved → Approve (below)
+                    approved → Downloads (export card) */}
+                {hasUnsavedChanges || saving ? (
+                  <PrimaryButton onClick={handleSaveNewVersion} disabled={saving || !editorContent.trim()}>
+                    {saving ? "Saving..." : "Save Changes"}
+                  </PrimaryButton>
+                ) : (
+                  <SecondaryButton onClick={handleSaveNewVersion} disabled={saving || !editorContent.trim()}>
+                    Save as New Version
                   </SecondaryButton>
                 )}
-                {saveSuccess && <span className="text-sm text-dvivid-success font-medium">✓ Version saved</span>}
+                {document?.generationStatus !== "GENERATING" && (
+                  <SecondaryButton onClick={handleGenerate} disabled={generating}>
+                    {generating ? "Generating..." : "Regenerate"}
+                  </SecondaryButton>
+                )}
+                {saveSuccess && <span className="text-sm text-dvivid-success font-medium">✓ Saved</span>}
                 {saveError && <span className="text-sm text-dvivid-error">{saveError}</span>}
               </div>
               {generationError && (
                 <div className="mt-3 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
-                  <p className="text-sm text-dvivid-error">{generationError}</p>
+                  <p className="text-sm text-dvivid-error font-medium">We couldn't generate the document.</p>
+                  {generationBlockReasons.length > 0 ? (
+                    <ul className="mt-1.5 space-y-1">
+                      {generationBlockReasons.map((r, i) => (
+                        <li key={i} className="text-sm text-dvivid-error">{humanizeBlockReason(r)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-sm text-dvivid-error">{generationError}</p>
+                  )}
                 </div>
               )}
 
@@ -652,9 +708,12 @@ export default function DocumentWorkspacePage() {
                     </p>
                   </div>
                   {(!isApproved || approvedVersion?.id !== selectedVersion?.id) && (
-                    <PrimaryButton onClick={() => setShowApproveConfirm(true)}>
-                      Approve This Version
+                    <PrimaryButton onClick={() => setShowApproveConfirm(true)} disabled={hasUnsavedChanges}>
+                      Approve Document
                     </PrimaryButton>
+                  )}
+                  {hasUnsavedChanges && (
+                    <p className="text-xs text-dvivid-text-muted mt-1">Save your changes before approving.</p>
                   )}
                 </div>
                 {approveError && <p className="mt-2 text-sm text-dvivid-error">{approveError}</p>}
@@ -798,22 +857,10 @@ export default function DocumentWorkspacePage() {
           {versions.length > 0 && selectedVersion && (
             <SectionCard title={`Export (v${selectedVersion.versionNumber})`}>
               <div className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium text-dvivid-text-secondary mb-2">Draft Preview</p>
-                  <div className="flex flex-col gap-2">
-                    <SecondaryButton onClick={() => handleExport("PDF", "PREVIEW")} disabled={exporting} className="w-full">
-                      Download Draft PDF
-                    </SecondaryButton>
-                    <SecondaryButton onClick={() => handleExport("DOCX", "PREVIEW")} disabled={exporting} className="w-full">
-                      Download Draft DOCX
-                    </SecondaryButton>
-                  </div>
-                </div>
-
                 {isApproved && approvedVersion && (
-                  <div className="pt-4 border-t border-dvivid-border-light">
+                  <div>
                     <p className="text-sm font-medium text-dvivid-success mb-2">
-                      Final Export (Approved v{approvedVersion.versionNumber})
+                      Download Approved Document
                     </p>
                     <div className="flex flex-col gap-2">
                       <button
@@ -821,23 +868,31 @@ export default function DocumentWorkspacePage() {
                         disabled={exporting}
                         className="w-full px-5 py-2.5 bg-dvivid-success text-white rounded-button font-medium text-sm hover:opacity-90 transition-colors disabled:opacity-50"
                       >
-                        Download Final PDF
+                        {exporting ? "Preparing PDF..." : "Download PDF"}
                       </button>
                       <button
                         onClick={() => handleExport("DOCX", "FINAL", approvedVersion.id)}
                         disabled={exporting}
                         className="w-full px-5 py-2.5 bg-dvivid-success text-white rounded-button font-medium text-sm hover:opacity-90 transition-colors disabled:opacity-50"
                       >
-                        Download Final DOCX
+                        {exporting ? "Preparing DOCX..." : "Download DOCX"}
                       </button>
                     </div>
                   </div>
                 )}
                 {!isApproved && (
-                  <div className="pt-4 border-t border-dvivid-border-light">
-                    <p className="text-sm text-dvivid-text-muted">
-                      Final export requires an approved version.
+                  <div>
+                    <p className="text-sm text-dvivid-text-muted mb-2">
+                      Draft preview (final download requires approval):
                     </p>
+                    <div className="flex flex-col gap-2">
+                      <SecondaryButton onClick={() => handleExport("PDF", "PREVIEW")} disabled={exporting} className="w-full">
+                        {exporting ? "Preparing PDF..." : "Draft PDF"}
+                      </SecondaryButton>
+                      <SecondaryButton onClick={() => handleExport("DOCX", "PREVIEW")} disabled={exporting} className="w-full">
+                        {exporting ? "Preparing DOCX..." : "Draft DOCX"}
+                      </SecondaryButton>
+                    </div>
                   </div>
                 )}
                 {exportError && <p className="text-sm text-dvivid-error">{exportError}</p>}

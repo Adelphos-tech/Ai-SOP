@@ -175,18 +175,6 @@ export default function StudentWorkspacePage() {
     }
   }
 
-  const profileSections = profile
-    ? [
-        { name: "Personal Details", filled: !!(profile.personalData?.firstName && profile.personalData?.lastName) },
-        { name: "Education", filled: Array.isArray(profile.education) && profile.education.length > 0 },
-        { name: "Experience", filled: (Array.isArray(profile.experience) && profile.experience.length > 0) || profile.noWorkExperience === true },
-      ]
-    : [];
-  const completedSections = profileSections.filter(s => s.filled).length;
-  const profileCompletion = profile
-    ? Math.round((completedSections / Math.max(profileSections.length, 1)) * 100)
-    : 0;
-
   if (loading) {
     return <PageContainer><div className="text-center py-12 text-dvivid-text-secondary text-sm">Loading student...</div></PageContainer>;
   }
@@ -239,33 +227,6 @@ export default function StudentWorkspacePage() {
           </div>
         </div>
 
-        {/* Profile completion */}
-        <div className="mt-6 pt-6 border-t border-dvivid-border-light">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-dvivid-text-secondary">Profile Completion</span>
-            <span className="text-sm font-semibold text-dvivid-text-primary">{profileCompletion}%</span>
-          </div>
-          <div className="w-full h-2 bg-dvivid-border-light rounded-full overflow-hidden">
-            <div
-              className="h-full bg-dvivid-primary rounded-full transition-all duration-300"
-              style={{ width: `${profileCompletion}%` }}
-            />
-          </div>
-          <div className="flex flex-wrap gap-2 mt-3">
-            {profileSections.map(s => (
-              <span
-                key={s.name}
-                className={`px-2.5 py-1 text-xs rounded-full font-medium ${
-                  s.filled
-                    ? "bg-dvivid-success-light text-dvivid-success"
-                    : "bg-gray-100 text-dvivid-text-muted"
-                }`}
-              >
-                {s.filled ? "✓" : "○"} {s.name}
-              </span>
-            ))}
-          </div>
-        </div>
       </div>
 
       {/* New Application Form */}

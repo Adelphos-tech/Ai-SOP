@@ -10,7 +10,7 @@ import {
   PromptSource,
 } from "@/lib/application/application-types";
 import {
-  PageContainer, Breadcrumb, PageHeader, PrimaryButton, SecondaryButton,
+  PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
   SectionCard, EmptyState, StatusBadge, PromptSourceBadge,
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
@@ -169,7 +169,7 @@ export default function ApplicationWorkspacePage() {
 
   async function handleAddDocument() {
     if (!promptText) {
-      setError("Prompt / Instructions is required. Click 'Auto-Resolve' to find a prompt automatically.");
+      setError("A university/portal prompt is required. Paste it above or use 'Find university prompt' to look one up automatically.");
       return;
     }
 
@@ -384,7 +384,7 @@ export default function ApplicationWorkspacePage() {
   // State-based CTA: A=incomplete, B=ready+no docs, C=doc not started,
   // D=generating/failed, E=generated, F=approved
   const intakeHref = firstMissingSlug
-    ? `/students/${studentId}/applications/${applicationId}/intake/${firstMissingSlug}`
+    ? `/students/${studentId}/applications/${applicationId}/intake/missing`
     : `/students/${studentId}/applications/${applicationId}/intake/student-details`;
 
   let primaryCta: { label: string; href: string; onClick?: () => void } | null = null;
@@ -416,32 +416,76 @@ export default function ApplicationWorkspacePage() {
         { label: application ? `${application.universityName}` : "Application" },
       ]} />
 
-      {/* Application Summary */}
+      {/* Application Header — who/where */}
       <div className="bg-white border border-dvivid-border rounded-card shadow-card p-7 mb-8">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-page-title text-dvivid-text-primary">{application?.universityName}</h1>
+            <h1 className="text-page-title text-dvivid-text-primary">
+              {student ? `${student.firstName} ${student.lastName}` : "Applicant"}
+            </h1>
             <p className="text-base text-dvivid-text-secondary mt-1.5">
-              {application?.programName} · {application?.degree}
+              {application?.universityName} · {application?.programName}
+              {application?.intake ? ` · ${application.intake} ${application.intakeYear}` : ""}
             </p>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-sm text-dvivid-text-muted">
-              {student && <span className="font-medium text-dvivid-text-primary">{student.firstName} {student.lastName}</span>}
-              {application?.intake && <span>{application.intake} {application.intakeYear}</span>}
-              {application?.country && <span>{application.country}</span>}
-              {application?.department && <span>{application.department}</span>}
-            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <StatusBadge status={application?.status || "DRAFT"} />
-            <Link href={intakeHref} prefetch={false}>
-              <SecondaryButton>Review / Edit Intake</SecondaryButton>
-            </Link>
-          </div>
+          <StatusBadge status={application?.status || "DRAFT"} />
         </div>
 
-        {/* State-Based Primary CTA */}
-        {primaryCta && (
-          <div className="mt-6 pt-6 border-t border-dvivid-border-light">
+        {/* APPLICATION STATUS — what is missing / what is next */}
+        {readiness && (() => {
+          const missingSections = readiness.sections.filter(s => !s.optional && s.status !== "complete");
+          const missingCount = missingSections.length;
+          return (
+            <div className="mt-6 pt-6 border-t border-dvivid-border-light">
+              <p className="text-xs font-medium text-dvivid-text-muted uppercase tracking-wide mb-3">Application status</p>
+              {!intakeComplete ? (
+                <div>
+                  <p className="text-sm font-medium text-dvivid-text-primary mb-2">
+                    {missingCount} required answer{missingCount !== 1 ? "s" : ""} still needed
+                  </p>
+                  <ul className="mb-4 space-y-1">
+                    {missingSections.map(s => (
+                      <li key={s.slug} className="text-sm text-dvivid-text-secondary">· {s.label}</li>
+                    ))}
+                  </ul>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <Link href={`/students/${studentId}/applications/${applicationId}/intake/missing`} prefetch={false}>
+                      <PrimaryButton>Complete {missingCount} Missing Answer{missingCount !== 1 ? "s" : ""} →</PrimaryButton>
+                    </Link>
+                    <button
+                      onClick={() => setShowCVUpload(!showCVUpload)}
+                      className="text-sm text-dvivid-primary hover:underline font-medium"
+                    >
+                      Upload CV to pre-fill instead
+                    </button>
+                  </div>
+                  {showCVUpload && (
+                    <div className="mt-4 p-4 bg-dvivid-surface-alt border border-dvivid-border rounded-input">
+                      <CVUpload
+                        studentId={studentId}
+                        onApplied={() => {
+                          setShowCVUpload(false);
+                          loadApplication();
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <p className="text-sm font-medium text-dvivid-success">✓ Applicant information ready</p>
+                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/student-details`} prefetch={false}>
+                    <span className="text-sm text-dvivid-primary hover:underline font-medium cursor-pointer">Review all information →</span>
+                  </Link>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Document state CTA (only when intake is ready) */}
+        {intakeComplete && primaryCta && (
+          <div className="mt-4">
             {primaryCta.onClick ? (
               <PrimaryButton onClick={primaryCta.onClick}>{primaryCta.label}</PrimaryButton>
             ) : (
@@ -451,96 +495,34 @@ export default function ApplicationWorkspacePage() {
             )}
           </div>
         )}
-
-        {/* Profile Readiness / CV Upload */}
-        {readiness && (() => {
-          const firstMissing = readiness.sections.find(s => s.status === "missing");
-          return (
-            <div className="mt-6 pt-6 border-t border-dvivid-border-light">
-              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <span className="text-sm font-medium text-dvivid-text-secondary">
-                  Profile Readiness: {readiness.requiredComplete}/{readiness.requiredTotal} required sections complete
-                </span>
-                <div className="flex items-center gap-3">
-                  {!intakeComplete && (
-                    <button
-                      onClick={() => setShowCVUpload(!showCVUpload)}
-                      className="text-sm text-dvivid-primary hover:underline font-medium"
-                    >
-                      Upload CV to pre-fill
-                    </button>
-                  )}
-                  {firstMissing ? (
-                    <Link href={`/students/${studentId}/applications/${applicationId}/intake/${firstMissing.slug}`} prefetch={false}>
-                      <span className="text-sm text-dvivid-primary hover:underline font-medium cursor-pointer">Complete Missing Information →</span>
-                    </Link>
-                  ) : (
-                    <span className="text-sm font-medium text-dvivid-success">✓ Profile ready</span>
-                  )}
-                </div>
-              </div>
-
-              {/* CV Upload Panel */}
-              {showCVUpload && !intakeComplete && (
-                <div className="mb-4 p-4 bg-dvivid-surface-alt border border-dvivid-border rounded-input">
-                  <CVUpload
-                    studentId={studentId}
-                    onApplied={() => {
-                      setShowCVUpload(false);
-                      loadApplication();
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Section pills */}
-              <div className="flex flex-wrap gap-2">
-                {readiness.sections.map(s => (
-                  <Link
-                    key={s.sectionId}
-                    href={`/students/${studentId}/applications/${applicationId}/intake/${s.slug}`}
-                    prefetch={false}
-                    className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
-                      s.status === "complete"
-                        ? "bg-dvivid-success-light text-dvivid-success hover:bg-dvivid-success-light/70"
-                        : s.status === "missing"
-                        ? "bg-dvivid-error-light text-dvivid-error hover:bg-dvivid-error-light/70"
-                        : "bg-gray-100 text-dvivid-text-muted hover:bg-gray-200"
-                    }`}
-                  >
-                    {s.status === "complete" ? "✓" : s.status === "missing" ? "○" : "—"} {s.label}
-                  </Link>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
       </div>
 
-      {/* Requirements Status */}
+      {/* Requirements — advanced info, collapsed by default */}
       {reqLookup && (
-        <div className="bg-white border border-dvivid-border rounded-card shadow-card p-5 mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-dvivid-text-secondary mb-1">Requirements Status</p>
-              {reqLookup.result === "EXACT_FRESH_MATCH" && (
-                <p className="text-sm text-dvivid-success">✓ Requirements available — {reqLookup.writingRequirements?.length || 0} writing requirements verified</p>
-              )}
-              {reqLookup.result === "STALE_MATCH" && (
-                <p className="text-sm text-dvivid-warning">⚠ Requirements need verification — last checked is stale</p>
-              )}
-              {reqLookup.result === "PARTIAL_MATCH" && (
-                <p className="text-sm text-dvivid-warning">⚠ Partial match found — some requirements may not apply</p>
-              )}
-              {reqLookup.result === "NOT_FOUND" && (
-                <p className="text-sm text-dvivid-text-secondary">No saved requirements for this program/intake</p>
-              )}
-            </div>
-            {reqLookup.requirementSet && (
-              <StatusBadge status="IN_REVIEW" label={reqLookup.requirementSet.verificationStatus.replace(/_/g, " ").toLowerCase()} />
+        <details className="bg-white border border-dvivid-border rounded-card shadow-card px-5 py-4 mb-8 group">
+          <summary className="text-sm font-medium text-dvivid-text-secondary cursor-pointer list-none flex items-center justify-between">
+            <span>Requirements status
+              <span className="ml-2 text-xs text-dvivid-text-muted font-normal">
+                {reqLookup.result === "EXACT_FRESH_MATCH" ? "verified" : reqLookup.result.replace(/_/g, " ").toLowerCase()}
+              </span>
+            </span>
+            <span className="text-dvivid-text-muted group-open:rotate-180 transition-transform">▾</span>
+          </summary>
+          <div className="pt-3 mt-3 border-t border-dvivid-border-light">
+            {reqLookup.result === "EXACT_FRESH_MATCH" && (
+              <p className="text-sm text-dvivid-success">✓ Requirements available — {reqLookup.writingRequirements?.length || 0} writing requirements verified</p>
+            )}
+            {reqLookup.result === "STALE_MATCH" && (
+              <p className="text-sm text-dvivid-warning">⚠ Requirements need verification — last checked is stale</p>
+            )}
+            {reqLookup.result === "PARTIAL_MATCH" && (
+              <p className="text-sm text-dvivid-warning">⚠ Partial match found — some requirements may not apply</p>
+            )}
+            {reqLookup.result === "NOT_FOUND" && (
+              <p className="text-sm text-dvivid-text-secondary">No saved requirements for this program/intake — the D-Vivid template will be used.</p>
             )}
           </div>
-        </div>
+        </details>
       )}
 
       {/* Add Document Form */}
@@ -622,7 +604,7 @@ export default function ApplicationWorkspacePage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+          <div className="mb-5">
             <FormField label="Document Type" required>
               <select className={inputClass} value={documentType} onChange={e => setDocumentType(e.target.value as DocumentType)}>
                 {DOCUMENT_TYPE_OPTIONS.map(opt => (
@@ -630,16 +612,13 @@ export default function ApplicationWorkspacePage() {
                 ))}
               </select>
             </FormField>
-            <FormField label="Document Title">
-              <input className={inputClass} value={documentTitle} onChange={e => setDocumentTitle(e.target.value)} placeholder="Statement of Objectives" />
-            </FormField>
           </div>
 
           <div className="mb-5">
             <div className="flex items-center justify-between mb-1.5">
-              <FormField label="Prompt / Instructions" required>
-              <></>
-              </FormField>
+              <label className="block text-sm font-medium text-dvivid-text-primary">
+                University / Portal Prompt <span className="text-dvivid-error">*</span>
+              </label>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -647,7 +626,7 @@ export default function ApplicationWorkspacePage() {
                   disabled={resolving}
                   className="px-3 py-1.5 text-xs font-medium text-dvivid-primary border border-dvivid-primary/30 rounded-button hover:bg-dvivid-primary-light transition-colors disabled:opacity-50"
                 >
-                  {resolving ? "Resolving..." : "Auto-Resolve"}
+                  {resolving ? "Finding requirements..." : "Find university prompt"}
                 </button>
                 <button
                   type="button"
@@ -655,7 +634,7 @@ export default function ApplicationWorkspacePage() {
                   disabled={resolving}
                   className="px-3 py-1.5 text-xs font-medium text-dvivid-text-secondary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt transition-colors disabled:opacity-50"
                 >
-                  {resolving ? "Crawling..." : "Crawl Official Pages"}
+                  {resolving ? "Searching..." : "Search official pages"}
                 </button>
               </div>
             </div>
@@ -663,11 +642,11 @@ export default function ApplicationWorkspacePage() {
               className={`${inputClass} min-h-[120px] resize-y`}
               value={promptText}
               onChange={e => setPromptText(e.target.value)}
-              placeholder="Paste the university or application portal question here, or click Auto-Resolve to find one automatically..."
+              placeholder="Paste the exact question from the university or application portal. If you don't have one, use 'Find university prompt' — do not write 'follow university prompt' here."
             />
             {resolutionLabel && (
               <div className="mt-2 flex items-center gap-2">
-                <span className="text-xs text-dvivid-text-muted">Resolved via:</span>
+                <span className="text-xs text-dvivid-text-muted">Prompt found via:</span>
                 <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
                   resolutionPath === "DB_REUSED" ? "bg-dvivid-success-light text-dvivid-success" :
                   resolutionPath === "DISCOVERY_SAVED" ? "bg-dvivid-primary-light text-dvivid-primary" :
@@ -680,64 +659,49 @@ export default function ApplicationWorkspacePage() {
             )}
           </div>
 
-          <div className="mb-5">
-            <FormField label="Prompt Source">
-              <></>
-            </FormField>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {PROMPT_SOURCE_OPTIONS.map(opt => {
-                const isDisabled = opt.value === "OFFICIAL_VERIFIED" || opt.value === "DVIVID_DEFAULT_TEMPLATE";
-                return (
-                  <label
-                    key={opt.value}
-                    className={`flex items-start gap-3 p-3 border rounded-input cursor-pointer transition-colors ${
-                      promptSource === opt.value
-                        ? "border-dvivid-primary bg-dvivid-primary-light"
-                        : "border-dvivid-border hover:border-dvivid-primary-border"
-                    } ${isDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
-                  >
-                    <input
-                      type="radio"
-                      name="promptSource"
-                      value={opt.value}
-                      checked={promptSource === opt.value}
-                      disabled={isDisabled}
-                      onChange={e => setPromptSource(e.target.value as PromptSource)}
-                      className="mt-0.5"
-                    />
-                    <div>
-                      <p className="text-sm font-medium text-dvivid-text-primary">{opt.label}</p>
-                      <p className="text-xs text-dvivid-text-secondary mt-0.5">{opt.description}</p>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-            <FormField label="Word Min">
-              <input className={inputClass} type="number" value={wordMin} onChange={e => setWordMin(e.target.value)} placeholder="—" />
-            </FormField>
-            <FormField label="Word Max">
-              <input className={inputClass} type="number" value={wordMax} onChange={e => setWordMax(e.target.value)} placeholder="—" />
-            </FormField>
-            <FormField label="Character Limit">
-              <input className={inputClass} type="number" value={characterLimit} onChange={e => setCharacterLimit(e.target.value)} placeholder="—" />
-            </FormField>
-            <FormField label="Page Limit">
-              <input className={inputClass} type="number" value={pageLimit} onChange={e => setPageLimit(e.target.value)} placeholder="—" />
-            </FormField>
-          </div>
-
-          <FormField label="Special Instructions" className="mb-6">
-            <textarea className={`${inputClass} min-h-[80px] resize-y`} value={specialInstructions} onChange={e => setSpecialInstructions(e.target.value)} placeholder="Any special instructions..." />
+          <FormField label="Consultant Instruction (optional)" helper="Your own guidance for the writing — kept separate from the university prompt." className="mb-5">
+            <textarea className={`${inputClass} min-h-[80px] resize-y`} value={specialInstructions} onChange={e => setSpecialInstructions(e.target.value)} placeholder="e.g. Emphasize the student's research internship over coursework..." />
           </FormField>
+
+          <details className="mb-6 group">
+            <summary className="text-sm font-medium text-dvivid-text-secondary cursor-pointer list-none flex items-center gap-2">
+              <span className="text-dvivid-text-muted group-open:rotate-90 transition-transform inline-block">▸</span>
+              Advanced options (title, prompt source, length limits)
+            </summary>
+            <div className="pt-4 mt-3 border-t border-dvivid-border-light space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <FormField label="Document Title">
+                  <input className={inputClass} value={documentTitle} onChange={e => setDocumentTitle(e.target.value)} placeholder="Statement of Objectives" />
+                </FormField>
+                <FormField label="Prompt Source">
+                  <select className={inputClass} value={promptSource} onChange={e => setPromptSource(e.target.value as PromptSource)}>
+                    {PROMPT_SOURCE_OPTIONS.filter(o => o.value !== "OFFICIAL_VERIFIED" && o.value !== "DVIVID_DEFAULT_TEMPLATE").map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </FormField>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <FormField label="Word Min">
+                  <input className={inputClass} type="number" value={wordMin} onChange={e => setWordMin(e.target.value)} placeholder="—" />
+                </FormField>
+                <FormField label="Word Max">
+                  <input className={inputClass} type="number" value={wordMax} onChange={e => setWordMax(e.target.value)} placeholder="—" />
+                </FormField>
+                <FormField label="Character Limit">
+                  <input className={inputClass} type="number" value={characterLimit} onChange={e => setCharacterLimit(e.target.value)} placeholder="—" />
+                </FormField>
+                <FormField label="Page Limit">
+                  <input className={inputClass} type="number" value={pageLimit} onChange={e => setPageLimit(e.target.value)} placeholder="—" />
+                </FormField>
+              </div>
+            </div>
+          </details>
 
           <div className="flex gap-3 justify-end">
             <SecondaryButton onClick={() => setShowAddForm(false)}>Cancel</SecondaryButton>
             <PrimaryButton onClick={handleAddDocument} disabled={saving}>
-              {saving ? "Saving..." : "Save Document"}
+              {saving ? "Saving..." : "Create Document"}
             </PrimaryButton>
           </div>
         </SectionCard>
