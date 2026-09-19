@@ -5,6 +5,7 @@ import type { AttemptAccounting } from "../attempt-accounting";
 import { AttemptAccountingTracker } from "../attempt-accounting";
 import type { CheckpointHashes, StageCheckpoint } from "../pipeline-checkpoint";
 import { normalizeStageOutput, STAGE_CONTRACT_VERSIONS } from "./stage-contracts";
+import { STAGE_OUTPUT_SCHEMAS } from "../schemas";
 import {
   appendDurable, atomicWriteDurable, computeHash,
   getCheckpointPath, syncDirectory, validateCheckpoint,
@@ -112,65 +113,49 @@ function classifyFailure(error: unknown): FailureKind {
 const object = (value: unknown): value is Record<string, any> => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
+/**
+ * Parse + structurally validate a stage output.
+ *
+ * Flow: JSON.parse → normalizeStageOutput → Zod schema (single source
+ * of structural truth) → domain checks that need pipeline context
+ * (finalizer claim-metadata completeness) → contract-version stamp.
+ *
+ * Domain/safety validation (claim IDs, evidence allowlists, invented/
+ * altered fact policy) stays in the pipeline validators — NOT here.
+ */
 export function parseStage(stage: ExecutionStage, content: string, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Record<string, any> {
   if (!text(content)) throw new StageExecutionError("EMPTY_CONTENT", `${stage} returned empty content`, true);
   let parsed: unknown;
   try { parsed = JSON.parse(content); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
   if (!object(parsed)) throw new StageExecutionError("CONTENT_SCHEMA_INVALID");
   // Normalize harmless representation differences BEFORE strict checks —
-  // e.g. factReviewer claims using `text` instead of `claim`.
-  const output: Record<string, any> = normalizeStageOutput(stage, parsed);
-  let items: unknown;
-  if (stage === "planner") items = output.componentPlans;
-  else if (stage === "qualityReviewer") items = output.componentScores;
-  else if (stage === "factReviewer") items = output.components;
-  else items = output.responses;
-  if (!Array.isArray(items) || !items.length || !items.every(item => object(item) && text(item.componentId)) || new Set(items.map(item => item.componentId)).size !== items.length) {
-    throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid component list — expected non-empty unique componentIds`);
+  // e.g. factReviewer claims using `text` instead of `claim`, or an
+  // omitted blockingReason.
+  const normalized = normalizeStageOutput(stage, parsed);
+
+  // Structural validation — Zod is the single source of truth.
+  const result = STAGE_OUTPUT_SCHEMAS[stage].safeParse(normalized);
+  if (!result.success) {
+    // Internal diagnostics only — paths/codes, never applicant content.
+    const issues = result.error.issues.slice(0, 5).map(i => `${i.path.join(".") || "(root)"}:${i.code}`).join("; ");
+    // Preserve legacy semantics: missing/invalid finalizer claim-metadata
+    // fields were technical-retryable (model can correct on retry).
+    const isFinalizerMetadata = stage === "finalizer" && result.error.issues.some(i =>
+      ["retainedClaimIds", "removedClaimIds", "repairClaims"].includes(String(i.path[i.path.length - 1])));
+    throw new StageExecutionError(
+      "AI_STAGE_SCHEMA_INVALID",
+      `${stage}: structural contract violation (${STAGE_CONTRACT_VERSIONS[stage]}) — ${issues}`,
+      isFinalizerMetadata,
+    );
   }
-  if (["writer", "languageCalibrator", "finalizer"].includes(stage) && !items.every(item => text(item.text))) {
-    throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid response text`);
-  }
-  // Phase 21: Strict Finalizer claim metadata validation.
-  // For non-FREEZE actions, required claim metadata fields must be PRESENT
-  // (not just defaulted to []). Missing fields = TECHNICAL_STAGE_OUTPUT_INVALID.
-  // Note: parseStage does not have access to the action plan, so it only
-  // checks that the fields exist as keys. The pipeline-level validation
-  // in run-application-pipeline.ts does the full FREEZE-aware check.
+  const output = result.data as Record<string, any>;
+
+  // Phase 21/33B/34C: Finalizer claim-metadata completeness needs action-
+  // plan context (FREEZE vs non-FREEZE, expected claim IDs) — domain rule,
+  // kept outside the structural schema.
   if (stage === "finalizer") {
-    for (const item of items) {
-      const hasRetained = "retainedClaimIds" in item;
-      const hasRemoved = "removedClaimIds" in item;
-      const hasRepair = "repairClaims" in item;
-      if (!hasRetained || !hasRemoved || !hasRepair) {
-        const missing: string[] = [];
-        if (!hasRetained) missing.push("retainedClaimIds");
-        if (!hasRemoved) missing.push("removedClaimIds");
-        if (!hasRepair) missing.push("repairClaims");
-        throw new StageExecutionError(
-          "CONTENT_SCHEMA_INVALID",
-          `finalizer: missing required claim metadata fields [${missing.join(", ")}] for component ${item.componentId}`,
-          true // technical retryable
-        );
-      }
-      // Validate types if present
-      if (hasRetained && !Array.isArray(item.retainedClaimIds)) {
-        throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `finalizer: retainedClaimIds must be an array for ${item.componentId}`, true);
-      }
-      if (hasRemoved && !Array.isArray(item.removedClaimIds)) {
-        throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `finalizer: removedClaimIds must be an array for ${item.componentId}`, true);
-      }
-      if (hasRepair && !Array.isArray(item.repairClaims)) {
-        throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `finalizer: repairClaims must be an array for ${item.componentId}`, true);
-      }
-      // Phase 33B: For non-FREEZE actions, empty claim metadata (both arrays empty)
-      // is a technical retryable error. FREEZE with empty metadata is allowed
-      // through because the deterministic FREEZE inference in claim-provenance.ts
-      // will handle it (byte-for-byte text comparison).
-      // Phase 34C: Zero-claim edge case — if expectedClaimIds for this component
-      // is empty, then empty retained/removed arrays are VALID (no claims to classify).
-      const isEmptyMetadata = (!Array.isArray(item.retainedClaimIds) || item.retainedClaimIds.length === 0) &&
-                              (!Array.isArray(item.removedClaimIds) || item.removedClaimIds.length === 0);
+    for (const item of output.responses) {
+      const isEmptyMetadata = item.retainedClaimIds.length === 0 && item.removedClaimIds.length === 0;
       if (isEmptyMetadata) {
         const isFreeze = context?.freezeComponentIds?.has(item.componentId) ?? false;
         const expectedIds = context?.expectedClaimIds?.get(item.componentId) ?? [];
@@ -184,25 +169,7 @@ export function parseStage(stage: ExecutionStage, content: string, context?: { f
       }
     }
   }
-  if (stage === "qualityReviewer" && (!object(output.requirementCompliance) || !items.every(item => Number.isFinite(item.score) && item.score >= 1 && item.score <= 10))) {
-    throw new StageExecutionError("QUALITY_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: requirementCompliance or per-component score (1-10) missing/invalid`);
-  }
-  // Compact contract: the four totals may be omitted — the server derives
-  // them via deriveFactReviewTotals. When present they must still be valid.
-  if (stage === "factReviewer") {
-    if (typeof output.overallPass !== "boolean") {
-      throw new StageExecutionError("FACT_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: overallPass missing or not boolean`);
-    }
-    if (!items.every(item => typeof item.pass === "boolean")) {
-      throw new StageExecutionError("FACT_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: a component is missing a boolean 'pass'`);
-    }
-    if (!items.every(item => Array.isArray(item.claims))) {
-      throw new StageExecutionError("FACT_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: a component is missing 'claims' array`);
-    }
-    if (!["totalInventedFacts", "totalAlteredFacts", "totalInterpretiveElaborations", "totalAmbiguousClaims"].every(key => output[key] === undefined || (Number.isInteger(output[key]) && output[key] >= 0))) {
-      throw new StageExecutionError("FACT_REVIEW_INVALID_TOTALS", `${stage}: totals present but not non-negative integers`);
-    }
-  }
+
   // Stamp the contract version so stored checkpoints identify which
   // contract produced this output (set in code — never model-generated).
   output._contractVersion = STAGE_CONTRACT_VERSIONS[stage];

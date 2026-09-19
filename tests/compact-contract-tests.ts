@@ -294,7 +294,7 @@ async function main() {
       overallPass: true,
       blockingReason: null,
       components: [
-        { componentId: "intro", pass: true, claims: [{ claim: "x", classification: "SUPPORTED", supportingFactIds: ["f1"], severity: "LOW" }] },
+        { componentId: "intro", pass: true, claims: [{ claim: "x", classification: "SUPPORTED_STUDENT_FACT", supportingFactIds: ["f1"], severity: "INFO" }] },
       ],
     });
     let ok = true;

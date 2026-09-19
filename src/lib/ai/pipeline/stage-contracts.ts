@@ -34,7 +34,11 @@ export const STAGE_CONTRACT_VERSIONS: Record<string, StageContractId> = {
  * Copy `text`→`claim` when `claim` is absent so validators and
  * downstream consumers see one consistent shape.
  */
-export function normalizeStageOutput(stage: string, output: Record<string, any>): Record<string, any> {
+export function normalizeStageOutput(stage: string, raw: unknown): Record<string, any> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw as Record<string, any>; // non-object — schema will reject it
+  }
+  const output = raw as Record<string, any>;
   if (stage === "factReviewer" && Array.isArray(output.components)) {
     for (const comp of output.components) {
       if (Array.isArray(comp?.claims)) {
