@@ -1,5 +1,6 @@
 import { ResponseComponent, FacultyAlignment } from "@/lib/requirements/generation-contract-types";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { resolveLengthContext, describeLengthContext } from "../../length-context";
 
 /**
  * Generic planner prompt — driven by the GenerationContract.
@@ -24,9 +25,13 @@ export function buildGenericPlannerPrompt(
 
   const rcDesc = responseComponents.map((rc, i) => {
     const topics = rc.requiredTopics.map(t => t.topic).join("; ");
+    const lenCtx = resolveLengthContext(rc.wordLimit);
+    const lengthBlock = lenCtx.minWords !== null || lenCtx.maxWords !== null
+      ? `\n${describeLengthContext(lenCtx)}`
+      : "";
     return `RESPONSE COMPONENT ${rc.componentId} (label: ${rc.label}, max ${rc.pageLimit.maxPages || "unspecified"} page(s)):
 Official prompt: "${rc.exactPrompt}"
-Required topics: ${topics}`;
+Required topics: ${topics}${lengthBlock}`;
   }).join("\n\n---\n\n");
 
   const facultyDesc = hasApprovedFaculty
@@ -39,6 +44,8 @@ CRITICAL: The document has ${responseComponents.length} separate response compon
 
 ${documentTypeGuidance ? `\n${documentTypeGuidance}\n` : ""}
 ${hasApprovedFaculty ? `The student has approved faculty alignment(s). Reference them ONLY as approved — do not invent new faculty relationships.\n${facultyDesc}` : "No faculty requirement for this application."}
+
+When a word range is given, plan enough substantive coverage across the required topics and approved evidence to support the target length. Do NOT pad and do NOT invent evidence — distribute sufficient substance, not filler.
 
 PLANNING TEXT IS STRUCTURAL GUIDANCE ONLY AND IS NOT EVIDENCE (Phase 38):
 - Your planning notes guide the Writer's narrative structure.

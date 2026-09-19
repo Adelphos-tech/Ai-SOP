@@ -17,6 +17,7 @@
 
 import { ResponseComponent, FacultyAlignment } from "@/lib/requirements/generation-contract-types";
 import { RenderFeedback, FinalizerFactReferences } from "@/lib/render/render-lifecycle-types";
+import { resolveLengthContext, describeLengthContext, wordsOf } from "../../length-context";
 
 export function buildGenericFinalizerPrompt(
   studentFactsText: string,
@@ -34,6 +35,35 @@ export function buildGenericFinalizerPrompt(
 Official prompt: "${rc.exactPrompt}"
 Required topics: ${topics}`;
   }).join("\n\n---\n\n");
+
+  // Length context — deterministic word counts on the pre-final (calibrated) text.
+  const calibratedWords = new Map<string, number>(
+    ((calibratedOutput?.responses || []) as Array<{ componentId: string; text?: string }>)
+      .map(r => [r.componentId, wordsOf(r.text)])
+  );
+  const lengthLines = responseComponents
+    .map(rc => {
+      const lenCtx = resolveLengthContext(rc.wordLimit);
+      if (lenCtx.minWords === null && lenCtx.maxWords === null) return null;
+      const current = calibratedWords.get(rc.componentId);
+      return `Component ${rc.componentId}: ${describeLengthContext(lenCtx, current)}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+  const lengthSection = lengthLines
+    ? `
+
+LENGTH REQUIREMENTS (deterministic word counts — authoritative):
+${lengthLines}
+
+- If a component is BELOW_MIN: compression is FORBIDDEN for it. Perform the
+  required factual cleanup, but preserve all supported substance and, where
+  rephrasing is permitted, expand supported content toward the target length
+  using only approved evidence. Never reduce a below-minimum component further.
+- If WITHIN_RANGE: normal bounded actions apply.
+- If ABOVE_MAX: compression may be used to return to range.
+- Never fabricate facts to change length.`
+    : "";
 
   let renderSection = "";
   if (renderFeedback && renderFeedback.components.length > 0) {
@@ -183,7 +213,7 @@ ${JSON.stringify(calibratedOutput, null, 2)}
 
 QUALITY REVIEW (includes factualRiskClaims with SEMANTIC_EXPANSION flags):
 ${JSON.stringify(qualityReview, null, 2)}
-${renderSection}${factRefSection}
+${renderSection}${lengthSection}${factRefSection}
 
 Finalize all response components. For each component, you MUST include retainedClaimIds, removedClaimIds, and repairClaims. If the Quality Reviewer flagged claims as SEMANTIC_EXPANSION or POTENTIALLY_UNSUPPORTED, delete those claims (add their IDs to removedClaimIds) rather than keeping unsupported assertions. Return ONLY the JSON.`;
 

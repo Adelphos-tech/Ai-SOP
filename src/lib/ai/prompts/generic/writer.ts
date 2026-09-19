@@ -1,6 +1,7 @@
 import { ResponseComponent, FacultyAlignment } from "@/lib/requirements/generation-contract-types";
 import type { ComponentEvidencePacket } from "../../component-evidence-packet";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { resolveLengthContext, describeLengthContext } from "../../length-context";
 
 /**
  * Phase 38A: Validate that every response component has a corresponding evidence packet.
@@ -77,8 +78,9 @@ export function buildGenericWriterPrompt(
     const constraint = rc.pageLimit.maxPages
       ? `Maximum physical pages: ${rc.pageLimit.maxPages}. Do NOT guess a word equivalent for this limit.`
       : "No page limit specified.";
-    const wordConstraint = rc.wordLimit?.max
-      ? `\nMaximum words: ${rc.wordLimit.max}`
+    const lenCtx = resolveLengthContext(rc.wordLimit);
+    const wordConstraint = lenCtx.minWords !== null || lenCtx.maxWords !== null
+      ? `\nWORD COUNT REQUIREMENT — STRICT:\n${describeLengthContext(lenCtx)}\nThe draft MUST remain within the requested range whenever sufficient approved evidence exists. Do not submit an intentionally under-length draft. Do not exceed the maximum. Reach the target through relevant explanation, supported reflection, and approved evidence — never fabricate information merely to increase length.`
       : "";
     const charConstraint = rc.characterLimit?.max
       ? `\nMaximum characters: ${rc.characterLimit.max}`

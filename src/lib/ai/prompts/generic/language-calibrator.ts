@@ -1,5 +1,7 @@
 import { LanguageProfile } from "../../types";
+import { ResponseComponent } from "@/lib/requirements/generation-contract-types";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { resolveLengthContext, describeLengthContext, wordsOf } from "../../length-context";
 
 /**
  * Phase 38 changes:
@@ -12,9 +14,28 @@ import { withSafetyBlock } from "../prompt-safety-block";
  */
 export function buildGenericLanguageCalibratorPrompt(
   writerOutput: any,
-  languageProfile: LanguageProfile
+  languageProfile: LanguageProfile,
+  responseComponents?: ResponseComponent[]
 ): { system: string; user: string } {
   const ep = (languageProfile as any).actualEnglishProficiency || {};
+
+  // Length preservation context — style pass must not destroy a required range.
+  const writerWords = new Map<string, number>(
+    ((writerOutput?.responses || []) as Array<{ componentId: string; text?: string }>)
+      .map(r => [r.componentId, wordsOf(r.text)])
+  );
+  const lengthLines = (responseComponents || [])
+    .map(rc => {
+      const lenCtx = resolveLengthContext(rc.wordLimit);
+      if (lenCtx.minWords === null && lenCtx.maxWords === null) return null;
+      const current = writerWords.get(rc.componentId);
+      return `Component ${rc.componentId}: ${describeLengthContext(lenCtx, current)}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+  const lengthSection = lengthLines
+    ? `\nLENGTH CONSTRAINTS (deterministic — do not destroy them):\n${lengthLines}\n- Preserve substantive content needed to satisfy the requested length range.\n- Do NOT intentionally compress a draft that is already at or below its minimum.\n`
+    : "";
 
   const system = `You are a language calibration specialist for application writing. Adjust EACH response component to match the student's actual English proficiency and desired writing profile.
 
@@ -43,6 +64,7 @@ STRICT CLAIM PRESERVATION (Phase 38):
 - You are NOT a factual/compliance problem solver. Those belong to Quality Reviewer / Finalizer.
 - Do NOT remove claims to fix compliance issues. Do NOT add claims to fill topic gaps.
 
+${lengthSection}
 LANGUAGE PROFILE:
 - Test: ${ep.testType || "Not specified"}
 - Overall: ${ep.overallScore || "Not specified"}

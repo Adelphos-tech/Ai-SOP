@@ -18,6 +18,7 @@ import type { ResponseComponent, ResponseComponentTopic } from "@/lib/requiremen
 import type { RenderFeedback } from "@/lib/render/render-lifecycle-types";
 import type { EvidenceLedger } from "./evidence-ledger";
 import { buildAuthorizedRepairEvidence, CandidateEvidence, TopicCoverageWithSuitability } from "./evidence-suitability";
+import { resolveLengthContext, lengthStatusFor, wordsOf } from "./length-context";
 
 export type ComponentAction =
   | "FREEZE"
@@ -79,6 +80,10 @@ export interface ComponentActionPlan {
   physicallyFits: boolean;
   /** Pre-final character count for length regression guard */
   preFinalCharacterCount: number;
+  /** Deterministic length signal — BELOW_MIN forbids shrink-only directives */
+  lengthStatus?: "BELOW_MIN" | "WITHIN_RANGE" | "ABOVE_MAX" | "NO_LIMIT";
+  currentWords?: number;
+  targetWords?: number | null;
   /** Pre-final page count for page regression guard */
   preFinalPageCount: number;
   topicEvidence?: TopicEvidence[];
@@ -266,6 +271,14 @@ export function planComponentActions(args: {
       blockingIssues.push({ componentId: rc.componentId, code: "REQUIRED_TOPIC_COVERAGE_UNKNOWN", message });
     }
 
+    // Deterministic length signal (word count on pre-final text).
+    // wordLimit.min now reaches the planner — a BELOW_MIN component must
+    // never be given a shrink directive.
+    const lenCtx = resolveLengthContext(rc.wordLimit);
+    const currentWords = wordsOf(calibratedResp?.text);
+    const lengthStatus = lengthStatusFor(currentWords, lenCtx);
+    const belowMin = lengthStatus === "BELOW_MIN";
+
     // Determine action
     let action: ComponentAction;
     let reason: string;
@@ -333,7 +346,14 @@ export function planComponentActions(args: {
       // The Finalizer must be allowed to delete/replace unsupported claims.
       // Use COMPRESS as the action since it allows editing without adding facts.
       action = "COMPRESS";
-      reason = "Factual cleanup required: remove or generalize unsupported claims without adding new facts.";
+      reason = belowMin
+        ? `Factual cleanup required AND document is BELOW_MIN (${currentWords}/${lenCtx.minWords} words): remove or generalize unsupported claims, but DO NOT reduce length — expand supported content toward ~${lenCtx.targetWords} words using approved evidence only.`
+        : "Factual cleanup required: remove or generalize unsupported claims without adding new facts.";
+    }
+    // COMPRESS must never be a shrink directive on a below-minimum component.
+    // (Real page overflow still wins — physical limits are hard constraints.)
+    if (action === "COMPRESS" && belowMin && !hasOverflow) {
+      reason = `${reason} LENGTH FLOOR: component is ${currentWords} words, below the ${lenCtx.minWords}-word minimum — do not shorten; where edits are permitted, expand supported content toward ~${lenCtx.targetWords} words.`;
     }
 
     plans.push({
@@ -344,6 +364,9 @@ export function planComponentActions(args: {
       allowedEvidenceIds: Array.from(new Set(allowedEvidenceIds)),
       physicallyFits,
       preFinalCharacterCount,
+      lengthStatus,
+      currentWords,
+      targetWords: lenCtx.targetWords,
       preFinalPageCount,
       topicEvidence,
       requiredTopics,

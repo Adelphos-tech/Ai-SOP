@@ -2,6 +2,7 @@ import type { ResponseComponent, FacultyAlignment } from "@/lib/requirements/gen
 import type { EvidenceLedger } from "../../evidence-ledger";
 import type { ComponentEvidencePacket } from "../../component-evidence-packet";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { resolveLengthContext, describeLengthContext, wordsOf } from "../../length-context";
 
 /**
  * Phase 38 changes:
@@ -27,9 +28,18 @@ export function buildGenericQualityReviewerPrompt(
     ? approvedFaculty.map(f => f.facultyName).join(", ")
     : "None";
 
+  // Deterministic word counts — QR receives the status, not arithmetic homework.
+  const writerWords = new Map<string, number>(
+    ((writerOutput?.responses || []) as Array<{ componentId: string; text?: string }>)
+      .map(r => [r.componentId, wordsOf(r.text)])
+  );
   const rcDesc = responseComponents.map(rc => {
     const topics = rc.requiredTopics.map(t => t.topic).join("; ");
-    const wordConstraint = rc.wordLimit?.max ? `\nWord limit: max ${rc.wordLimit.max}` : "";
+    const lenCtx = resolveLengthContext(rc.wordLimit);
+    const current = writerWords.get(rc.componentId);
+    const wordConstraint = lenCtx.minWords !== null || lenCtx.maxWords !== null
+      ? `\nWORD COUNT REQUIREMENT:\n${describeLengthContext(lenCtx, current)}\n(The word count and status above are computed deterministically — report wordCompliance from this status, not your own count.)`
+      : "";
     const charConstraint = rc.characterLimit?.max ? `\nCharacter limit: max ${rc.characterLimit.max}` : "";
     const pageConstraint = rc.pageLimit?.maxPages ? `\nPage limit: max ${rc.pageLimit.maxPages} physical pages (render-validated, not word count)` : "";
     return `RESPONSE COMPONENT ${rc.componentId} (label: ${rc.label}):

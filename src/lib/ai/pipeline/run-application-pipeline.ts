@@ -69,6 +69,7 @@ import { buildApplicationEvidenceBundle, ApplicationEvidenceBundle } from "../ap
 import { planComponentActions, ActionPlanResult } from "../component-action-planner";
 import { buildComponentEvidencePackets, validateWriterEvidenceReferences, ComponentEvidencePacket } from "../component-evidence-packet";
 import { normalizeStageOutput } from "./stage-contracts";
+import { resolveLengthContext, lengthStatusFor, wordsOf, LengthStatus } from "../length-context";
 import {
   validateLanguageCalibratorClaims,
   validateFinalizerClaims,
@@ -886,6 +887,27 @@ export async function runApplicationPipeline(
     }
     stageUsages.push(qualityResult.stageUsage);
 
+    // Deterministic length compliance — the server computes word counts;
+    // the model cannot contradict arithmetic. wordCompliance /
+    // requirementCompliance.wordLimit are normalized to the real status.
+    {
+      const complianceFor = (status: LengthStatus): "PASS" | "FAIL" | "N/A" =>
+        status === "NO_LIMIT" ? "N/A" : status === "WITHIN_RANGE" ? "PASS" : "FAIL";
+      const writerWordMap = new Map<string, number>(
+        (writerOutput.responses || []).map((r: any) => [r.componentId as string, wordsOf(r.text)])
+      );
+      for (const cs of qualityReview.componentScores || []) {
+        const rc = input.responseComponents.find(c => c.componentId === cs.componentId);
+        const ctx = resolveLengthContext(rc?.wordLimit);
+        const words = writerWordMap.get(cs.componentId) ?? 0;
+        const status = lengthStatusFor(words, ctx);
+        cs.wordCompliance = complianceFor(status);
+        if (qualityReview.requirementCompliance) {
+          qualityReview.requirementCompliance.wordLimit = complianceFor(status);
+        }
+      }
+    }
+
     // STAGE 4: LANGUAGE CALIBRATOR
     const languageProfile: LanguageProfile = {
       level: aiInput.writingPreferences.level || "Natural Professional",
@@ -900,7 +922,7 @@ export async function runApplicationPipeline(
         writingScore: aiInput.englishProficiency.writing,
       },
     } as LanguageProfile;
-    const calibratePrompt = buildGenericLanguageCalibratorPrompt(writerOutput, languageProfile);
+    const calibratePrompt = buildGenericLanguageCalibratorPrompt(writerOutput, languageProfile, input.responseComponents);
     const calibrateResult = await execStage(
       "languageCalibrator", calibratePrompt.system, calibratePrompt.user
     );
@@ -1196,7 +1218,11 @@ export async function runApplicationPipeline(
     stageUsages.push(factResult.stageUsage);
 
     // ===== DETERMINISTIC POST-FINAL CHECKS (no AI) =====
-    const postChecks = runPostFinalChecks(responses, input.responseComponents.length);
+    const postChecks = runPostFinalChecks(
+      responses,
+      input.responseComponents.length,
+      Object.fromEntries(input.responseComponents.map(rc => [rc.componentId, rc.wordLimit || {}]))
+    );
 
     // ===== COMPUTE FINAL COMPLIANCE =====
     // Phase 38A: Derive totals from components[].claims[] — do NOT trust model-reported totals
