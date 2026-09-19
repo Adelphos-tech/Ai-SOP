@@ -225,7 +225,7 @@ async function main() {
   console.log("\n--- H. Word limit appears when configured ---");
   // ============================================================
   assert(writerPrompt.user.includes("Maximum words: 500"), "Writer shows word limit");
-  assert(qualityPrompt.system.includes("Word limit: max 500"), "Quality Reviewer shows word limit");
+  assert(qualityPrompt.system.includes("Maximum words: 500"), "Quality Reviewer shows word limit");
 
   // ============================================================
   console.log("\n--- I. Page limit remains physical-page wording, not guessed word count ---");
