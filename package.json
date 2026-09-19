@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
     "@tiptap/pm": "^2.27.3",
     "@tiptap/react": "^2.27.3",
     "@tiptap/starter-kit": "^2.27.3",
@@ -23,6 +24,7 @@
     "puppeteer": "^25.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-hook-form": "^7.88.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

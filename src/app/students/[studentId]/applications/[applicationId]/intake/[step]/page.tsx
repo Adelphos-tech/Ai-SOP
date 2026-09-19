@@ -4,8 +4,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  useForm, FormProvider, useFormContext, useFieldArray, Controller,
+} from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import {
   PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
-  SectionCard, StatusBadge,
 } from "@/components/ui";
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass, TextAreaField } from "@/components/ui/FormField";
@@ -20,13 +23,27 @@ import {
   getCountryQuestionnaire,
   getAvailableCountries,
 } from "@/lib/application/country-questionnaire";
+import {
+  IntakeProfileSchema,
+  IntakeProfileForm,
+} from "@/lib/forms/intake-profile.schema";
 
 // ============================================================
-// 9-SECTION INTAKE PAGE
+// 9-SECTION INTAKE PAGE — React Hook Form + Zod
 // ============================================================
-// This page handles all 9 intake sections via a [step] dynamic route.
-// Each section loads/saves profile data via the /api/application/profile API.
-// All sections remain editable after completion.
+// RHF owns ALL unsaved editing state. The server-loaded canonical
+// profile becomes form values via reset() — no parallel editable
+// useState profile exists.
+//
+// Separations preserved (Phase-1 reliability fixes):
+//   - request-token guard: stale fetch may NOT reset() the form
+//   - identity reset: studentId/applicationId change clears everything
+//   - wizard hold: isDirty keeps the edited section mounted —
+//     FIELD CHANGE != NAVIGATION
+//   - completion (calculateIntakeCompletion) stays live for progress UI
+//     but never controls the rendered section while editing
+//   - revision-conditional PUT (409 → reload + message)
+//   - CVUpload keyed by studentId; on Applied → reset(server profile)
 // ============================================================
 
 interface Application {
@@ -54,33 +71,39 @@ export default function IntakePage() {
   const routeSection = INTAKE_SECTIONS.find(s => s.slug === stepSlug);
   const currentStep = routeSection?.id || 1;
 
-  const [profile, setProfile] = useState<any>(null);
   const [profileRevision, setProfileRevision] = useState<number>(0);
   const [application, setApplication] = useState<Application | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [dirty, setDirty] = useState(false);
-  // Remembers which missing section the wizard was working on — keeps the
-  // form mounted when the last field is typed but not yet saved.
+  // Remembers which missing section the wizard is editing — keeps the
+  // form mounted while fields are typed but not yet saved.
   const lastMissingSlugRef = useRef<string | null>(null);
   const [error, setError] = useState("");
   // Stale-request token — a response is only applied if it is still the
   // latest load for the current student/application identity.
   const loadTokenRef = useRef(0);
 
+  const methods = useForm<IntakeProfileForm>({
+    resolver: zodResolver(IntakeProfileSchema),
+    defaultValues: {},
+    mode: "onBlur",
+  });
+  const { reset, getValues, handleSubmit, watch, formState } = methods;
+  const isDirty = formState.isDirty;
+
   // Load profile + application. Identity change resets ALL id-scoped
   // state — no student-A state may remain observable under student B.
   useEffect(() => {
     loadTokenRef.current++; // invalidate any in-flight load
-    setProfile(null);
+    reset({});
     setProfileRevision(0);
     setApplication(null);
-    setDirty(false);
     setSaveStatus("idle");
     setError("");
     lastMissingSlugRef.current = null;
     loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId, applicationId]);
 
   async function loadAll() {
@@ -98,7 +121,9 @@ export default function IntakePage() {
       if (profileRes.ok) {
         const data = await profileRes.json();
         if (token !== loadTokenRef.current) return;
-        setProfile(data.profile || {});
+        // RHF owns editing state from here — full canonical profile,
+        // including fields with no registered input, survives intact.
+        reset(data.profile || {});
         setProfileRevision(typeof data.revision === "number" ? data.revision : 0);
       }
 
@@ -118,7 +143,7 @@ export default function IntakePage() {
   }
 
   // Save profile — throws on error so callers can block navigation
-  const saveProfile = useCallback(async (newProfile: any) => {
+  const saveProfile = useCallback(async (values: IntakeProfileForm) => {
     setSaving(true);
     setSaveStatus("saving");
     try {
@@ -127,13 +152,14 @@ export default function IntakePage() {
         headers: { "Content-Type": "application/json" },
         // Conditional write — never clobber a newer profile (e.g. a CV
         // apply that landed after this page loaded).
-        body: JSON.stringify({ studentId, profileData: newProfile, expectedRevision: profileRevision }),
+        body: JSON.stringify({ studentId, profileData: values, expectedRevision: profileRevision }),
       });
       if (res.ok) {
         const data = await res.json().catch(() => null);
         if (data && typeof data.revision === "number") setProfileRevision(data.revision);
         setSaveStatus("saved");
-        setDirty(false);
+        // reset() the saved values — isDirty returns to false.
+        reset(values);
         setTimeout(() => setSaveStatus("idle"), 2000);
       } else if (res.status === 409) {
         // Profile changed since load — reload fresh state, keep the
@@ -161,25 +187,14 @@ export default function IntakePage() {
     } finally {
       setSaving(false);
     }
-  }, [studentId, profileRevision]);
+  }, [studentId, profileRevision, reset]);
 
-  // Update profile helper — marks the form dirty so the save indicator
-  // only shows "Unsaved changes" after an actual edit
-  const updateProfile = useCallback((updater: (prev: any) => any) => {
-    setDirty(true);
-    setProfile((prev: any) => {
-      const next = updater(prev || {});
-      return next;
-    });
-  }, []);
-
-  // Save & Continue — blocks navigation if save fails.
+  // Save & Continue — validates, saves, blocks navigation on failure.
   // Wizard mode stays on /intake/missing and reloads so the next
   // missing required section becomes the current one.
-  async function handleSaveAndContinue() {
-    if (!profile) return;
+  const handleSaveAndContinue = handleSubmit(async (values) => {
     try {
-      await saveProfile(profile);
+      await saveProfile(values);
     } catch (err: any) {
       setError(err?.message || "Failed to save. Please try again.");
       return;
@@ -196,17 +211,16 @@ export default function IntakePage() {
       // Last section — go to application workspace
       router.push(`/students/${studentId}/applications/${applicationId}`);
     }
-  }
+  });
 
-  // Skip optional section — also save current progress before navigating
+  // Skip optional section — also save current progress before navigating.
+  // Skip intentionally saves without blocking validation (draft semantics).
   async function handleSkip() {
-    if (profile) {
-      try {
-        await saveProfile(profile);
-      } catch {
-        // If save fails on skip, still allow navigation but show warning
-        setError("Warning: progress may not have been saved.");
-      }
+    try {
+      await saveProfile(getValues());
+    } catch {
+      // If save fails on skip, still allow navigation but show warning
+      setError("Warning: progress may not have been saved.");
     }
     const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
     if (nextSection) {
@@ -215,6 +229,10 @@ export default function IntakePage() {
       router.push(`/students/${studentId}/applications/${applicationId}`);
     }
   }
+
+  // Live values for completion/progress — completion stays LIVE but
+  // never controls the rendered section while the user is editing.
+  const liveProfile = watch();
 
   if (loading) {
     return <PageContainer><div className="text-center py-12 text-dvivid-text-secondary text-sm">Loading...</div></PageContainer>;
@@ -233,8 +251,8 @@ export default function IntakePage() {
     );
   }
 
-  const completions = calculateIntakeCompletion(profile, application);
-  const readiness = getProfileReadiness(profile, application);
+  const completions = calculateIntakeCompletion(liveProfile, application);
+  const readiness = getProfileReadiness(liveProfile, application);
   const firstMissingSlug = readiness.sections.find(s => s.status === "missing")?.slug;
   const intakeComplete = readiness.canGenerate;
   const prevSection = INTAKE_SECTIONS.find(s => s.id === currentStep - 1);
@@ -242,10 +260,6 @@ export default function IntakePage() {
 
   // Wizard mode: the "current" section is the first missing required one.
   const missingRequired = readiness.sections.filter(s => !s.optional && s.status !== "complete");
-  // IMPORTANT: missingRequired derives from in-memory profile — typing the
-  // last missing field flips it to empty BEFORE the save. Never complete
-  // the wizard on unsaved state: while dirty, keep showing the section
-  // being edited so the Save button stays reachable.
   let wizardSection = missingRequired.length > 0
     ? INTAKE_SECTIONS.find(s => s.slug === missingRequired[0].slug) || null
     : null;
@@ -253,10 +267,10 @@ export default function IntakePage() {
   // section being edited stays mounted even if completion of its last
   // field promotes a different section to missingRequired[0]. The next
   // section is only chosen after an explicit Save & Continue.
-  if (wizardMode && dirty && lastMissingSlugRef.current) {
+  if (wizardMode && isDirty && lastMissingSlugRef.current) {
     wizardSection = INTAKE_SECTIONS.find(s => s.slug === lastMissingSlugRef.current) || wizardSection;
   }
-  if (wizardMode && !wizardSection && dirty) {
+  if (wizardMode && !wizardSection && isDirty) {
     // Edge: dirty with no tracked section — stay on Student Details
     // rather than crashing on a null currentSection.
     wizardSection = INTAKE_SECTIONS[0];
@@ -266,7 +280,7 @@ export default function IntakePage() {
   const displayStep = currentSection?.id || currentStep;
 
   // Wizard completion state — all required answers SAVED (not just typed).
-  if (wizardMode && !wizardSection && !dirty) {
+  if (wizardMode && !wizardSection && !isDirty) {
     return (
       <PageContainer>
         <div className="text-center py-16">
@@ -311,7 +325,7 @@ export default function IntakePage() {
             <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-muted">Optional</span>
           )}
         </div>
-        <SaveStatusIndicator status={saveStatus} saving={saving} dirty={dirty} />
+        <SaveStatusIndicator status={saveStatus} saving={saving} dirty={isDirty} />
       </div>
 
       {wizardMode ? (
@@ -336,34 +350,36 @@ export default function IntakePage() {
         </div>
       )}
 
-      {/* CV Upload — only on Section 1 */}
-      {displayStep === 1 && (
-        <div className="mb-6">
-          <CVUpload
-            key={studentId}
-            studentId={studentId}
-            profileRevision={profileRevision}
-            onApplied={async () => {
-              // Preserve typed-but-unsaved edits before reloading —
-              // a bare loadAll() would silently wipe them.
-              if (dirty && profile) {
-                try {
-                  await saveProfile(profile);
-                } catch {
-                  // Save failed — don't wipe the user's input; let them retry.
-                  return;
+      <FormProvider {...methods}>
+        {/* CV Upload — only on Section 1 */}
+        {displayStep === 1 && (
+          <div className="mb-6">
+            <CVUpload
+              key={studentId}
+              studentId={studentId}
+              profileRevision={profileRevision}
+              onApplied={async () => {
+                // Preserve typed-but-unsaved edits before reloading —
+                // a bare loadAll() would silently wipe them.
+                if (isDirty) {
+                  try {
+                    await saveProfile(getValues());
+                  } catch {
+                    // Save failed — don't wipe the user's input; let them retry.
+                    return;
+                  }
                 }
-              }
-              loadAll();
-            }}
-          />
-        </div>
-      )}
+                loadAll();
+              }}
+            />
+          </div>
+        )}
 
-      {/* Section content */}
-      <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6 mb-6">
-        {profile && renderSection(displayStep, profile, updateProfile, application)}
-      </div>
+        {/* Section content */}
+        <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6 mb-6">
+          {renderSection(displayStep, application)}
+        </div>
+      </FormProvider>
 
       {/* Navigation */}
       <div className="flex justify-between items-center flex-wrap gap-3">
@@ -400,7 +416,7 @@ export default function IntakePage() {
           {!wizardMode && currentSection!.optional && (
             <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
           )}
-          <PrimaryButton onClick={handleSaveAndContinue} disabled={saving}>
+          <PrimaryButton onClick={() => handleSaveAndContinue()} disabled={saving}>
             {saving ? "Saving..." : wizardMode
               ? (missingRequired.length > 1 ? "Save & Next Missing Answer →" : "Save & Finish →")
               : nextSection ? "Save & Continue →" : "Save & Finish →"}
@@ -432,19 +448,60 @@ function SaveStatusIndicator({ status, saving, dirty }: { status: string; saving
 }
 
 // ============================================================
+// RHF FIELD HELPERS
+// ============================================================
+function FieldError({ name }: { name: string }) {
+  const { formState: { errors } } = useFormContext<IntakeProfileForm>();
+  const err = name.split(".").reduce<any>((acc, k) => acc?.[k], errors);
+  const message = err?.message;
+  return message ? <p className="text-xs text-dvivid-error mt-1">{String(message)}</p> : null;
+}
+
+function Area({ name, rows, placeholder }: { name: string; rows?: number; placeholder?: string }) {
+  const { control } = useFormContext<IntakeProfileForm>();
+  return (
+    <Controller
+      control={control}
+      name={name as any}
+      render={({ field }) => (
+        <TextAreaField value={(field.value ?? "") as string} onChange={field.onChange} rows={rows} placeholder={placeholder} />
+      )}
+    />
+  );
+}
+
+function SkillListInput({ name, placeholder }: { name: string; placeholder?: string }) {
+  const { control } = useFormContext<IntakeProfileForm>();
+  return (
+    <Controller
+      control={control}
+      name={name as any}
+      render={({ field }) => (
+        <input
+          className={inputClass}
+          value={Array.isArray(field.value) ? field.value.join(", ") : String(field.value ?? "")}
+          onChange={e => field.onChange(e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))}
+          placeholder={placeholder}
+        />
+      )}
+    />
+  );
+}
+
+// ============================================================
 // SECTION RENDERERS
 // ============================================================
-function renderSection(step: number, profile: any, updateProfile: (fn: (prev: any) => any) => void, application: any): React.ReactNode {
+function renderSection(step: number, application: any): React.ReactNode {
   switch (step) {
-    case 1: return <StudentDetailsSection profile={profile} updateProfile={updateProfile} />;
-    case 2: return <FieldMotivationSection profile={profile} updateProfile={updateProfile} />;
-    case 3: return <AcademicsProjectsSection profile={profile} updateProfile={updateProfile} />;
-    case 4: return <WorkExperienceSection profile={profile} updateProfile={updateProfile} />;
-    case 5: return <MastersMotivationSection profile={profile} updateProfile={updateProfile} />;
-    case 6: return <CountryQuestionsSection profile={profile} updateProfile={updateProfile} application={application} />;
-    case 7: return <SubjectRequirementsSection profile={profile} updateProfile={updateProfile} />;
-    case 8: return <UniversityRequirementsSection profile={profile} updateProfile={updateProfile} application={application} />;
-    case 9: return <CareerGoalsSection profile={profile} updateProfile={updateProfile} />;
+    case 1: return <StudentDetailsSection />;
+    case 2: return <FieldMotivationSection />;
+    case 3: return <AcademicsProjectsSection />;
+    case 4: return <WorkExperienceSection />;
+    case 5: return <MastersMotivationSection />;
+    case 6: return <CountryQuestionsSection application={application} />;
+    case 7: return <SubjectRequirementsSection />;
+    case 8: return <UniversityRequirementsSection application={application} />;
+    case 9: return <CareerGoalsSection />;
     default: return null;
   }
 }
@@ -452,39 +509,9 @@ function renderSection(step: number, profile: any, updateProfile: (fn: (prev: an
 // ============================================================
 // SECTION 1: STUDENT DETAILS
 // ============================================================
-function StudentDetailsSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const pd = profile.personalData || {};
-  const education = profile.education || [];
-
-  const setPd = (key: string, value: string) => {
-    updateProfile(p => ({ ...p, personalData: { ...p.personalData, [key]: value } }));
-  };
-
-  const addEducation = () => {
-    updateProfile(p => ({
-      ...p,
-      education: [...(p.education || []), {
-        id: crypto.randomUUID(),
-        level: "", institution: "", degree: "", specialization: "",
-        startYear: "", endYear: "", cgpa: "", cgpaScale: "10",
-        percentage: "", backlogs: "", status: "",
-      }],
-    }));
-  };
-
-  const updateEducation = (id: string, key: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      education: (p.education || []).map((e: any) => e.id === id ? { ...e, [key]: value } : e),
-    }));
-  };
-
-  const removeEducation = (id: string) => {
-    updateProfile(p => ({
-      ...p,
-      education: (p.education || []).filter((e: any) => e.id !== id),
-    }));
-  };
+function StudentDetailsSection() {
+  const { register, control } = useFormContext<IntakeProfileForm>();
+  const edu = useFieldArray({ control: control as any, name: "education", keyName: "_key" });
 
   return (
     <div className="space-y-6">
@@ -493,28 +520,29 @@ function StudentDetailsSection({ profile, updateProfile }: { profile: any; updat
         <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Personal Information</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField label="First Name" required>
-            <input className={inputClass} name="given-name" autoComplete="given-name" value={pd.firstName || ""} onChange={e => setPd("firstName", e.target.value)} placeholder="John" />
+            <input className={inputClass} placeholder="John" {...register("personalData.firstName")} name="given-name" autoComplete="given-name" />
           </FormField>
           <FormField label="Last Name" required>
-            <input className={inputClass} name="family-name" autoComplete="family-name" value={pd.lastName || ""} onChange={e => setPd("lastName", e.target.value)} placeholder="Doe" />
+            <input className={inputClass} placeholder="Doe" {...register("personalData.lastName")} name="family-name" autoComplete="family-name" />
           </FormField>
           <FormField label="Email">
-            <input className={inputClass} name="email" autoComplete="email" type="email" value={pd.email || ""} onChange={e => setPd("email", e.target.value)} placeholder="john@example.com" />
+            <input className={inputClass} type="email" placeholder="john@example.com" {...register("personalData.email")} name="email" autoComplete="email" />
+            <FieldError name="personalData.email" />
           </FormField>
           <FormField label="Phone">
-            <input className={inputClass} name="tel" autoComplete="tel" type="tel" value={pd.phone || ""} onChange={e => setPd("phone", e.target.value)} placeholder="+91 98765 43210" />
+            <input className={inputClass} type="tel" placeholder="+91 98765 43210" {...register("personalData.phone")} name="tel" autoComplete="tel" />
           </FormField>
           <FormField label="Date of Birth">
-            <input type="date" className={inputClass} name="bday" autoComplete="bday" value={pd.dateOfBirth || ""} onChange={e => setPd("dateOfBirth", e.target.value)} />
+            <input type="date" className={inputClass} {...register("personalData.dateOfBirth")} name="bday" autoComplete="bday" />
           </FormField>
           <FormField label="Nationality" required>
-            <input className={inputClass} name="nationality" autoComplete="off" value={pd.nationality || ""} onChange={e => setPd("nationality", e.target.value)} placeholder="Indian" />
+            <input className={inputClass} placeholder="Indian" {...register("personalData.nationality")} name="nationality" autoComplete="off" />
           </FormField>
           <FormField label="Current City" required>
-            <input className={inputClass} name="address-level2" autoComplete="address-level2" value={pd.currentCity || ""} onChange={e => setPd("currentCity", e.target.value)} placeholder="Mumbai" />
+            <input className={inputClass} placeholder="Mumbai" {...register("personalData.currentCity")} name="address-level2" autoComplete="address-level2" />
           </FormField>
           <FormField label="Current Country" required>
-            <input className={inputClass} name="country-name" autoComplete="country-name" value={pd.currentCountry || ""} onChange={e => setPd("currentCountry", e.target.value)} placeholder="India" />
+            <input className={inputClass} placeholder="India" {...register("personalData.currentCountry")} name="country-name" autoComplete="country-name" />
           </FormField>
         </div>
       </div>
@@ -523,21 +551,27 @@ function StudentDetailsSection({ profile, updateProfile }: { profile: any; updat
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-dvivid-text-primary">Education</h3>
-          <button onClick={addEducation} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Education</button>
+          <button type="button" onClick={() => edu.append({
+            id: crypto.randomUUID(),
+            level: "", institution: "", degree: "", specialization: "",
+            startYear: "", endYear: "", cgpa: "", cgpaScale: "10",
+            percentage: "", backlogs: "", status: "",
+          } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Education</button>
         </div>
-        {education.length === 0 ? (
+        {edu.fields.length === 0 ? (
           <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No education records yet. Click "Add Education" to start.</p>
         ) : (
           <div className="space-y-4">
-            {education.map((edu: any, i: number) => (
-              <div key={edu.id} className="border border-dvivid-border rounded-input p-4 relative">
+            {edu.fields.map((f, i) => (
+              <div key={f._key} className="border border-dvivid-border rounded-input p-4 relative">
+                <input type="hidden" {...register(`education.${i}.id` as any)} />
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-sm font-medium text-dvivid-text-secondary">Education #{i + 1}</span>
-                  <button onClick={() => removeEducation(edu.id)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                  <button type="button" onClick={() => edu.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <FormField label="Degree Level">
-                    <select className={inputClass} value={edu.level || ""} onChange={e => updateEducation(edu.id, "level", e.target.value)}>
+                    <select className={inputClass} {...register(`education.${i}.level` as any)}>
                       <option value="">Select level</option>
                       <option value="10th">10th Grade</option>
                       <option value="12th">12th Grade</option>
@@ -548,25 +582,25 @@ function StudentDetailsSection({ profile, updateProfile }: { profile: any; updat
                     </select>
                   </FormField>
                   <FormField label="Institution / University">
-                    <input className={inputClass} value={edu.institution || ""} onChange={e => updateEducation(edu.id, "institution", e.target.value)} placeholder="IIT Bombay" />
+                    <input className={inputClass} placeholder="IIT Bombay" {...register(`education.${i}.institution` as any)} />
                   </FormField>
                   <FormField label="Field / Major">
-                    <input className={inputClass} value={edu.specialization || ""} onChange={e => updateEducation(edu.id, "specialization", e.target.value)} placeholder="Computer Science" />
+                    <input className={inputClass} placeholder="Computer Science" {...register(`education.${i}.specialization` as any)} />
                   </FormField>
                   <FormField label="CGPA / GPA">
-                    <input className={inputClass} value={edu.cgpa || ""} onChange={e => updateEducation(edu.id, "cgpa", e.target.value)} placeholder="8.5" />
+                    <input className={inputClass} placeholder="8.5" {...register(`education.${i}.cgpa` as any)} />
                   </FormField>
                   <FormField label="Maximum GPA Scale">
-                    <input className={inputClass} value={edu.cgpaScale || ""} onChange={e => updateEducation(edu.id, "cgpaScale", e.target.value)} placeholder="10" />
+                    <input className={inputClass} placeholder="10" {...register(`education.${i}.cgpaScale` as any)} />
                   </FormField>
                   <FormField label="Start Year">
-                    <input className={inputClass} value={edu.startYear || ""} onChange={e => updateEducation(edu.id, "startYear", e.target.value)} placeholder="2020" />
+                    <input className={inputClass} placeholder="2020" {...register(`education.${i}.startYear` as any)} />
                   </FormField>
                   <FormField label="Graduation Year">
-                    <input className={inputClass} value={edu.endYear || ""} onChange={e => updateEducation(edu.id, "endYear", e.target.value)} placeholder="2024" />
+                    <input className={inputClass} placeholder="2024" {...register(`education.${i}.endYear` as any)} />
                   </FormField>
                   <FormField label="Backlogs (if any)">
-                    <input className={inputClass} value={edu.backlogs || ""} onChange={e => updateEducation(edu.id, "backlogs", e.target.value)} placeholder="0" />
+                    <input className={inputClass} placeholder="0" {...register(`education.${i}.backlogs` as any)} />
                   </FormField>
                 </div>
               </div>
@@ -581,18 +615,11 @@ function StudentDetailsSection({ profile, updateProfile }: { profile: any; updat
 // ============================================================
 // SECTION 2: FIELD MOTIVATION
 // ============================================================
-function FieldMotivationSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const fm = profile.fieldMotivation || "";
-
+function FieldMotivationSection() {
   return (
     <div className="space-y-4">
       <FormField label="Why did you choose this field of study?" helper="This is optional but helps the AI understand your motivation.">
-        <TextAreaField
-          value={fm}
-          onChange={v => updateProfile(p => ({ ...p, fieldMotivation: v }))}
-          placeholder="I first became interested in computer science when..."
-          rows={8}
-        />
+        <Area name="fieldMotivation" rows={8} placeholder="I first became interested in computer science when..." />
       </FormField>
       <div className="bg-dvivid-primary-light/30 rounded-input p-4 space-y-2">
         <p className="text-sm font-medium text-dvivid-text-primary">Helper prompts (optional):</p>
@@ -609,58 +636,10 @@ function FieldMotivationSection({ profile, updateProfile }: { profile: any; upda
 // ============================================================
 // SECTION 3: ACADEMICS & PROJECTS
 // ============================================================
-function AcademicsProjectsSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const projects = profile.projects || [];
-  const subjects = profile.subjects || [];
-  const skills = profile.skills || { technical: [], tools: [], programming: [], domain: [], soft: [] };
-
-  // Projects
-  const addProject = () => {
-    updateProfile(p => ({
-      ...p,
-      projects: [...(p.projects || []), {
-        id: crypto.randomUUID(),
-        name: "", type: "", description: "", role: "",
-        objective: "", technologies: "", methods: "",
-        outcome: "", challenges: "", whatLearned: "", whyChosen: "",
-      }],
-    }));
-  };
-
-  const updateProject = (id: string, key: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      projects: (p.projects || []).map((pr: any) => pr.id === id ? { ...pr, [key]: value } : pr),
-    }));
-  };
-
-  const removeProject = (id: string) => {
-    updateProfile(p => ({ ...p, projects: (p.projects || []).filter((pr: any) => pr.id !== id) }));
-  };
-
-  // Subjects
-  const addSubject = () => {
-    updateProfile(p => ({
-      ...p,
-      subjects: [...(p.subjects || []), { id: crypto.randomUUID(), name: "", topics: "", relevance: "" }],
-    }));
-  };
-
-  const updateSubject = (id: string, key: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      subjects: (p.subjects || []).map((s: any) => s.id === id ? { ...s, [key]: value } : s),
-    }));
-  };
-
-  const removeSubject = (id: string) => {
-    updateProfile(p => ({ ...p, subjects: (p.subjects || []).filter((s: any) => s.id !== id) }));
-  };
-
-  // Skills
-  const setSkill = (key: string, value: string[]) => {
-    updateProfile(p => ({ ...p, skills: { ...(p.skills || {}), [key]: value } }));
-  };
+function AcademicsProjectsSection() {
+  const { register, control } = useFormContext<IntakeProfileForm>();
+  const projects = useFieldArray({ control: control as any, name: "projects", keyName: "_key" });
+  const subjects = useFieldArray({ control: control as any, name: "subjects", keyName: "_key" });
 
   return (
     <div className="space-y-8">
@@ -668,30 +647,36 @@ function AcademicsProjectsSection({ profile, updateProfile }: { profile: any; up
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-dvivid-text-primary">Projects</h3>
-          <button onClick={addProject} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Project</button>
+          <button type="button" onClick={() => projects.append({
+            id: crypto.randomUUID(),
+            name: "", type: "", description: "", role: "",
+            objective: "", technologies: "", methods: "",
+            outcome: "", challenges: "", whatLearned: "", whyChosen: "",
+          } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Project</button>
         </div>
-        {projects.length === 0 ? (
+        {projects.fields.length === 0 ? (
           <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No projects yet.</p>
         ) : (
           <div className="space-y-4">
-            {projects.map((proj: any, i: number) => (
-              <div key={proj.id} className="border border-dvivid-border rounded-input p-4">
+            {projects.fields.map((f, i) => (
+              <div key={f._key} className="border border-dvivid-border rounded-input p-4">
+                <input type="hidden" {...register(`projects.${i}.id` as any)} />
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-sm font-medium text-dvivid-text-secondary">Project #{i + 1}</span>
-                  <button onClick={() => removeProject(proj.id)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                  <button type="button" onClick={() => projects.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <FormField label="Project Name"><input className={inputClass} value={proj.name || ""} onChange={e => updateProject(proj.id, "name", e.target.value)} /></FormField>
-                  <FormField label="Project Type"><input className={inputClass} value={proj.type || ""} onChange={e => updateProject(proj.id, "type", e.target.value)} placeholder="Academic / Personal / Research" /></FormField>
-                  <FormField label="Your Role"><input className={inputClass} value={proj.role || ""} onChange={e => updateProject(proj.id, "role", e.target.value)} /></FormField>
-                  <FormField label="Tools / Technologies"><input className={inputClass} value={proj.technologies || ""} onChange={e => updateProject(proj.id, "technologies", e.target.value)} /></FormField>
-                  <FormField label="Objective / Problem" className="md:col-span-2"><input className={inputClass} value={proj.objective || ""} onChange={e => updateProject(proj.id, "objective", e.target.value)} /></FormField>
-                  <FormField label="Description" className="md:col-span-2"><TextAreaField value={proj.description || ""} onChange={v => updateProject(proj.id, "description", v)} rows={3} /></FormField>
-                  <FormField label="Methods Used"><input className={inputClass} value={proj.methods || ""} onChange={e => updateProject(proj.id, "methods", e.target.value)} /></FormField>
-                  <FormField label="Outcome"><input className={inputClass} value={proj.outcome || ""} onChange={e => updateProject(proj.id, "outcome", e.target.value)} /></FormField>
-                  <FormField label="Challenges"><input className={inputClass} value={proj.challenges || ""} onChange={e => updateProject(proj.id, "challenges", e.target.value)} /></FormField>
-                  <FormField label="What You Learned"><input className={inputClass} value={proj.whatLearned || ""} onChange={e => updateProject(proj.id, "whatLearned", e.target.value)} /></FormField>
-                  <FormField label="Why You Chose This Project" className="md:col-span-2"><input className={inputClass} value={proj.whyChosen || ""} onChange={e => updateProject(proj.id, "whyChosen", e.target.value)} /></FormField>
+                  <FormField label="Project Name"><input className={inputClass} {...register(`projects.${i}.name` as any)} /></FormField>
+                  <FormField label="Project Type"><input className={inputClass} placeholder="Academic / Personal / Research" {...register(`projects.${i}.type` as any)} /></FormField>
+                  <FormField label="Your Role"><input className={inputClass} {...register(`projects.${i}.role` as any)} /></FormField>
+                  <FormField label="Tools / Technologies"><input className={inputClass} {...register(`projects.${i}.technologies` as any)} /></FormField>
+                  <FormField label="Objective / Problem" className="md:col-span-2"><input className={inputClass} {...register(`projects.${i}.objective` as any)} /></FormField>
+                  <FormField label="Description" className="md:col-span-2"><Area name={`projects.${i}.description`} rows={3} /></FormField>
+                  <FormField label="Methods Used"><input className={inputClass} {...register(`projects.${i}.methods` as any)} /></FormField>
+                  <FormField label="Outcome"><input className={inputClass} {...register(`projects.${i}.outcome` as any)} /></FormField>
+                  <FormField label="Challenges"><input className={inputClass} {...register(`projects.${i}.challenges` as any)} /></FormField>
+                  <FormField label="What You Learned"><input className={inputClass} {...register(`projects.${i}.whatLearned` as any)} /></FormField>
+                  <FormField label="Why You Chose This Project" className="md:col-span-2"><input className={inputClass} {...register(`projects.${i}.whyChosen` as any)} /></FormField>
                 </div>
               </div>
             ))}
@@ -703,22 +688,23 @@ function AcademicsProjectsSection({ profile, updateProfile }: { profile: any; up
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-dvivid-text-primary">Subjects Learned</h3>
-          <button onClick={addSubject} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Subject</button>
+          <button type="button" onClick={() => subjects.append({ id: crypto.randomUUID(), name: "", topics: "", relevance: "" } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Subject</button>
         </div>
-        {subjects.length === 0 ? (
+        {subjects.fields.length === 0 ? (
           <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No subjects yet.</p>
         ) : (
           <div className="space-y-3">
-            {subjects.map((sub: any, i: number) => (
-              <div key={sub.id} className="border border-dvivid-border rounded-input p-3">
+            {subjects.fields.map((f, i) => (
+              <div key={f._key} className="border border-dvivid-border rounded-input p-3">
+                <input type="hidden" {...register(`subjects.${i}.id` as any)} />
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-dvivid-text-secondary">Subject #{i + 1}</span>
-                  <button onClick={() => removeSubject(sub.id)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                  <button type="button" onClick={() => subjects.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <FormField label="Subject Name"><input className={inputClass} value={sub.name || ""} onChange={e => updateSubject(sub.id, "name", e.target.value)} /></FormField>
-                  <FormField label="Important Topics"><input className={inputClass} value={sub.topics || ""} onChange={e => updateSubject(sub.id, "topics", e.target.value)} /></FormField>
-                  <FormField label="Relevance to Future Study"><input className={inputClass} value={sub.relevance || ""} onChange={e => updateSubject(sub.id, "relevance", e.target.value)} /></FormField>
+                  <FormField label="Subject Name"><input className={inputClass} {...register(`subjects.${i}.name` as any)} /></FormField>
+                  <FormField label="Important Topics"><input className={inputClass} {...register(`subjects.${i}.topics` as any)} /></FormField>
+                  <FormField label="Relevance to Future Study"><input className={inputClass} {...register(`subjects.${i}.relevance` as any)} /></FormField>
                 </div>
               </div>
             ))}
@@ -730,12 +716,12 @@ function AcademicsProjectsSection({ profile, updateProfile }: { profile: any; up
       <div>
         <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Skills</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FormField label="Technical Skills" helper="Comma-separated"><input className={inputClass} value={(skills.technical || []).join(", ")} onChange={e => setSkill("technical", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))} placeholder="Machine Learning, Data Analysis" /></FormField>
-          <FormField label="Tools" helper="Comma-separated"><input className={inputClass} value={(skills.tools || []).join(", ")} onChange={e => setSkill("tools", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))} placeholder="Git, JIRA, Tableau" /></FormField>
-          <FormField label="Software" helper="Comma-separated"><input className={inputClass} value={(skills.software || []).join(", ")} onChange={e => setSkill("software", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))} placeholder="MATLAB, AutoCAD" /></FormField>
-          <FormField label="Programming Languages" helper="Comma-separated"><input className={inputClass} value={(skills.programming || []).join(", ")} onChange={e => setSkill("programming", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))} placeholder="Python, Java, C++" /></FormField>
-          <FormField label="Domain Skills" helper="Comma-separated"><input className={inputClass} value={(skills.domain || []).join(", ")} onChange={e => setSkill("domain", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))} placeholder="Financial Modeling, Circuit Design" /></FormField>
-          <FormField label="Soft Skills" helper="Comma-separated"><input className={inputClass} value={(skills.soft || []).join(", ")} onChange={e => setSkill("soft", e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean))} placeholder="Leadership, Communication" /></FormField>
+          <FormField label="Technical Skills" helper="Comma-separated"><SkillListInput name="skills.technical" placeholder="Machine Learning, Data Analysis" /></FormField>
+          <FormField label="Tools" helper="Comma-separated"><SkillListInput name="skills.tools" placeholder="Git, JIRA, Tableau" /></FormField>
+          <FormField label="Software" helper="Comma-separated"><SkillListInput name="skills.software" placeholder="MATLAB, AutoCAD" /></FormField>
+          <FormField label="Programming Languages" helper="Comma-separated"><SkillListInput name="skills.programming" placeholder="Python, Java, C++" /></FormField>
+          <FormField label="Domain Skills" helper="Comma-separated"><SkillListInput name="skills.domain" placeholder="Financial Modeling, Circuit Design" /></FormField>
+          <FormField label="Soft Skills" helper="Comma-separated"><SkillListInput name="skills.soft" placeholder="Leadership, Communication" /></FormField>
         </div>
       </div>
     </div>
@@ -745,48 +731,27 @@ function AcademicsProjectsSection({ profile, updateProfile }: { profile: any; up
 // ============================================================
 // SECTION 4: WORK EXPERIENCE
 // ============================================================
-function WorkExperienceSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const experience = profile.experience || [];
-
-  const addExperience = () => {
-    updateProfile(p => ({
-      ...p,
-      experience: [...(p.experience || []), {
-        id: crypto.randomUUID(),
-        type: "", organization: "", role: "", location: "",
-        startDate: "", endDate: "", currentlyWorking: false,
-        responsibilities: "", achievements: "", skillsUsed: "",
-        keyLearning: "", relevanceToMasters: "",
-      }],
-    }));
-  };
-
-  const updateExp = (id: string, key: string, value: any) => {
-    updateProfile(p => ({
-      ...p,
-      experience: (p.experience || []).map((e: any) => e.id === id ? { ...e, [key]: value } : e),
-    }));
-  };
-
-  const removeExp = (id: string) => {
-    updateProfile(p => ({ ...p, experience: (p.experience || []).filter((e: any) => e.id !== id) }));
-  };
+function WorkExperienceSection() {
+  const { register, control } = useFormContext<IntakeProfileForm>();
+  const exp = useFieldArray({ control: control as any, name: "experience", keyName: "_key" });
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-dvivid-text-primary">Work Experience</h3>
-        <button onClick={addExperience} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Experience</button>
+        <button type="button" onClick={() => exp.append({
+          id: crypto.randomUUID(),
+          type: "", organization: "", role: "", location: "",
+          startDate: "", endDate: "", currentlyWorking: false,
+          responsibilities: "", achievements: "", skillsUsed: "",
+          keyLearning: "", relevanceToMasters: "",
+        } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Experience</button>
       </div>
-      {experience.length === 0 ? (
+      {exp.fields.length === 0 ? (
         <div className="py-4 px-4 bg-gray-50 rounded-input space-y-3">
           <p className="text-sm text-dvivid-text-muted text-center">No experience records yet.</p>
           <label className="flex items-center justify-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={profile.noWorkExperience === true}
-              onChange={e => updateProfile(p => ({ ...p, noWorkExperience: e.target.checked }))}
-            />
+            <input type="checkbox" {...register("noWorkExperience")} />
             <span className="text-sm text-dvivid-text-secondary">
               This applicant has no work experience (e.g., fresher applying directly after bachelor's)
             </span>
@@ -794,15 +759,16 @@ function WorkExperienceSection({ profile, updateProfile }: { profile: any; updat
         </div>
       ) : (
         <div className="space-y-4">
-          {experience.map((exp: any, i: number) => (
-            <div key={exp.id} className="border border-dvivid-border rounded-input p-4">
+          {exp.fields.map((f, i) => (
+            <div key={f._key} className="border border-dvivid-border rounded-input p-4">
+              <input type="hidden" {...register(`experience.${i}.id` as any)} />
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm font-medium text-dvivid-text-secondary">Experience #{i + 1}</span>
-                <button onClick={() => removeExp(exp.id)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                <button type="button" onClick={() => exp.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <FormField label="Type">
-                  <select className={inputClass} value={exp.type || ""} onChange={e => updateExp(exp.id, "type", e.target.value)}>
+                  <select className={inputClass} {...register(`experience.${i}.type` as any)}>
                     <option value="">Select type</option>
                     <option value="Internship">Internship</option>
                     <option value="Full-time Job">Full-time Job</option>
@@ -811,24 +777,30 @@ function WorkExperienceSection({ profile, updateProfile }: { profile: any; updat
                     <option value="Other">Other Experience</option>
                   </select>
                 </FormField>
-                <FormField label="Organization"><input className={inputClass} value={exp.organization || ""} onChange={e => updateExp(exp.id, "organization", e.target.value)} /></FormField>
-                <FormField label="Role"><input className={inputClass} value={exp.role || ""} onChange={e => updateExp(exp.id, "role", e.target.value)} /></FormField>
-                <FormField label="Location"><input className={inputClass} value={exp.location || ""} onChange={e => updateExp(exp.id, "location", e.target.value)} /></FormField>
-                <FormField label="Start Date"><input type="month" className={inputClass} value={exp.startDate || ""} onChange={e => updateExp(exp.id, "startDate", e.target.value)} /></FormField>
-                <FormField label="End Date">
-                  <input type="month" className={inputClass} value={exp.endDate || ""} onChange={e => updateExp(exp.id, "endDate", e.target.value)} disabled={exp.currentlyWorking} />
-                </FormField>
+                <FormField label="Organization"><input className={inputClass} {...register(`experience.${i}.organization` as any)} /></FormField>
+                <FormField label="Role"><input className={inputClass} {...register(`experience.${i}.role` as any)} /></FormField>
+                <FormField label="Location"><input className={inputClass} {...register(`experience.${i}.location` as any)} /></FormField>
+                <FormField label="Start Date"><input type="month" className={inputClass} {...register(`experience.${i}.startDate` as any)} /></FormField>
+                <Controller
+                  control={control}
+                  name={`experience.${i}.currentlyWorking` as any}
+                  render={({ field }) => (
+                    <FormField label="End Date">
+                      <input type="month" className={inputClass} disabled={field.value === true} {...register(`experience.${i}.endDate` as any)} />
+                    </FormField>
+                  )}
+                />
                 <FormField label="Currently Working" className="md:col-span-2">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={exp.currentlyWorking || false} onChange={e => updateExp(exp.id, "currentlyWorking", e.target.checked)} />
+                    <input type="checkbox" {...register(`experience.${i}.currentlyWorking` as any)} />
                     <span className="text-sm text-dvivid-text-secondary">I currently work here</span>
                   </label>
                 </FormField>
-                <FormField label="Responsibilities" className="md:col-span-2"><TextAreaField value={exp.responsibilities || ""} onChange={v => updateExp(exp.id, "responsibilities", v)} rows={3} /></FormField>
-                <FormField label="Achievements" className="md:col-span-2"><TextAreaField value={exp.achievements || ""} onChange={v => updateExp(exp.id, "achievements", v)} rows={2} /></FormField>
-                <FormField label="Tools/Skills Used"><input className={inputClass} value={exp.skillsUsed || ""} onChange={e => updateExp(exp.id, "skillsUsed", e.target.value)} /></FormField>
-                <FormField label="Key Learning"><input className={inputClass} value={exp.keyLearning || ""} onChange={e => updateExp(exp.id, "keyLearning", e.target.value)} /></FormField>
-                <FormField label="Relevance to Master's" className="md:col-span-2"><input className={inputClass} value={exp.relevanceToMasters || ""} onChange={e => updateExp(exp.id, "relevanceToMasters", e.target.value)} /></FormField>
+                <FormField label="Responsibilities" className="md:col-span-2"><Area name={`experience.${i}.responsibilities`} rows={3} /></FormField>
+                <FormField label="Achievements" className="md:col-span-2"><Area name={`experience.${i}.achievements`} rows={2} /></FormField>
+                <FormField label="Skills Used"><input className={inputClass} {...register(`experience.${i}.skillsUsed` as any)} /></FormField>
+                <FormField label="Key Learning"><input className={inputClass} {...register(`experience.${i}.keyLearning` as any)} /></FormField>
+                <FormField label="Relevance to Master's" className="md:col-span-2"><input className={inputClass} {...register(`experience.${i}.relevanceToMasters` as any)} /></FormField>
               </div>
             </div>
           ))}
@@ -841,29 +813,23 @@ function WorkExperienceSection({ profile, updateProfile }: { profile: any; updat
 // ============================================================
 // SECTION 5: MASTER'S MOTIVATION
 // ============================================================
-function MastersMotivationSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const mm = profile.mastersMotivation || {};
-
-  const set = (key: string, value: string) => {
-    updateProfile(p => ({ ...p, mastersMotivation: { ...(p.mastersMotivation || {}), [key]: value } }));
-  };
-
+function MastersMotivationSection() {
   return (
     <div className="space-y-4">
       <FormField label="Why do you want to pursue a master's degree in this specific field?" required>
-        <TextAreaField value={mm.whyField || ""} onChange={v => set("whyField", v)} rows={4} placeholder="I want to pursue a master's in this field because..." />
+        <Area name="mastersMotivation.whyField" rows={4} placeholder="I want to pursue a master's in this field because..." />
       </FormField>
       <FormField label="Why master's now?">
-        <TextAreaField value={mm.whyNow || ""} onChange={v => set("whyNow", v)} rows={3} placeholder="Now is the right time because..." />
+        <Area name="mastersMotivation.whyNow" rows={3} placeholder="Now is the right time because..." />
       </FormField>
       <FormField label="Knowledge/skill gaps you want to address">
-        <TextAreaField value={mm.skillGaps || ""} onChange={v => set("skillGaps", v)} rows={3} placeholder="I want to address gaps in..." />
+        <Area name="mastersMotivation.skillGaps" rows={3} placeholder="I want to address gaps in..." />
       </FormField>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="Academic motivation"><TextAreaField value={mm.academicMotivation || ""} onChange={v => set("academicMotivation", v)} rows={3} /></FormField>
-        <FormField label="Professional motivation"><TextAreaField value={mm.professionalMotivation || ""} onChange={v => set("professionalMotivation", v)} rows={3} /></FormField>
-        <FormField label="Expected learning"><TextAreaField value={mm.expectedLearning || ""} onChange={v => set("expectedLearning", v)} rows={3} /></FormField>
-        <FormField label="How master's supports career plans"><TextAreaField value={mm.careerSupport || ""} onChange={v => set("careerSupport", v)} rows={3} /></FormField>
+        <FormField label="Academic motivation"><Area name="mastersMotivation.academicMotivation" rows={3} /></FormField>
+        <FormField label="Professional motivation"><Area name="mastersMotivation.professionalMotivation" rows={3} /></FormField>
+        <FormField label="Expected learning"><Area name="mastersMotivation.expectedLearning" rows={3} /></FormField>
+        <FormField label="How master's supports career plans"><Area name="mastersMotivation.careerSupport" rows={3} /></FormField>
       </div>
     </div>
   );
@@ -872,39 +838,34 @@ function MastersMotivationSection({ profile, updateProfile }: { profile: any; up
 // ============================================================
 // SECTION 6: COUNTRY QUESTIONS
 // ============================================================
-function CountryQuestionsSection({ profile, updateProfile, application }: { profile: any; updateProfile: (fn: (prev: any) => any) => void; application: any }) {
-  const cq = profile.countryQuestionnaire || {};
-  const countryCode = cq.countryCode || application?.country || "";
-  const answers = cq.answers || {};
+function CountryQuestionsSection({ application }: { application: any }) {
+  const { register, control, watch, setValue } = useFormContext<IntakeProfileForm>();
+  const countryCode = watch("countryQuestionnaire.countryCode") || application?.country || "";
   const questionnaire = getCountryQuestionnaire(countryCode);
   const countries = getAvailableCountries();
-
-  const setCountry = (code: string) => {
-    updateProfile(p => ({
-      ...p,
-      countryQuestionnaire: { ...(p.countryQuestionnaire || {}), countryCode: code, answers: {} },
-    }));
-  };
-
-  const setAnswer = (questionId: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      countryQuestionnaire: {
-        ...(p.countryQuestionnaire || {}),
-        countryCode: countryCode,
-        answers: { ...((p.countryQuestionnaire || {}).answers || {}), [questionId]: value },
-      },
-    }));
-  };
 
   return (
     <div className="space-y-4">
       <FormField label="Select Destination Country" required>
-        <select className={inputClass} value={countryCode} onChange={e => setCountry(e.target.value)}>
-          <option value="">Select country</option>
-          {countries.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
-          <option value="OTHER">Other</option>
-        </select>
+        <Controller
+          control={control}
+          name="countryQuestionnaire.countryCode"
+          render={({ field }) => (
+            <select
+              className={inputClass}
+              value={field.value ?? countryCode}
+              onChange={e => {
+                field.onChange(e.target.value);
+                // Changing destination clears the previous country's answers
+                setValue("countryQuestionnaire.answers" as any, {});
+              }}
+            >
+              <option value="">Select country</option>
+              {countries.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
+              <option value="OTHER">Other</option>
+            </select>
+          )}
+        />
       </FormField>
 
       {countryCode && (
@@ -914,12 +875,7 @@ function CountryQuestionsSection({ profile, updateProfile, application }: { prof
           </p>
           {questionnaire.questions.map(q => (
             <FormField key={q.id} label={q.label} required={q.required} helper={q.helper}>
-              <TextAreaField
-                value={answers[q.id] || ""}
-                onChange={v => setAnswer(q.id, v)}
-                placeholder={q.placeholder}
-                rows={4}
-              />
+              <Area name={`countryQuestionnaire.answers["${q.id}"]`} rows={4} placeholder={q.placeholder} />
             </FormField>
           ))}
         </div>
@@ -931,39 +887,9 @@ function CountryQuestionsSection({ profile, updateProfile, application }: { prof
 // ============================================================
 // SECTION 7: SUBJECT REQUIREMENTS
 // ============================================================
-function SubjectRequirementsSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const sr = profile.subjectRequirements || { notes: [] };
-  const notes = sr.notes || [];
-
-  const addNote = () => {
-    updateProfile(p => ({
-      ...p,
-      subjectRequirements: {
-        ...(p.subjectRequirements || { notes: [] }),
-        notes: [...(p.subjectRequirements?.notes || []), { id: crypto.randomUUID(), type: "consultant", content: "" }],
-      },
-    }));
-  };
-
-  const updateNote = (id: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      subjectRequirements: {
-        ...(p.subjectRequirements || { notes: [] }),
-        notes: (p.subjectRequirements?.notes || []).map((n: any) => n.id === id ? { ...n, content: value } : n),
-      },
-    }));
-  };
-
-  const removeNote = (id: string) => {
-    updateProfile(p => ({
-      ...p,
-      subjectRequirements: {
-        ...(p.subjectRequirements || { notes: [] }),
-        notes: (p.subjectRequirements?.notes || []).filter((n: any) => n.id !== id),
-      },
-    }));
-  };
+function SubjectRequirementsSection() {
+  const { register, control } = useFormContext<IntakeProfileForm>();
+  const notes = useFieldArray({ control: control as any, name: "subjectRequirements.notes", keyName: "_key" });
 
   return (
     <div className="space-y-4">
@@ -974,20 +900,22 @@ function SubjectRequirementsSection({ profile, updateProfile }: { profile: any; 
 
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-dvivid-text-primary">Consultant-Added Notes</h3>
-        <button onClick={addNote} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Note</button>
+        <button type="button" onClick={() => notes.append({ id: crypto.randomUUID(), type: "consultant", content: "" } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Note</button>
       </div>
 
-      {notes.length === 0 ? (
+      {notes.fields.length === 0 ? (
         <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No notes added.</p>
       ) : (
         <div className="space-y-3">
-          {notes.map((note: any, i: number) => (
-            <div key={note.id} className="border border-dvivid-border rounded-input p-3">
+          {notes.fields.map((f, i) => (
+            <div key={f._key} className="border border-dvivid-border rounded-input p-3">
+              <input type="hidden" {...register(`subjectRequirements.notes.${i}.id` as any)} />
+              <input type="hidden" {...register(`subjectRequirements.notes.${i}.type` as any)} />
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs px-2 py-0.5 rounded-full bg-dvivid-primary-light text-dvivid-primary">Consultant Added</span>
-                <button onClick={() => removeNote(note.id)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                <button type="button" onClick={() => notes.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
               </div>
-              <TextAreaField value={note.content || ""} onChange={v => updateNote(note.id, v)} rows={3} placeholder="Enter requirement note..." />
+              <Area name={`subjectRequirements.notes.${i}.content`} rows={3} placeholder="Enter requirement note..." />
             </div>
           ))}
         </div>
@@ -1006,12 +934,9 @@ function SubjectRequirementsSection({ profile, updateProfile }: { profile: any; 
 // ============================================================
 // SECTION 8: UNIVERSITY REQUIREMENTS
 // ============================================================
-function UniversityRequirementsSection({ profile, updateProfile, application }: { profile: any; updateProfile: (fn: (prev: any) => any) => void; application: any }) {
-  const ur = profile.universityRequirements || {};
-
-  const set = (key: string, value: string) => {
-    updateProfile(p => ({ ...p, universityRequirements: { ...(p.universityRequirements || {}), [key]: value } }));
-  };
+function UniversityRequirementsSection({ application }: { application: any }) {
+  const { register, watch } = useFormContext<IntakeProfileForm>();
+  const officialSourceUrl = watch("universityRequirements.officialSourceUrl");
 
   return (
     <div className="space-y-4">
@@ -1021,20 +946,20 @@ function UniversityRequirementsSection({ profile, updateProfile, application }: 
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="SOP Prompt / Question"><TextAreaField value={ur.promptText || ""} onChange={v => set("promptText", v)} rows={4} /></FormField>
+        <FormField label="SOP Prompt / Question"><Area name="universityRequirements.promptText" rows={4} /></FormField>
         <div className="space-y-3">
-          <FormField label="Word Limit (Min)"><input className={inputClass} value={ur.wordMin || ""} onChange={e => set("wordMin", e.target.value)} /></FormField>
-          <FormField label="Word Limit (Max)"><input className={inputClass} value={ur.wordMax || ""} onChange={e => set("wordMax", e.target.value)} /></FormField>
-          <FormField label="Character Limit"><input className={inputClass} value={ur.characterLimit || ""} onChange={e => set("characterLimit", e.target.value)} /></FormField>
-          <FormField label="Page Limit"><input className={inputClass} value={ur.pageLimit || ""} onChange={e => set("pageLimit", e.target.value)} /></FormField>
+          <FormField label="Word Limit (Min)"><input className={inputClass} {...register("universityRequirements.wordMin")} /></FormField>
+          <FormField label="Word Limit (Max)"><input className={inputClass} {...register("universityRequirements.wordMax")} /></FormField>
+          <FormField label="Character Limit"><input className={inputClass} {...register("universityRequirements.characterLimit")} /></FormField>
+          <FormField label="Page Limit"><input className={inputClass} {...register("universityRequirements.pageLimit")} /></FormField>
         </div>
-        <FormField label="Mandatory Topics" className="md:col-span-2"><TextAreaField value={ur.mandatoryTopics || ""} onChange={v => set("mandatoryTopics", v)} rows={3} /></FormField>
-        <FormField label="University-Specific Questions" className="md:col-span-2"><TextAreaField value={ur.specificQuestions || ""} onChange={v => set("specificQuestions", v)} rows={3} /></FormField>
-        <FormField label="Formatting Rules" className="md:col-span-2"><TextAreaField value={ur.formattingRules || ""} onChange={v => set("formattingRules", v)} rows={2} /></FormField>
-        <FormField label="Official Source URL" className="md:col-span-2"><input className={inputClass} value={ur.officialSourceUrl || ""} onChange={e => set("officialSourceUrl", e.target.value)} /></FormField>
+        <FormField label="Mandatory Topics" className="md:col-span-2"><Area name="universityRequirements.mandatoryTopics" rows={3} /></FormField>
+        <FormField label="University-Specific Questions" className="md:col-span-2"><Area name="universityRequirements.specificQuestions" rows={3} /></FormField>
+        <FormField label="Formatting Rules" className="md:col-span-2"><Area name="universityRequirements.formattingRules" rows={2} /></FormField>
+        <FormField label="Official Source URL" className="md:col-span-2"><input className={inputClass} {...register("universityRequirements.officialSourceUrl")} /></FormField>
       </div>
 
-      {ur.officialSourceUrl && (
+      {officialSourceUrl && (
         <div className="bg-blue-50 border border-blue-200 rounded-input p-3">
           <p className="text-sm text-blue-800">
             <strong>Official source:</strong> Requirements from this URL are verified.
@@ -1049,25 +974,8 @@ function UniversityRequirementsSection({ profile, updateProfile, application }: 
 // ============================================================
 // SECTION 9: CAREER GOALS
 // ============================================================
-function CareerGoalsSection({ profile, updateProfile }: { profile: any; updateProfile: (fn: (prev: any) => any) => void }) {
-  const cg = profile.careerGoals || { shortTerm: {}, longTerm: {} };
-  const st = cg.shortTerm || {};
-  const lt = cg.longTerm || {};
-
-  const setShort = (key: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      careerGoals: { ...(p.careerGoals || { shortTerm: {}, longTerm: {} }), shortTerm: { ...(p.careerGoals?.shortTerm || {}), [key]: value } },
-    }));
-  };
-
-  const setLong = (key: string, value: string) => {
-    updateProfile(p => ({
-      ...p,
-      careerGoals: { ...(p.careerGoals || { shortTerm: {}, longTerm: {} }), longTerm: { ...(p.careerGoals?.longTerm || {}), [key]: value } },
-    }));
-  };
-
+function CareerGoalsSection() {
+  const { register } = useFormContext<IntakeProfileForm>();
   return (
     <div className="space-y-6">
       {/* Short-term */}
@@ -1075,11 +983,11 @@ function CareerGoalsSection({ profile, updateProfile }: { profile: any; updatePr
         <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Short-Term Goal</h3>
         <div className="space-y-4">
           <FormField label="What role do you want after graduation?" required>
-            <TextAreaField value={st.role || ""} onChange={v => setShort("role", v)} rows={2} placeholder="I want to work as a..." />
+            <Area name="careerGoals.shortTerm.role" rows={2} placeholder="I want to work as a..." />
           </FormField>
-          <FormField label="Which industry?"><input className={inputClass} value={st.industry || ""} onChange={e => setShort("industry", e.target.value)} placeholder="Technology / Finance / Healthcare" /></FormField>
-          <FormField label="Preferred responsibilities?"><TextAreaField value={st.responsibilities || ""} onChange={v => setShort("responsibilities", v)} rows={2} /></FormField>
-          <FormField label="Preferred country/location (if relevant)"><input className={inputClass} value={st.location || ""} onChange={e => setShort("location", e.target.value)} /></FormField>
+          <FormField label="Which industry?"><input className={inputClass} {...register("careerGoals.shortTerm.industry")} placeholder="Technology / Finance / Healthcare" /></FormField>
+          <FormField label="Preferred responsibilities?"><Area name="careerGoals.shortTerm.responsibilities" rows={2} /></FormField>
+          <FormField label="Preferred country/location (if relevant)"><input className={inputClass} {...register("careerGoals.shortTerm.location")} /></FormField>
         </div>
       </div>
 
@@ -1088,11 +996,11 @@ function CareerGoalsSection({ profile, updateProfile }: { profile: any; updatePr
         <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Long-Term Goal</h3>
         <div className="space-y-4">
           <FormField label="Where do you see yourself in 5–10 years?" required>
-            <TextAreaField value={lt.vision || ""} onChange={v => setLong("vision", v)} rows={3} placeholder="In 5-10 years, I see myself..." />
+            <Area name="careerGoals.longTerm.vision" rows={3} placeholder="In 5-10 years, I see myself..." />
           </FormField>
-          <FormField label="Leadership/technical/business goals?"><TextAreaField value={lt.goals || ""} onChange={v => setLong("goals", v)} rows={2} /></FormField>
-          <FormField label="Impact you want to create?"><TextAreaField value={lt.impact || ""} onChange={v => setLong("impact", v)} rows={2} /></FormField>
-          <FormField label="Plans for home country (if applicable)"><TextAreaField value={lt.homeCountryPlans || ""} onChange={v => setLong("homeCountryPlans", v)} rows={2} /></FormField>
+          <FormField label="Leadership/technical/business goals?"><Area name="careerGoals.longTerm.goals" rows={2} /></FormField>
+          <FormField label="Impact you want to create?"><Area name="careerGoals.longTerm.impact" rows={2} /></FormField>
+          <FormField label="Plans for home country (if applicable)"><Area name="careerGoals.longTerm.homeCountryPlans" rows={2} /></FormField>
         </div>
       </div>
     </div>
