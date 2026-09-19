@@ -15,7 +15,7 @@
 // ============================================================
 
 import { z } from "zod";
-import { componentArray, componentId, looseObject, optionalCount } from "./common";
+import { componentArray, componentId, stageObject, optionalCount } from "./common";
 
 export const FACT_CLASSIFICATIONS = [
   "SUPPORTED_STUDENT_FACT",
@@ -29,7 +29,7 @@ export const FACT_CLASSIFICATIONS = [
 
 export const FACT_SEVERITIES = ["INFO", "WARNING", "BLOCKING"] as const;
 
-export const FactClaimSchema = looseObject({
+export const FactClaimSchema = stageObject({
   // `text` alias tolerated; normalized to `claim` upstream.
   claim: z.string().optional(),
   text: z.string().optional(),
@@ -44,7 +44,7 @@ export const FactClaimSchema = looseObject({
   }
 }).transform(cl => ({ ...cl, claim: cl.claim ?? cl.text! }));
 
-export const FactReviewComponentSchema = looseObject({
+export const FactReviewComponentSchema = stageObject({
   componentId,
   pass: z.boolean(),
   claims: z.array(FactClaimSchema),
@@ -55,7 +55,7 @@ export const FactReviewComponentSchema = looseObject({
   ambiguousCount: optionalCount,
 });
 
-export const FactReviewerOutputSchema = looseObject({
+export const FactReviewerOutputSchema = stageObject({
   components: componentArray(FactReviewComponentSchema),
   // Derived server-side by deriveFactReviewTotals — optional; if the
   // model emits them anyway they must be valid non-negative ints.

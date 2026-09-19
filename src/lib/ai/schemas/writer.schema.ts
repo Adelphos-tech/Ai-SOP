@@ -9,9 +9,9 @@
 // ============================================================
 
 import { z } from "zod";
-import { componentArray, componentId, looseObject, nonEmptyText } from "./common";
+import { componentArray, componentId, stageObject, nonEmptyText } from "./common";
 
-export const WriterClaimSchema = looseObject({
+export const WriterClaimSchema = stageObject({
   claimId: z.string().optional(),
   claim: z.string().optional(),
   text: z.string().optional(),
@@ -20,7 +20,7 @@ export const WriterClaimSchema = looseObject({
   supportMode: z.string().optional(),
 });
 
-export const WriterResponseSchema = looseObject({
+export const WriterResponseSchema = stageObject({
   componentId,
   text: nonEmptyText,
   title: z.string().optional(),
@@ -28,7 +28,7 @@ export const WriterResponseSchema = looseObject({
   factualClaims: z.array(WriterClaimSchema).optional(),
 });
 
-export const WriterOutputSchema = looseObject({
+export const WriterOutputSchema = stageObject({
   responses: componentArray(WriterResponseSchema),
 });
 

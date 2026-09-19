@@ -9,9 +9,9 @@
 // ============================================================
 
 import { z } from "zod";
-import { componentArray, componentId, looseObject } from "./common";
+import { componentArray, componentId, stageObject } from "./common";
 
-export const PlannerComponentPlanSchema = looseObject({
+export const PlannerComponentPlanSchema = stageObject({
   componentId,
   officialPrompt: z.string().optional(),
   requiredTopics: z.array(z.string()).optional(),
@@ -27,7 +27,7 @@ export const PlannerComponentPlanSchema = looseObject({
   secondaryEvidenceIds: z.array(z.string()).optional(),
 });
 
-export const PlannerOutputSchema = looseObject({
+export const PlannerOutputSchema = stageObject({
   componentPlans: componentArray(PlannerComponentPlanSchema),
 });
 

@@ -11,9 +11,9 @@
 // ============================================================
 
 import { z } from "zod";
-import { componentArray, componentId, looseObject, nonEmptyText } from "./common";
+import { componentArray, componentId, stageObject, nonEmptyText } from "./common";
 
-export const FinalizerResponseSchema = looseObject({
+export const FinalizerResponseSchema = stageObject({
   componentId,
   text: nonEmptyText,
   retainedClaimIds: z.array(z.string()),
@@ -23,7 +23,7 @@ export const FinalizerResponseSchema = looseObject({
   repairClaims: z.array(z.unknown()),
 });
 
-export const FinalizerOutputSchema = looseObject({
+export const FinalizerOutputSchema = stageObject({
   responses: componentArray(FinalizerResponseSchema),
 });
 

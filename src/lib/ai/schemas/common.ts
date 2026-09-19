@@ -42,12 +42,15 @@ export function componentArray<S extends z.ZodTypeAny>(item: S) {
 }
 
 /**
- * Loose object passthrough — harmless extra model fields are ignored,
- * not rejected (spec: do not fail for non-conflicting extras).
+ * Stage object — Zod default strip mode: harmless extra model fields
+ * are ignored AND stripped from the canonical parsed output (never
+ * rejected, but also never promoted into artifacts/checkpoints).
  * Safety-critical enum fields remain strict.
+ * Safe because consumers re-parse the raw provider content; parseStage
+ * output is only persisted to checkpoint/artifact files.
  */
-export const looseObject = <T extends z.ZodRawShape>(shape: T) =>
-  z.object(shape).passthrough();
+export const stageObject = <T extends z.ZodRawShape>(shape: T) =>
+  z.object(shape);
 
 /** Optional non-negative integer (derived server-side when omitted). */
 export const optionalCount = z.number().int().nonnegative().optional();

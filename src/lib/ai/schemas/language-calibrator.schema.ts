@@ -11,21 +11,21 @@
 // ============================================================
 
 import { z } from "zod";
-import { componentArray, componentId, looseObject, nonEmptyText } from "./common";
+import { componentArray, componentId, stageObject, nonEmptyText } from "./common";
 
-export const ClaimMapEntrySchema = looseObject({
+export const ClaimMapEntrySchema = stageObject({
   claimId: z.string().optional(),
   // null is preserved (means "dropped") — NOT collapsed to undefined.
   rewrittenText: z.string().nullish(),
 });
 
-export const LanguageCalibratorResponseSchema = looseObject({
+export const LanguageCalibratorResponseSchema = stageObject({
   componentId,
   text: nonEmptyText,
   claimMap: z.array(ClaimMapEntrySchema).optional(),
 });
 
-export const LanguageCalibratorOutputSchema = looseObject({
+export const LanguageCalibratorOutputSchema = stageObject({
   responses: componentArray(LanguageCalibratorResponseSchema),
 });
 

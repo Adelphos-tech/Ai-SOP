@@ -8,7 +8,7 @@
 // ============================================================
 
 import { z } from "zod";
-import { componentArray, componentId, looseObject, nonEmptyText } from "./common";
+import { componentArray, componentId, stageObject, nonEmptyText } from "./common";
 
 export const CLAIM_RISK_STATUSES = ["SUPPORTED", "POTENTIALLY_UNSUPPORTED", "SEMANTIC_EXPANSION", "AMBIGUOUS"] as const;
 export const EVIDENCE_SUITABILITIES = ["SUITABLE", "INSUFFICIENT", "AMBIGUOUS"] as const;
@@ -19,7 +19,7 @@ export const PAGE_COMPLIANCE_STATUSES = ["RENDER_VALIDATION_REQUIRED", "N/A"] as
 // enforced by the legacy validator — keep them optional-but-typed so a
 // partial entry doesn't introduce a NEW fatal path. The action planner
 // tolerates missing values.
-export const CandidateEvidenceSchema = looseObject({
+export const CandidateEvidenceSchema = stageObject({
   evidenceId: z.string().optional(),
   suitability: z.enum(EVIDENCE_SUITABILITIES).optional(),
   supportedContext: z.string().optional(),
@@ -27,13 +27,13 @@ export const CandidateEvidenceSchema = looseObject({
   requiredContext: z.string().optional(),
 });
 
-export const TopicCoverageSchema = looseObject({
+export const TopicCoverageSchema = stageObject({
   topic: z.string().optional(),
   covered: z.boolean().optional(),
   candidateEvidence: z.array(CandidateEvidenceSchema).optional(),
 });
 
-export const FactualRiskClaimSchema = looseObject({
+export const FactualRiskClaimSchema = stageObject({
   claimId: z.string(),
   claim: z.string(),
   status: z.enum(CLAIM_RISK_STATUSES),
@@ -46,7 +46,7 @@ export const FactualRiskClaimSchema = looseObject({
   contextShift: z.boolean().optional(),
 });
 
-export const QualityComponentScoreSchema = looseObject({
+export const QualityComponentScoreSchema = stageObject({
   componentId,
   score: z.number().min(1).max(10),
   feedback: z.string().optional(),
@@ -58,7 +58,7 @@ export const QualityComponentScoreSchema = looseObject({
   pageCompliance: z.enum(PAGE_COMPLIANCE_STATUSES).optional(),
 });
 
-export const RequirementComplianceSchema = looseObject({
+export const RequirementComplianceSchema = stageObject({
   documentStructure: z.enum(COMPLIANCE_STATUSES).optional(),
   responseComponentCount: z.enum(COMPLIANCE_STATUSES).optional(),
   componentPromptCoverage: z.enum(COMPLIANCE_STATUSES).optional(),
@@ -69,7 +69,7 @@ export const RequirementComplianceSchema = looseObject({
   characterLimit: z.enum(COMPLIANCE_STATUSES).optional(),
 });
 
-export const QualityReviewerOutputSchema = looseObject({
+export const QualityReviewerOutputSchema = stageObject({
   componentScores: componentArray(QualityComponentScoreSchema),
   overall_score: z.number(),
   requirementCompliance: RequirementComplianceSchema,
