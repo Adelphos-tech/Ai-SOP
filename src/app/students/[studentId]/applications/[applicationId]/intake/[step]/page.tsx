@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -61,6 +61,9 @@ export default function IntakePage() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [dirty, setDirty] = useState(false);
+  // Remembers which missing section the wizard was working on — keeps the
+  // form mounted when the last field is typed but not yet saved.
+  const lastMissingSlugRef = useRef<string | null>(null);
   const [error, setError] = useState("");
 
   // Load profile + application
@@ -221,14 +224,25 @@ export default function IntakePage() {
 
   // Wizard mode: the "current" section is the first missing required one.
   const missingRequired = readiness.sections.filter(s => !s.optional && s.status !== "complete");
-  const wizardSection = missingRequired.length > 0
+  // IMPORTANT: missingRequired derives from in-memory profile — typing the
+  // last missing field flips it to empty BEFORE the save. Never complete
+  // the wizard on unsaved state: while dirty, keep showing the section
+  // being edited so the Save button stays reachable.
+  let wizardSection = missingRequired.length > 0
     ? INTAKE_SECTIONS.find(s => s.slug === missingRequired[0].slug) || null
     : null;
+  if (wizardMode && !wizardSection && dirty) {
+    wizardSection = INTAKE_SECTIONS.find(s => s.slug === lastMissingSlugRef.current) || null;
+    // Edge: dirty with no tracked section — stay on Student Details
+    // rather than crashing on a null currentSection.
+    if (!wizardSection) wizardSection = INTAKE_SECTIONS[0];
+  }
+  if (wizardSection) lastMissingSlugRef.current = wizardSection.slug;
   const currentSection = wizardMode ? wizardSection : routeSection;
   const displayStep = currentSection?.id || currentStep;
 
-  // Wizard completion state — all required information answered.
-  if (wizardMode && !wizardSection) {
+  // Wizard completion state — all required answers SAVED (not just typed).
+  if (wizardMode && !wizardSection && !dirty) {
     return (
       <PageContainer>
         <div className="text-center py-16">
