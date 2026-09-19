@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import type { AttemptAccounting } from "../attempt-accounting";
 import { AttemptAccountingTracker } from "../attempt-accounting";
 import type { CheckpointHashes, StageCheckpoint } from "../pipeline-checkpoint";
+import { normalizeStageOutput, STAGE_CONTRACT_VERSIONS } from "./stage-contracts";
 import {
   appendDurable, atomicWriteDurable, computeHash,
   getCheckpointPath, syncDirectory, validateCheckpoint,
@@ -113,16 +114,19 @@ const text = (value: unknown): value is string => typeof value === "string" && v
 
 export function parseStage(stage: ExecutionStage, content: string, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Record<string, any> {
   if (!text(content)) throw new StageExecutionError("EMPTY_CONTENT", `${stage} returned empty content`, true);
-  let output: unknown;
-  try { output = JSON.parse(content); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
-  if (!object(output)) throw new StageExecutionError("CONTENT_SCHEMA_INVALID");
+  let parsed: unknown;
+  try { parsed = JSON.parse(content); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
+  if (!object(parsed)) throw new StageExecutionError("CONTENT_SCHEMA_INVALID");
+  // Normalize harmless representation differences BEFORE strict checks —
+  // e.g. factReviewer claims using `text` instead of `claim`.
+  const output: Record<string, any> = normalizeStageOutput(stage, parsed);
   let items: unknown;
   if (stage === "planner") items = output.componentPlans;
   else if (stage === "qualityReviewer") items = output.componentScores;
   else if (stage === "factReviewer") items = output.components;
   else items = output.responses;
   if (!Array.isArray(items) || !items.length || !items.every(item => object(item) && text(item.componentId)) || new Set(items.map(item => item.componentId)).size !== items.length) {
-    throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid component list`);
+    throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid component list — expected non-empty unique componentIds`);
   }
   if (["writer", "languageCalibrator", "finalizer"].includes(stage) && !items.every(item => text(item.text))) {
     throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid response text`);
@@ -181,13 +185,27 @@ export function parseStage(stage: ExecutionStage, content: string, context?: { f
     }
   }
   if (stage === "qualityReviewer" && (!object(output.requirementCompliance) || !items.every(item => Number.isFinite(item.score) && item.score >= 1 && item.score <= 10))) {
-    throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid quality review`);
+    throw new StageExecutionError("QUALITY_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: requirementCompliance or per-component score (1-10) missing/invalid`);
   }
   // Compact contract: the four totals may be omitted — the server derives
   // them via deriveFactReviewTotals. When present they must still be valid.
-  if (stage === "factReviewer" && (typeof output.overallPass !== "boolean" || !items.every(item => typeof item.pass === "boolean" && Array.isArray(item.claims)) || !["totalInventedFacts", "totalAlteredFacts", "totalInterpretiveElaborations", "totalAmbiguousClaims"].every(key => output[key] === undefined || (Number.isInteger(output[key]) && output[key] >= 0)))) {
-    throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid fact review`);
+  if (stage === "factReviewer") {
+    if (typeof output.overallPass !== "boolean") {
+      throw new StageExecutionError("FACT_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: overallPass missing or not boolean`);
+    }
+    if (!items.every(item => typeof item.pass === "boolean")) {
+      throw new StageExecutionError("FACT_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: a component is missing a boolean 'pass'`);
+    }
+    if (!items.every(item => Array.isArray(item.claims))) {
+      throw new StageExecutionError("FACT_REVIEW_MISSING_REQUIRED_FIELD", `${stage}: a component is missing 'claims' array`);
+    }
+    if (!["totalInventedFacts", "totalAlteredFacts", "totalInterpretiveElaborations", "totalAmbiguousClaims"].every(key => output[key] === undefined || (Number.isInteger(output[key]) && output[key] >= 0))) {
+      throw new StageExecutionError("FACT_REVIEW_INVALID_TOTALS", `${stage}: totals present but not non-negative integers`);
+    }
   }
+  // Stamp the contract version so stored checkpoints identify which
+  // contract produced this output (set in code — never model-generated).
+  output._contractVersion = STAGE_CONTRACT_VERSIONS[stage];
   return output;
 }
 

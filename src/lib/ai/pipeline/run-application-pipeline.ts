@@ -68,6 +68,7 @@ import { buildEvidenceLedger, EvidenceLedger } from "../evidence-ledger";
 import { buildApplicationEvidenceBundle, ApplicationEvidenceBundle } from "../application-evidence-bundle";
 import { planComponentActions, ActionPlanResult } from "../component-action-planner";
 import { buildComponentEvidencePackets, validateWriterEvidenceReferences, ComponentEvidencePacket } from "../component-evidence-packet";
+import { normalizeStageOutput } from "./stage-contracts";
 import {
   validateLanguageCalibratorClaims,
   validateFinalizerClaims,
@@ -786,13 +787,26 @@ export async function runApplicationPipeline(
       : `Desired level: ${aiInput.writingPreferences.level || "Natural Professional"}. Tone: ${aiInput.writingPreferences.tone || "Professional & Personal"}.${narrativeProfile ? `\n\n${buildNarrativeWriterRules(narrativeProfile)}` : ""}`;
 
     // Phase 14: Build per-component evidence packets
-    // The Planner may return primaryEvidenceIds (proper IDs) or factsToUse (descriptive text).
-    // Only use primaryEvidenceIds if they look like actual ledger IDs; otherwise fall back to all entries.
+    // Planner contract emits studentEvidenceIds / programEvidenceIds /
+    // facultyEvidenceIds — earlier code looked for primaryEvidenceIds /
+    // secondaryEvidenceIds, which the prompt never defines, so the
+    // planner's selection was always discarded.
+    const ledgerIds = new Set(evidenceLedger.allEntries.map(e => e.id));
     const plannerSelection = (plan.componentPlans || plan.responses || []).map((p: any) => {
-      const primaryIds: string[] = Array.isArray(p.primaryEvidenceIds) ? p.primaryEvidenceIds : [];
-      const secondaryIds: string[] = Array.isArray(p.secondaryEvidenceIds) ? p.secondaryEvidenceIds : [];
-      // Only use them if they look like ledger IDs (contain a dash and aren't full sentences)
-      const looksLikeIds = primaryIds.every((id: string) => typeof id === "string" && id.length < 50 && id.includes("-"));
+      const emitted = [
+        ...(Array.isArray(p.studentEvidenceIds) ? p.studentEvidenceIds : []),
+        ...(Array.isArray(p.programEvidenceIds) ? p.programEvidenceIds : []),
+        ...(Array.isArray(p.facultyEvidenceIds) ? p.facultyEvidenceIds : []),
+        // Legacy field names — tolerate older checkpoints/shapes.
+        ...(Array.isArray(p.primaryEvidenceIds) ? p.primaryEvidenceIds : []),
+        ...(Array.isArray(p.secondaryEvidenceIds) ? p.secondaryEvidenceIds : []),
+      ].filter((id: any) => typeof id === "string");
+      // Keep only IDs that actually exist in the ledger — hallucinated or
+      // descriptive strings are dropped, and an empty result falls back to
+      // the full-entry closed world (same as before).
+      const primaryIds = Array.from(new Set(emitted.filter(id => ledgerIds.has(id))));
+      const secondaryIds: string[] = [];
+      const looksLikeIds = primaryIds.length > 0;
       return {
         componentId: p.componentId,
         primaryEvidenceIds: looksLikeIds ? primaryIds : [],
@@ -1168,7 +1182,7 @@ export async function runApplicationPipeline(
     const factResult = await execStage(
       "factReviewer", factPrompt.system, factPrompt.user
     );
-    const factReview: FactReviewOutput = JSON.parse(factResult.content);
+    const factReview = normalizeStageOutput("factReviewer", JSON.parse(factResult.content)) as FactReviewOutput;
     // Phase 38A: Validate Final Fact Reviewer output against typed contract
     const factValidation = validateFactReviewOutput(factReview);
     if (!factValidation.valid) {

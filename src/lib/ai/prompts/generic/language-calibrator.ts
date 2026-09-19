@@ -76,7 +76,7 @@ The claimMap MUST preserve every claimId from the Writer output. For each claim:
   const user = `WRITER OUTPUT:
 ${JSON.stringify(writerOutput, null, 2)}
 
-Calibrate each response component for STYLE ONLY. Do not add, remove, or change any factual content. Every claimId from the Writer output MUST appear in your claimMap with a non-null rewrittenText. Return ONLY the JSON.`;
+Calibrate each response component for STYLE ONLY. Do not add, remove, or change any factual content. Every claimId from the Writer output MUST appear in your claimMap — include rewrittenText ONLY when you changed the wording; omit it entirely when the claim is preserved verbatim. Return ONLY the JSON.`;
 
   return { system: withSafetyBlock(system), user };
 }

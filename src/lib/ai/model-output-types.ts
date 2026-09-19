@@ -236,7 +236,8 @@ export function validateFactReviewOutput(raw: unknown): ValidationResult {
       else {
         for (let j = 0; j < (comp.claims as unknown[]).length; j++) {
           const cl = (comp.claims as Record<string, unknown>[])[j];
-          if (!isString(cl?.claim)) errors.push(`components[${i}].claims[${j}].claim must be string`);
+          // `claim` is canonical; `text` is a tolerated alias (normalized upstream).
+          if (!isString(cl?.claim) && !isString(cl?.text)) errors.push(`components[${i}].claims[${j}].claim must be string`);
           if (!isString(cl?.classification) || !VALID_FACT_CLASSIFICATIONS.includes(cl.classification as FactClassification))
             errors.push(`components[${i}].claims[${j}].classification must be one of ${VALID_FACT_CLASSIFICATIONS.join("|")}`);
           if (!isStringArray(cl?.supportingFactIds)) errors.push(`components[${i}].claims[${j}].supportingFactIds must be string[]`);
@@ -255,7 +256,8 @@ export function validateFactReviewOutput(raw: unknown): ValidationResult {
     if (o[t] !== undefined && !isNumber(o[t])) errors.push(`${t} must be number`);
   }
   if (!isBoolean(o.overallPass)) errors.push("overallPass must be boolean");
-  if (o.blockingReason !== null && !isString(o.blockingReason)) errors.push("blockingReason must be string or null");
+  // blockingReason may be omitted (undefined) or null — both mean "none".
+  if (o.blockingReason !== null && o.blockingReason !== undefined && !isString(o.blockingReason)) errors.push("blockingReason must be string or null");
 
   return { valid: errors.length === 0, errors };
 }
