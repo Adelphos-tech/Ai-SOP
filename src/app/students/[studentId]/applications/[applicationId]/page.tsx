@@ -445,7 +445,12 @@ export default function ApplicationWorkspacePage() {
                   </p>
                   <ul className="mb-4 space-y-1">
                     {missingSections.map(s => (
-                      <li key={s.slug} className="text-sm text-dvivid-text-secondary">· {s.label}</li>
+                      <li key={s.slug} className="text-sm text-dvivid-text-secondary">
+                        · {s.label}
+                        {s.missingFields?.length > 0 && (
+                          <span className="text-dvivid-warning"> — {s.missingFields.join(", ")}</span>
+                        )}
+                      </li>
                     ))}
                   </ul>
                   <div className="flex items-center gap-4 flex-wrap">

@@ -19,6 +19,8 @@ import {
   saveStudentProfileConditional,
 } from "@/lib/application/application-repository";
 import { randomUUID } from "crypto";
+import { mergePersonalData } from "@/lib/application/cv-merge";
+import { getProfileReadiness } from "@/lib/application/intake-completion";
 import {
   requireConsultantSession,
   authorizeStudentAccess,
@@ -86,23 +88,7 @@ export async function POST(request: NextRequest) {
     const merged: any = { ...existingProfile };
 
     // ===== Personal Data =====
-    const existingPd = merged.personalData || {};
-    const parsedPd = parsed.personalData || {};
-    merged.personalData = {
-      firstName: overwrite ? (parsedPd.firstName || existingPd.firstName) : (existingPd.firstName || parsedPd.firstName),
-      lastName: overwrite ? (parsedPd.lastName || existingPd.lastName) : (existingPd.lastName || parsedPd.lastName),
-      email: overwrite ? (parsedPd.email || existingPd.email) : (existingPd.email || parsedPd.email),
-      phone: overwrite ? (parsedPd.phone || existingPd.phone) : (existingPd.phone || parsedPd.phone),
-      currentCity: overwrite ? (parsedPd.currentCity || existingPd.currentCity) : (existingPd.currentCity || parsedPd.currentCity),
-      currentCountry: overwrite ? (parsedPd.currentCountry || existingPd.currentCountry) : (existingPd.currentCountry || parsedPd.currentCountry),
-      dateOfBirth: existingPd.dateOfBirth || "",
-      nationality: existingPd.nationality || "",
-      ...Object.fromEntries(
-        Object.entries(existingPd).filter(([k]) =>
-          !["firstName", "lastName", "email", "phone", "currentCity", "currentCountry", "dateOfBirth", "nationality"].includes(k),
-        ),
-      ),
-    };
+    merged.personalData = mergePersonalData(merged.personalData, parsed.personalData, overwrite);
 
     // ===== Education =====
     if (Array.isArray(parsed.education) && parsed.education.length > 0) {
@@ -260,8 +246,18 @@ export async function POST(request: NextRequest) {
 
     const newRevision = await getStudentProfileRevision(body.studentId);
 
+    // Return canonical readiness computed from the SAVED profile —
+    // callers never re-derive it from request bodies.
+    const savedProfile = await getStudentProfile(body.studentId);
+    const readiness = getProfileReadiness(savedProfile);
+
     return NextResponse.json({
       success: true,
+      readiness: {
+        complete: readiness.canGenerate,
+        missingSections: readiness.weakAreas,
+        missingCount: readiness.weakAreas.length,
+      },
       appliedFields: {
         personalData: !!(parsed.personalData?.firstName || parsed.personalData?.email),
         education: (parsed.education || []).length,

@@ -14,6 +14,7 @@ import {
   saveStudentProfile,
   saveStudentProfileConditional,
 } from "@/lib/application/application-repository";
+import { getProfileReadiness } from "@/lib/application/intake-completion";
 import {
   requireConsultantSession,
   authorizeStudentAccess,
@@ -106,7 +107,18 @@ export async function PUT(request: NextRequest) {
         );
       }
       const newRevision = await getStudentProfileRevision(body.studentId);
-      return NextResponse.json({ success: true, revision: newRevision });
+      // Canonical readiness from the SAVED row — never the request body.
+      const savedProfile = await getStudentProfile(body.studentId);
+      const readiness = getProfileReadiness(savedProfile);
+      return NextResponse.json({
+        success: true,
+        revision: newRevision,
+        readiness: {
+          complete: readiness.canGenerate,
+          missingSections: readiness.weakAreas,
+          missingCount: readiness.weakAreas.length,
+        },
+      });
     }
 
     // Non-conditional save (backward compatible) — increment revision
@@ -114,7 +126,17 @@ export async function PUT(request: NextRequest) {
     const profileWithRev = { ...body.profileData, _revision: currentRev + 1 };
     await saveStudentProfile(body.studentId, profileWithRev);
 
-    return NextResponse.json({ success: true, revision: currentRev + 1 });
+    const savedProfile = await getStudentProfile(body.studentId);
+    const readiness = getProfileReadiness(savedProfile);
+    return NextResponse.json({
+      success: true,
+      revision: currentRev + 1,
+      readiness: {
+        complete: readiness.canGenerate,
+        missingSections: readiness.weakAreas,
+        missingCount: readiness.weakAreas.length,
+      },
+    });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json(

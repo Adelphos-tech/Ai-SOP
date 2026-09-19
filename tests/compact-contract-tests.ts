@@ -14,6 +14,8 @@ import { planComponentActions } from "../src/lib/ai/component-action-planner";
 import { buildCalibratedClaims } from "../src/lib/ai/pipeline/run-application-pipeline";
 import { resolveVersionContent, createSingleFlightSubmitter } from "../src/lib/application/generate-client";
 import { computeApprovalWarnings } from "../src/lib/application/application-repository";
+import { mergePersonalData } from "../src/lib/application/cv-merge";
+import { calculateIntakeCompletion, getProfileReadiness } from "../src/lib/application/intake-completion";
 
 let passed = 0, failed = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -235,6 +237,51 @@ async function main() {
     check("APP-E triple-click → 1 request", approveCalls === 1);
     await submit();
     check("APP second explicit click → new request", approveCalls === 2);
+  }
+
+  // ---------- Readiness desync — canonical engine + CV merge ----------
+  console.log("Readiness — canonical engine + CV merge");
+  {
+    // A: incomplete Student Details → all consumers report missing + field names
+    const incomplete = { personalData: { firstName: "T", lastName: "J", nationality: "", currentCountry: "India" }, education: [{ id: "e1" }] };
+    const comp = calculateIntakeCompletion(incomplete);
+    const sd = comp.find(s => s.slug === "student-details")!;
+    check("RDY-A missing nationality flagged", sd.status === "missing" && sd.missingFields.includes("nationality"));
+    check("RDY-A readiness canGenerate=false", getProfileReadiness(incomplete).canGenerate === false);
+
+    // B: fill nationality → complete
+    const filled = { ...incomplete, personalData: { ...incomplete.personalData, nationality: "Indian" } };
+    check("RDY-B filled → complete", getProfileReadiness(filled).canGenerate === false === false ||
+      calculateIntakeCompletion(filled).find(s => s.slug === "student-details")!.status === "complete");
+
+    // C: CV merge imports nationality (the bug — was unconditionally dropped)
+    const merged = mergePersonalData(
+      { firstName: "Tilak", nationality: "" },
+      { nationality: "Indian", dateOfBirth: "2000-01-01" },
+      false,
+    );
+    check("RDY-C merge fills empty nationality from CV", merged.nationality === "Indian");
+    check("RDY-C merge fills dateOfBirth", merged.dateOfBirth === "2000-01-01");
+    // existing value wins in merge mode
+    const merged2 = mergePersonalData({ nationality: "German" }, { nationality: "Indian" }, false);
+    check("RDY-C existing wins in merge mode", merged2.nationality === "German");
+    // overwrite mode prefers parsed
+    const merged3 = mergePersonalData({ nationality: "German" }, { nationality: "Indian" }, true);
+    check("RDY-C overwrite prefers parsed", merged3.nationality === "Indian");
+    // extra keys preserved
+    const merged4 = mergePersonalData({ nationality: "X", customField: "keep" }, {}, false);
+    check("RDY-C extra keys preserved", merged4.customField === "keep");
+
+    // D: work experience = explicit no-experience → complete
+    const noExp = { ...filled, noWorkExperience: true };
+    check("RDY-D noWorkExperience → section complete",
+      calculateIntakeCompletion(noExp).find(s => s.slug === "work-experience")!.status === "complete");
+
+    // E: optional sections don't affect required readiness
+    const optOnly = { ...filled };
+    const r = getProfileReadiness(optOnly);
+    check("RDY-E optional empty ≠ required missing",
+      r.sections.filter(s => s.optional).every(s => s.status !== "missing"));
   }
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);

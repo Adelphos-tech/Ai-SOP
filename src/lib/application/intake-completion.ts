@@ -33,6 +33,9 @@ export interface SectionCompletion {
   label: string;
   status: SectionStatus;
   optional: boolean;
+  /** Canonical field paths that are missing, e.g. ["nationality"] —
+   * lets UIs name the exact gap instead of looping the section. */
+  missingFields: string[];
 }
 
 /**
@@ -45,18 +48,18 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
 
   return INTAKE_SECTIONS.map(section => {
     let filled = false;
+    const missingFields: string[] = [];
 
     switch (section.id) {
-      case 1: // Student Details
-        filled = !!(
-          p.personalData?.firstName &&
-          p.personalData?.lastName &&
-          p.personalData?.nationality &&
-          p.personalData?.currentCountry &&
-          Array.isArray(p.education) &&
-          p.education.length > 0
-        );
+      case 1: { // Student Details
+        if (!p.personalData?.firstName) missingFields.push("first name");
+        if (!p.personalData?.lastName) missingFields.push("last name");
+        if (!p.personalData?.nationality) missingFields.push("nationality");
+        if (!p.personalData?.currentCountry) missingFields.push("current country");
+        if (!(Array.isArray(p.education) && p.education.length > 0)) missingFields.push("education history");
+        filled = missingFields.length === 0;
         break;
+      }
       case 2: // Field Motivation (optional)
         filled = !!(p.fieldMotivation && String(p.fieldMotivation).trim().length > 0);
         break;
@@ -124,6 +127,7 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
       label: section.label,
       status,
       optional: section.optional,
+      missingFields,
     };
   });
 }

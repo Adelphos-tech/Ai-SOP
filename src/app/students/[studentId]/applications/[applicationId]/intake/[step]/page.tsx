@@ -104,12 +104,25 @@ export default function IntakePage() {
       const res = await fetch("/api/application/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId, profileData: newProfile }),
+        // Conditional write — never clobber a newer profile (e.g. a CV
+        // apply that landed after this page loaded).
+        body: JSON.stringify({ studentId, profileData: newProfile, expectedRevision: profileRevision }),
       });
       if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data && typeof data.revision === "number") setProfileRevision(data.revision);
         setSaveStatus("saved");
         setDirty(false);
         setTimeout(() => setSaveStatus("idle"), 2000);
+      } else if (res.status === 409) {
+        // Profile changed since load — reload fresh state, keep the
+        // user's unsaved field on top would lose data; safest is reload
+        // + visible message so the user re-saves intentionally.
+        await loadAll();
+        const msg = "Profile was updated elsewhere (e.g. CV import). Latest data loaded — please re-apply your change and save again.";
+        setSaveStatus("error");
+        setError(msg);
+        throw new Error(msg);
       } else {
         let msg = "Save failed. Please try again.";
         try {
@@ -127,7 +140,7 @@ export default function IntakePage() {
     } finally {
       setSaving(false);
     }
-  }, [studentId]);
+  }, [studentId, profileRevision]);
 
   // Update profile helper — marks the form dirty so the save indicator
   // only shows "Unsaved changes" after an actual edit
@@ -266,6 +279,14 @@ export default function IntakePage() {
       {wizardMode ? (
         <p className="text-sm text-dvivid-text-secondary mb-6">
           <span className="font-medium text-dvivid-text-primary">{currentSection!.label}</span> — {missingRequired.length} required answer{missingRequired.length !== 1 ? "s" : ""} remaining. {currentSection!.description}
+          {(() => {
+            const fields = missingRequired.find(s => s.slug === currentSection!.slug)?.missingFields || [];
+            return fields.length > 0 ? (
+              <span className="block mt-1 text-dvivid-warning font-medium">
+                Missing: {fields.join(", ")}
+              </span>
+            ) : null;
+          })()}
         </p>
       ) : (
         <p className="text-sm text-dvivid-text-secondary mb-6">{currentSection!.description}</p>
@@ -283,8 +304,17 @@ export default function IntakePage() {
           <CVUpload
             studentId={studentId}
             profileRevision={profileRevision}
-            onApplied={() => {
-              // Reload profile after CV applied
+            onApplied={async () => {
+              // Preserve typed-but-unsaved edits before reloading —
+              // a bare loadAll() would silently wipe them.
+              if (dirty && profile) {
+                try {
+                  await saveProfile(profile);
+                } catch {
+                  // Save failed — don't wipe the user's input; let them retry.
+                  return;
+                }
+              }
               loadAll();
             }}
           />
