@@ -76,9 +76,10 @@ export default function IntakePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  // Remembers which missing section the wizard is editing — keeps the
-  // form mounted while fields are typed but not yet saved.
-  const lastMissingSlugRef = useRef<string | null>(null);
+  // Wizard navigation is EXPLICIT STATE — not derived per render from
+  // readiness. Set only on identity load / explicit Save & Continue.
+  // A field becoming complete while typing MUST NOT move the user.
+  const [activeWizardSection, setActiveWizardSection] = useState<string | null>(null);
   const [error, setError] = useState("");
   // Stale-request token — a response is only applied if it is still the
   // latest load for the current student/application identity.
@@ -101,7 +102,7 @@ export default function IntakePage() {
     setApplication(null);
     setSaveStatus("idle");
     setError("");
-    lastMissingSlugRef.current = null;
+    setActiveWizardSection(null);
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId, applicationId]);
@@ -118,12 +119,16 @@ export default function IntakePage() {
 
       if (token !== loadTokenRef.current) return; // superseded by a newer load
 
+      let loadedProfile: any = null;
+      let loadedApp: Application | null = null;
+
       if (profileRes.ok) {
         const data = await profileRes.json();
         if (token !== loadTokenRef.current) return;
         // RHF owns editing state from here — full canonical profile,
         // including fields with no registered input, survives intact.
-        reset(data.profile || {});
+        loadedProfile = data.profile || {};
+        reset(loadedProfile);
         setProfileRevision(typeof data.revision === "number" ? data.revision : 0);
       }
 
@@ -131,8 +136,17 @@ export default function IntakePage() {
         const data = await appRes.json();
         if (token !== loadTokenRef.current) return;
         const apps = data.applications || [];
-        const app = apps.find((a: Application) => a.id === applicationId);
-        setApplication(app || null);
+        loadedApp = apps.find((a: Application) => a.id === applicationId) || null;
+        setApplication(loadedApp);
+      }
+
+      // Wizard: pick the first missing REQUIRED section ONCE per load.
+      // This is the only place (besides identity reset) that writes
+      // activeWizardSection — field changes can never re-derive it.
+      if (wizardMode) {
+        const readiness = getProfileReadiness(loadedProfile || getValues(), loadedApp);
+        const missing = readiness.sections.filter(s => !s.optional && s.status !== "complete");
+        setActiveWizardSection(missing[0]?.slug ?? null);
       }
     } catch {
       if (token !== loadTokenRef.current) return;
@@ -258,29 +272,19 @@ export default function IntakePage() {
   const prevSection = INTAKE_SECTIONS.find(s => s.id === currentStep - 1);
   const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
 
-  // Wizard mode: the "current" section is the first missing required one.
+  // Wizard mode: the rendered section is EXPLICIT navigation state.
+  // activeWizardSection is written ONLY by loadAll (identity load and
+  // post-save reload) and the identity-reset effect — never by field
+  // edits. missingRequired below is used for display text only.
   const missingRequired = readiness.sections.filter(s => !s.optional && s.status !== "complete");
-  let wizardSection = missingRequired.length > 0
-    ? INTAKE_SECTIONS.find(s => s.slug === missingRequired[0].slug) || null
-    : null;
-  // FIELD CHANGE != NAVIGATION: while the user has unsaved edits, the
-  // section being edited stays mounted even if completion of its last
-  // field promotes a different section to missingRequired[0]. The next
-  // section is only chosen after an explicit Save & Continue.
-  if (wizardMode && isDirty && lastMissingSlugRef.current) {
-    wizardSection = INTAKE_SECTIONS.find(s => s.slug === lastMissingSlugRef.current) || wizardSection;
-  }
-  if (wizardMode && !wizardSection && isDirty) {
-    // Edge: dirty with no tracked section — stay on Student Details
-    // rather than crashing on a null currentSection.
-    wizardSection = INTAKE_SECTIONS[0];
-  }
-  if (wizardSection) lastMissingSlugRef.current = wizardSection.slug;
+  const wizardSection = wizardMode
+    ? (activeWizardSection ? INTAKE_SECTIONS.find(s => s.slug === activeWizardSection) || null : null)
+    : routeSection;
   const currentSection = wizardMode ? wizardSection : routeSection;
   const displayStep = currentSection?.id || currentStep;
 
   // Wizard completion state — all required answers SAVED (not just typed).
-  if (wizardMode && !wizardSection && !isDirty) {
+  if (wizardMode && !wizardSection) {
     return (
       <PageContainer>
         <div className="text-center py-16">
@@ -520,29 +524,29 @@ function StudentDetailsSection() {
         <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Personal Information</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField label="First Name" required>
-            <input className={inputClass} placeholder="John" {...register("personalData.firstName")} name="given-name" autoComplete="given-name" />
+            <input className={inputClass} placeholder="John" {...register("personalData.firstName")} autoComplete="given-name" />
           </FormField>
           <FormField label="Last Name" required>
-            <input className={inputClass} placeholder="Doe" {...register("personalData.lastName")} name="family-name" autoComplete="family-name" />
+            <input className={inputClass} placeholder="Doe" {...register("personalData.lastName")} autoComplete="family-name" />
           </FormField>
           <FormField label="Email">
-            <input className={inputClass} type="email" placeholder="john@example.com" {...register("personalData.email")} name="email" autoComplete="email" />
+            <input className={inputClass} type="email" placeholder="john@example.com" {...register("personalData.email")} autoComplete="email" />
             <FieldError name="personalData.email" />
           </FormField>
           <FormField label="Phone">
-            <input className={inputClass} type="tel" placeholder="+91 98765 43210" {...register("personalData.phone")} name="tel" autoComplete="tel" />
+            <input className={inputClass} type="tel" placeholder="+91 98765 43210" {...register("personalData.phone")} autoComplete="tel" />
           </FormField>
           <FormField label="Date of Birth">
-            <input type="date" className={inputClass} {...register("personalData.dateOfBirth")} name="bday" autoComplete="bday" />
+            <input type="date" className={inputClass} {...register("personalData.dateOfBirth")} autoComplete="bday" />
           </FormField>
           <FormField label="Nationality" required>
-            <input className={inputClass} placeholder="Indian" {...register("personalData.nationality")} name="nationality" autoComplete="off" />
+            <input className={inputClass} placeholder="Indian" {...register("personalData.nationality")} autoComplete="off" />
           </FormField>
           <FormField label="Current City" required>
-            <input className={inputClass} placeholder="Mumbai" {...register("personalData.currentCity")} name="address-level2" autoComplete="address-level2" />
+            <input className={inputClass} placeholder="Mumbai" {...register("personalData.currentCity")} autoComplete="address-level2" />
           </FormField>
           <FormField label="Current Country" required>
-            <input className={inputClass} placeholder="India" {...register("personalData.currentCountry")} name="country-name" autoComplete="country-name" />
+            <input className={inputClass} placeholder="India" {...register("personalData.currentCountry")} autoComplete="country-name" />
           </FormField>
         </div>
       </div>
