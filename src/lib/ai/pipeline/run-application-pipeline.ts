@@ -777,7 +777,7 @@ export async function runApplicationPipeline(
     const plannerResult = await execStage(
       "planner", plannerPrompt.system, plannerPrompt.user
     );
-    const plan = JSON.parse(plannerResult.content);
+    const plan = plannerResult.output;
     stageUsages.push(plannerResult.stageUsage);
 
     // STAGE 2: WRITER (Phase 14: closed-world with evidence packets)
@@ -825,11 +825,11 @@ export async function runApplicationPipeline(
     const writerResult = await execStage(
       "writer", writerPrompt.system, writerPrompt.user
     );
-    const writerOutput = JSON.parse(writerResult.content);
+    const writerOutput = writerResult.output;
     stageUsages.push(writerResult.stageUsage);
 
     // Phase 14: Deterministic Writer evidence validation (no AI call)
-    const writerValidation = validateWriterEvidenceReferences({ packets: evidencePackets, writerOutput });
+    const writerValidation = validateWriterEvidenceReferences({ packets: evidencePackets, writerOutput: writerOutput as any });
     if (!writerValidation.valid) {
       await stageExecution.finish(false);
       const reason = "WRITER_EVIDENCE_REFERENCE_VIOLATION";
@@ -873,7 +873,7 @@ export async function runApplicationPipeline(
     const qualityResult = await execStage(
       "qualityReviewer", qualityPrompt.system, qualityPrompt.user
     );
-    const qualityReview: QualityReviewOutput = JSON.parse(qualityResult.content);
+    const qualityReview = qualityResult.output as QualityReviewOutput;
     // Phase 38A: Validate Quality Reviewer output against typed contract
     const qualityValidation = validateQualityReviewOutput(qualityReview);
     if (!qualityValidation.valid) {
@@ -904,7 +904,7 @@ export async function runApplicationPipeline(
     const calibrateResult = await execStage(
       "languageCalibrator", calibratePrompt.system, calibratePrompt.user
     );
-    const calibrated = JSON.parse(calibrateResult.content);
+    const calibrated = calibrateResult.output;
     stageUsages.push(calibrateResult.stageUsage);
 
     // Phase 16: Build calibrated claims and validate Language Calibrator claim preservation
@@ -1073,7 +1073,7 @@ export async function runApplicationPipeline(
         });
       }
     }
-    const finalized = JSON.parse(finalizerResult.content);
+    const finalized = finalizerResult.output;
     stageUsages.push(finalizerResult.stageUsage);
 
     // Normalise responses
@@ -1182,7 +1182,7 @@ export async function runApplicationPipeline(
     const factResult = await execStage(
       "factReviewer", factPrompt.system, factPrompt.user
     );
-    const factReview = normalizeStageOutput("factReviewer", JSON.parse(factResult.content)) as FactReviewOutput;
+    const factReview = factResult.output as FactReviewOutput;
     // Phase 38A: Validate Final Fact Reviewer output against typed contract
     const factValidation = validateFactReviewOutput(factReview);
     if (!factValidation.valid) {

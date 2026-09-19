@@ -17,7 +17,13 @@ export const EXECUTION_STAGES = [
 ] as const;
 export type ExecutionStage = typeof EXECUTION_STAGES[number];
 export type ExecutionMode = "CONTENT_REGENERATION" | "TECHNICAL_STAGE_RETRY";
-export interface StageExecutionResult { content: string; stageUsage: StageUsage }
+export interface StageExecutionResult {
+  content: string;
+  /** Canonical normalized + schema-validated stage output (parseStage result).
+   *  This — not a raw re-parse — is what downstream stages consume. */
+  output: Record<string, any>;
+  stageUsage: StageUsage;
+}
 export interface StageExecutionOptions {
   generationId: string;
   mode: ExecutionMode;
@@ -27,7 +33,7 @@ export interface StageExecutionOptions {
   call: (
     stage: ExecutionStage, system: string, user: string,
     onUsage: (usage: StageUsage) => Promise<void>,
-  ) => Promise<StageExecutionResult>;
+  ) => Promise<{ content: string; stageUsage: StageUsage }>;
   maxTechnicalRetries?: number;
 }
 export interface StageExecution {
@@ -389,7 +395,7 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
           if (restored) {
             if (restored.inputHash !== inputHash) throw new StageExecutionError("STALE_CHECKPOINT_REJECTED");
             cursor++;
-            return { content: restored.rawOutput!, stageUsage: { ...restored.usage, stage, success: true } };
+            return { content: restored.rawOutput!, output: restored.output, stageUsage: { ...restored.usage, stage, success: true } };
           }
           const prior = state.calls.filter(call => call.stageIndex === stageIndex);
           // Phase 34C: Allow different input hashes for technical retries
@@ -427,7 +433,7 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
             usageQueue = operation.catch(error => { usageFailure = error; });
             return operation;
           };
-          let result: StageExecutionResult;
+          let result: { content: string; stageUsage: StageUsage };
           try {
             result = await options.call(stage, system, user, onUsage);
             await usageQueue;
@@ -464,7 +470,7 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
           delete state.failure;
           await persist("STAGE_COMPLETED", { callId: activeCall.id, checkpointHash: computeHash(checkpoint) });
           cursor++;
-          return { content: result.content, stageUsage: { ...result.stageUsage } };
+          return { content: result.content, output, stageUsage: { ...result.stageUsage } };
         } catch (error) {
           await usageQueue;
           if (!poisoned) {
