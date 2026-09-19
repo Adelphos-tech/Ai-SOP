@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -109,11 +109,25 @@ export default function ApplicationWorkspacePage() {
   const [resolutionLabel, setResolutionLabel] = useState<string | null>(null);
   const [showCVUpload, setShowCVUpload] = useState(false);
 
+  const loadTokenRef = useRef(0);
+
+  // Identity change resets application-scoped state AND invalidates
+  // in-flight loads — no stale data from another application/student.
   useEffect(() => {
+    loadTokenRef.current++;
+    setApplication(null);
+    setStudent(null);
+    setProfile(null);
+    setDocuments([]);
+    setReqLookup(null);
+    setError("");
+    setShowAddForm(false);
     loadApplication();
-  }, [applicationId]);
+  }, [applicationId, studentId]);
 
   async function loadApplication() {
+    const token = ++loadTokenRef.current;
+    const stale = () => token !== loadTokenRef.current;
     setLoading(true);
     setError("");
     try {
@@ -123,23 +137,28 @@ export default function ApplicationWorkspacePage() {
         fetch(`/api/application/student?id=${studentId}`, { cache: "no-store" }),
         fetch(`/api/application/profile?studentId=${studentId}`, { cache: "no-store" }),
       ]);
+      if (stale()) return;
 
       if (!res.ok) {
         const data = await res.json();
+        if (stale()) return;
         setError(data.error || "Application not found");
         return;
       }
       const data = await res.json();
+      if (stale()) return;
       setApplication(data.application);
       setDocuments(data.documents || []);
 
       if (studentRes.ok) {
         const studentData = await studentRes.json();
+        if (stale()) return;
         setStudent(studentData.student);
       }
 
       if (profileRes.ok) {
         const profileData = await profileRes.json();
+        if (stale()) return;
         setProfile(profileData.profile);
       }
 
@@ -153,7 +172,7 @@ export default function ApplicationWorkspacePage() {
             );
             if (reqRes.ok) {
               const reqData = await reqRes.json();
-              setReqLookup(reqData);
+              if (!stale()) setReqLookup(reqData);
             }
           }
         } catch {
@@ -161,9 +180,9 @@ export default function ApplicationWorkspacePage() {
         }
       }
     } catch {
-      setError("Failed to load application");
+      if (!stale()) setError("Failed to load application");
     } finally {
-      setLoading(false);
+      if (!stale()) setLoading(false);
     }
   }
 
@@ -467,6 +486,7 @@ export default function ApplicationWorkspacePage() {
                   {showCVUpload && (
                     <div className="mt-4 p-4 bg-dvivid-surface-alt border border-dvivid-border rounded-input">
                       <CVUpload
+                        key={studentId}
                         studentId={studentId}
                         onApplied={() => {
                           setShowCVUpload(false);

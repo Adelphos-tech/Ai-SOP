@@ -43,6 +43,7 @@ async function testFile(filepath: string): Promise<TestResult> {
       parsed.skills.technical.length +
       parsed.skills.programming.length +
       parsed.skills.tools.length +
+      (parsed.skills.software?.length || 0) +
       parsed.skills.domain.length +
       parsed.skills.soft.length;
     result.warnings = parsed.parseWarnings;

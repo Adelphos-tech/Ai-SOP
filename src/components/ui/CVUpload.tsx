@@ -11,6 +11,7 @@ interface ParsedCV {
     phone?: string;
     currentCity?: string;
     currentCountry?: string;
+    nationality?: string;
   };
   education: any[];
   experience: any[];
@@ -19,9 +20,12 @@ interface ParsedCV {
     technical: string[];
     programming: string[];
     tools: string[];
+    software?: string[];
     domain: string[];
     soft: string[];
   };
+  certifications?: string[];
+  achievements?: string[];
   parseWarnings: string[];
 }
 
@@ -178,8 +182,11 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
 
   const totalSkills = parsedCV
     ? parsedCV.skills.technical.length + parsedCV.skills.programming.length +
-      parsedCV.skills.tools.length + parsedCV.skills.domain.length + parsedCV.skills.soft.length
+      parsedCV.skills.tools.length + (parsedCV.skills.software || []).length +
+      parsedCV.skills.domain.length + parsedCV.skills.soft.length
     : 0;
+  const certCount = parsedCV?.certifications?.length || 0;
+  const achievementCount = parsedCV?.achievements?.length || 0;
 
   return (
     <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6">
@@ -281,6 +288,8 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
               <DetectedItem detected={parsedCV.projects.length > 0} label={`${parsedCV.projects.length} Project${parsedCV.projects.length !== 1 ? "s" : ""}`} />
               <DetectedItem detected={parsedCV.experience.length > 0} label={`${parsedCV.experience.length} Work experience${parsedCV.experience.length !== 1 ? "s" : ""}`} />
               <DetectedItem detected={totalSkills > 0} label={`${totalSkills} Skill${totalSkills !== 1 ? "s" : ""}`} />
+              <DetectedItem detected={certCount > 0} label={`${certCount} Certification${certCount !== 1 ? "s" : ""}`} />
+              <DetectedItem detected={achievementCount > 0} label={`${achievementCount} Achievement${achievementCount !== 1 ? "s" : ""}`} />
             </div>
           </div>
 
@@ -308,6 +317,7 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
                   <dt>Email:</dt><dd>{parsedCV.personalData.email || "—"}</dd>
                   <dt>Phone:</dt><dd>{parsedCV.personalData.phone || "—"}</dd>
                   <dt>Location:</dt><dd>{[parsedCV.personalData.currentCity, parsedCV.personalData.currentCountry].filter(Boolean).join(", ") || "—"}</dd>
+                  <dt>Nationality:</dt><dd>{parsedCV.personalData.nationality || "—"}</dd>
                 </dl>
               </div>
 
@@ -353,10 +363,28 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
                 <div>
                   <p className="font-medium text-dvivid-text-primary mb-1">Skills</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {[...parsedCV.skills.technical, ...parsedCV.skills.programming, ...parsedCV.skills.tools, ...parsedCV.skills.domain, ...parsedCV.skills.soft].map((s, i) => (
+                    {[...parsedCV.skills.technical, ...parsedCV.skills.programming, ...parsedCV.skills.tools, ...(parsedCV.skills.software || []), ...parsedCV.skills.domain, ...parsedCV.skills.soft].map((s, i) => (
                       <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-secondary">{s}</span>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Certifications + Achievements */}
+              {certCount > 0 && (
+                <div>
+                  <p className="font-medium text-dvivid-text-primary mb-1">Certifications</p>
+                  {parsedCV.certifications!.map((c, i) => (
+                    <div key={i} className="text-dvivid-text-secondary mb-0.5">{c}</div>
+                  ))}
+                </div>
+              )}
+              {achievementCount > 0 && (
+                <div>
+                  <p className="font-medium text-dvivid-text-primary mb-1">Achievements & Awards</p>
+                  {parsedCV.achievements!.map((a, i) => (
+                    <div key={i} className="text-dvivid-text-secondary mb-0.5">{a}</div>
+                  ))}
                 </div>
               )}
             </div>

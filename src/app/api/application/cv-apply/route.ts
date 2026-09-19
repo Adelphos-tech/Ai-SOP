@@ -227,8 +227,31 @@ export async function POST(request: NextRequest) {
         tools: mergeArrays(existingSkills.tools, parsed.skills.tools, overwrite),
         domain: mergeArrays(existingSkills.domain, parsed.skills.domain, overwrite),
         soft: mergeArrays(existingSkills.soft, parsed.skills.soft, overwrite),
-        software: existingSkills.software || [],
+        software: mergeArrays(existingSkills.software, parsed.skills.software, overwrite),
       };
+    }
+
+    // ===== Achievements + Certifications → canonical achievements[] =====
+    // Certifications map to type "Certification"; explicit awards/honors
+    // sections map to "Award". Append + dedupe by title; manual entries
+    // are never overwritten.
+    const parsedAchievements: Array<{ type: string; title: string }> = [
+      ...(Array.isArray(parsed.certifications) ? parsed.certifications : [])
+        .map((c: string) => ({ type: "Certification", title: c })),
+      ...(Array.isArray(parsed.achievements) ? parsed.achievements : [])
+        .map((a: string) => ({ type: "Award", title: a })),
+    ].filter(a => typeof a.title === "string" && a.title.trim().length > 0);
+    if (parsedAchievements.length > 0) {
+      const existingAch = merged.achievements || [];
+      const existingTitles = new Set(existingAch.map((a: any) => (a.title || "").trim().toLowerCase()));
+      for (const pa of parsedAchievements) {
+        const key = pa.title.trim().toLowerCase();
+        if (!existingTitles.has(key)) {
+          existingAch.push({ id: randomUUID(), type: pa.type, title: pa.title.trim(), description: "", year: "" });
+          existingTitles.add(key);
+        }
+      }
+      merged.achievements = existingAch;
     }
 
     // ===== CONDITIONAL SAVE (optimistic concurrency) =====
@@ -264,6 +287,7 @@ export async function POST(request: NextRequest) {
         experience: (parsed.experience || []).length,
         projects: (parsed.projects || []).length,
         skills: Object.values(parsed.skills || {}).flat().length,
+        achievements: parsedAchievements.length,
       },
       revision: newRevision,
     });

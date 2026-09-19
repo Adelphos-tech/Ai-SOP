@@ -63,6 +63,8 @@ export interface ParsedCV {
     phone?: string;
     currentCity?: string;
     currentCountry?: string;
+    /** Explicit "Nationality:"/"Citizenship:" label only — never inferred. */
+    nationality?: string;
     linkedin?: string;
     github?: string;
   };
@@ -73,9 +75,13 @@ export interface ParsedCV {
     technical: string[];
     programming: string[];
     tools: string[];
+    software: string[];
     domain: string[];
     soft: string[];
   };
+  /** Explicit "CERTIFICATIONS"/"LICENSES" section lines only. */
+  certifications: string[];
+  achievements: string[];
   rawTextLength: number;
   parseWarnings: string[];
 }
@@ -200,11 +206,14 @@ const COMMON_SKILLS: Record<string, string[]> = {
     "Git", "GitHub", "GitLab", "Bitbucket", "JIRA", "Confluence",
     "Docker", "Kubernetes", "Jenkins", "CircleCI", "Travis CI",
     "AWS", "Azure", "GCP", "Heroku", "Vercel",
-    "Tableau", "Power BI", "Excel", "Google Analytics",
-    "Figma", "Sketch", "Adobe XD", "Photoshop", "Illustrator",
     "VS Code", "IntelliJ", "Eclipse", "Vim",
     "MySQL", "PostgreSQL", "MongoDB", "Redis", "Elasticsearch",
     "Kafka", "RabbitMQ", "Nginx", "Apache",
+  ],
+  // Software/design/analysis applications — maps to canonical skills.software
+  software: [
+    "Tableau", "Power BI", "Excel", "Google Analytics",
+    "Figma", "Sketch", "Adobe XD", "Photoshop", "Illustrator",
     "Jupyter", "RStudio", "SPSS", "Stata", "SAS",
     "AutoCAD", "SolidWorks", "MATLAB", "Simulink",
   ],
@@ -588,6 +597,55 @@ function extractProjects(text: string): ParsedProject[] {
 }
 
 /**
+ * Extract nationality — EXPLICIT LABEL ONLY.
+ * Matches "Nationality: Indian" / "Citizenship: Indian" style lines.
+ * Never inferred from name, address, phone prefix, or university.
+ */
+function extractNationality(text: string): string | undefined {
+  const match = text.match(/(?:nationality|citizenship)\s*[:|–—-]\s*([A-Za-z][A-Za-z' -]{1,40})/i);
+  if (!match) return undefined;
+  // Stop at likely line-endings embedded in the match (labels in multi-column CVs)
+  const value = match[1].split(/[|•,;]/)[0].trim();
+  return value || undefined;
+}
+
+/**
+ * Extract lines from a clearly-labelled CV section.
+ * Conservative: only the labelled section's bullet/line items are returned;
+ * no inference from other sections (e.g. job bullets are NOT achievements).
+ */
+function extractLabelledSection(text: string, labels: string[]): string[] {
+  const labelPattern = labels.join("|");
+  const sectionMatch = text.match(
+    new RegExp(`(?:^|\\n)\\s*(?:${labelPattern})\\s*:?\\s*\\n([\\s\\S]*?)(?=\\n\\s*(?:[A-Z][A-Z&/ ]{3,}|education|experience|employment|work|projects|skills|summary|objective|references|interests|hobbies|declaration)\\s*:?\\s*\\n|$)`, "i")
+  );
+  if (!sectionMatch) return [];
+  return sectionMatch[1]
+    .split("\n")
+    .map(l => l.replace(/^[•\-*▪◦·]\s*/, "").trim())
+    .filter(l => l.length > 3 && l.length < 200);
+}
+
+/**
+ * Extract certifications — only from an explicit section label.
+ */
+function extractCertifications(text: string): string[] {
+  return extractLabelledSection(text, [
+    "certifications?", "certificates", "licenses?", "certified courses", "professional certifications",
+  ]);
+}
+
+/**
+ * Extract achievements — only from an explicit section label.
+ * Ordinary job responsibilities are never promoted to achievements.
+ */
+function extractAchievements(text: string): string[] {
+  return extractLabelledSection(text, [
+    "achievements", "awards?(?:\\s+and\\s+honou?rs?)?", "honou?rs?", "accomplishments", "recognitions?",
+  ]);
+}
+
+/**
  * Extract skills from text by matching against known skill lists.
  */
 function extractSkills(text: string): ParsedCV["skills"] {
@@ -595,6 +653,7 @@ function extractSkills(text: string): ParsedCV["skills"] {
     technical: [],
     programming: [],
     tools: [],
+    software: [],
     domain: [],
     soft: [],
   };
@@ -638,6 +697,9 @@ export function parseCVText(text: string): ParsedCV {
   const github = extractGitHub(text);
   const location = extractLocation(text);
 
+  const nationality = extractNationality(text);
+  const certifications = extractCertifications(text);
+  const achievements = extractAchievements(text);
   const education = extractEducation(text);
   const experience = extractExperience(text);
   const projects = extractProjects(text);
@@ -649,7 +711,7 @@ export function parseCVText(text: string): ParsedCV {
   if (education.length === 0) warnings.push("No education records detected.");
   if (experience.length === 0) warnings.push("No work experience detected.");
   if (projects.length === 0) warnings.push("No projects detected.");
-  if (skills.technical.length + skills.programming.length + skills.tools.length === 0) {
+  if (skills.technical.length + skills.programming.length + skills.tools.length + skills.software.length === 0) {
     warnings.push("No skills detected.");
   }
 
@@ -661,6 +723,7 @@ export function parseCVText(text: string): ParsedCV {
       phone,
       currentCity: location.city,
       currentCountry: location.country,
+      nationality,
       linkedin,
       github,
     },
@@ -668,6 +731,8 @@ export function parseCVText(text: string): ParsedCV {
     experience,
     projects,
     skills,
+    certifications,
+    achievements,
     rawTextLength: text.length,
     parseWarnings: warnings,
   };

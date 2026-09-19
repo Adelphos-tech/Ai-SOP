@@ -65,13 +65,26 @@ export default function IntakePage() {
   // form mounted when the last field is typed but not yet saved.
   const lastMissingSlugRef = useRef<string | null>(null);
   const [error, setError] = useState("");
+  // Stale-request token — a response is only applied if it is still the
+  // latest load for the current student/application identity.
+  const loadTokenRef = useRef(0);
 
-  // Load profile + application
+  // Load profile + application. Identity change resets ALL id-scoped
+  // state — no student-A state may remain observable under student B.
   useEffect(() => {
+    loadTokenRef.current++; // invalidate any in-flight load
+    setProfile(null);
+    setProfileRevision(0);
+    setApplication(null);
+    setDirty(false);
+    setSaveStatus("idle");
+    setError("");
+    lastMissingSlugRef.current = null;
     loadAll();
   }, [studentId, applicationId]);
 
   async function loadAll() {
+    const token = ++loadTokenRef.current;
     setLoading(true);
     setError("");
     try {
@@ -80,22 +93,27 @@ export default function IntakePage() {
         fetch(`/api/application/list?studentId=${studentId}`, { cache: "no-store" }),
       ]);
 
+      if (token !== loadTokenRef.current) return; // superseded by a newer load
+
       if (profileRes.ok) {
         const data = await profileRes.json();
+        if (token !== loadTokenRef.current) return;
         setProfile(data.profile || {});
         setProfileRevision(typeof data.revision === "number" ? data.revision : 0);
       }
 
       if (appRes.ok) {
         const data = await appRes.json();
+        if (token !== loadTokenRef.current) return;
         const apps = data.applications || [];
         const app = apps.find((a: Application) => a.id === applicationId);
         setApplication(app || null);
       }
     } catch {
+      if (token !== loadTokenRef.current) return;
       setError("Failed to load data");
     } finally {
-      setLoading(false);
+      if (token === loadTokenRef.current) setLoading(false);
     }
   }
 
@@ -231,11 +249,17 @@ export default function IntakePage() {
   let wizardSection = missingRequired.length > 0
     ? INTAKE_SECTIONS.find(s => s.slug === missingRequired[0].slug) || null
     : null;
+  // FIELD CHANGE != NAVIGATION: while the user has unsaved edits, the
+  // section being edited stays mounted even if completion of its last
+  // field promotes a different section to missingRequired[0]. The next
+  // section is only chosen after an explicit Save & Continue.
+  if (wizardMode && dirty && lastMissingSlugRef.current) {
+    wizardSection = INTAKE_SECTIONS.find(s => s.slug === lastMissingSlugRef.current) || wizardSection;
+  }
   if (wizardMode && !wizardSection && dirty) {
-    wizardSection = INTAKE_SECTIONS.find(s => s.slug === lastMissingSlugRef.current) || null;
     // Edge: dirty with no tracked section — stay on Student Details
     // rather than crashing on a null currentSection.
-    if (!wizardSection) wizardSection = INTAKE_SECTIONS[0];
+    wizardSection = INTAKE_SECTIONS[0];
   }
   if (wizardSection) lastMissingSlugRef.current = wizardSection.slug;
   const currentSection = wizardMode ? wizardSection : routeSection;
@@ -316,6 +340,7 @@ export default function IntakePage() {
       {displayStep === 1 && (
         <div className="mb-6">
           <CVUpload
+            key={studentId}
             studentId={studentId}
             profileRevision={profileRevision}
             onApplied={async () => {
@@ -468,28 +493,28 @@ function StudentDetailsSection({ profile, updateProfile }: { profile: any; updat
         <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Personal Information</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField label="First Name" required>
-            <input className={inputClass} value={pd.firstName || ""} onChange={e => setPd("firstName", e.target.value)} placeholder="John" />
+            <input className={inputClass} name="given-name" autoComplete="given-name" value={pd.firstName || ""} onChange={e => setPd("firstName", e.target.value)} placeholder="John" />
           </FormField>
           <FormField label="Last Name" required>
-            <input className={inputClass} value={pd.lastName || ""} onChange={e => setPd("lastName", e.target.value)} placeholder="Doe" />
+            <input className={inputClass} name="family-name" autoComplete="family-name" value={pd.lastName || ""} onChange={e => setPd("lastName", e.target.value)} placeholder="Doe" />
           </FormField>
           <FormField label="Email">
-            <input className={inputClass} value={pd.email || ""} onChange={e => setPd("email", e.target.value)} placeholder="john@example.com" />
+            <input className={inputClass} name="email" autoComplete="email" type="email" value={pd.email || ""} onChange={e => setPd("email", e.target.value)} placeholder="john@example.com" />
           </FormField>
           <FormField label="Phone">
-            <input className={inputClass} value={pd.phone || ""} onChange={e => setPd("phone", e.target.value)} placeholder="+91 98765 43210" />
+            <input className={inputClass} name="tel" autoComplete="tel" type="tel" value={pd.phone || ""} onChange={e => setPd("phone", e.target.value)} placeholder="+91 98765 43210" />
           </FormField>
           <FormField label="Date of Birth">
-            <input type="date" className={inputClass} value={pd.dateOfBirth || ""} onChange={e => setPd("dateOfBirth", e.target.value)} />
+            <input type="date" className={inputClass} name="bday" autoComplete="bday" value={pd.dateOfBirth || ""} onChange={e => setPd("dateOfBirth", e.target.value)} />
           </FormField>
           <FormField label="Nationality" required>
-            <input className={inputClass} value={pd.nationality || ""} onChange={e => setPd("nationality", e.target.value)} placeholder="Indian" />
+            <input className={inputClass} name="nationality" autoComplete="off" value={pd.nationality || ""} onChange={e => setPd("nationality", e.target.value)} placeholder="Indian" />
           </FormField>
           <FormField label="Current City" required>
-            <input className={inputClass} value={pd.currentCity || ""} onChange={e => setPd("currentCity", e.target.value)} placeholder="Mumbai" />
+            <input className={inputClass} name="address-level2" autoComplete="address-level2" value={pd.currentCity || ""} onChange={e => setPd("currentCity", e.target.value)} placeholder="Mumbai" />
           </FormField>
           <FormField label="Current Country" required>
-            <input className={inputClass} value={pd.currentCountry || ""} onChange={e => setPd("currentCountry", e.target.value)} placeholder="India" />
+            <input className={inputClass} name="country-name" autoComplete="country-name" value={pd.currentCountry || ""} onChange={e => setPd("currentCountry", e.target.value)} placeholder="India" />
           </FormField>
         </div>
       </div>

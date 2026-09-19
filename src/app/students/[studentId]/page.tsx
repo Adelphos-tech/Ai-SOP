@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -65,16 +65,28 @@ export default function StudentWorkspacePage() {
   const [intake, setIntake] = useState("");
   const [intakeYear, setIntakeYear] = useState("");
   const [creating, setCreating] = useState(false);
+  const loadTokenRef = useRef(0);
 
+  // Identity change resets all student-scoped state AND invalidates
+  // any in-flight load — student A data can never land on student B.
   useEffect(() => {
+    loadTokenRef.current++;
+    setStudent(null);
+    setProfile(null);
+    setApplications([]);
+    setError("");
+    setShowNewAppForm(false);
     loadStudent();
   }, [studentId]);
 
   async function loadStudent() {
+    const token = ++loadTokenRef.current;
+    const stale = () => token !== loadTokenRef.current;
     setLoading(true);
     setError("");
     try {
       const studentRes = await fetch(`/api/application/student?id=${studentId}`);
+      if (stale()) return;
       if (!studentRes.ok) {
         let msg = studentRes.status === 404 ? "Student not found" : "Failed to load student. Please try again.";
         try {
@@ -85,17 +97,22 @@ export default function StudentWorkspacePage() {
         return;
       }
       const studentData = await studentRes.json();
+      if (stale()) return;
       setStudent(studentData.student);
 
       const profileRes = await fetch(`/api/application/profile?studentId=${studentId}`);
+      if (stale()) return;
       if (profileRes.ok) {
         const profileData = await profileRes.json();
+        if (stale()) return;
         setProfile(profileData.profile);
       }
 
       const appsRes = await fetch(`/api/application/list?studentId=${studentId}`);
+      if (stale()) return;
       if (appsRes.ok) {
         const appsData = await appsRes.json();
+        if (stale()) return;
         const apps = appsData.applications || [];
 
         const withCounts = await Promise.all(
@@ -112,12 +129,13 @@ export default function StudentWorkspacePage() {
             }
           }),
         );
+        if (stale()) return;
         setApplications(withCounts);
       }
     } catch {
-      setError("Failed to load student");
+      if (!stale()) setError("Failed to load student");
     } finally {
-      setLoading(false);
+      if (!stale()) setLoading(false);
     }
   }
 
