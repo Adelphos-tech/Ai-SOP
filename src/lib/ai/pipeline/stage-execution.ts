@@ -111,7 +111,7 @@ function classifyFailure(error: unknown): FailureKind {
 const object = (value: unknown): value is Record<string, any> => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
-function parseStage(stage: ExecutionStage, content: string, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Record<string, any> {
+export function parseStage(stage: ExecutionStage, content: string, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Record<string, any> {
   if (!text(content)) throw new StageExecutionError("EMPTY_CONTENT", `${stage} returned empty content`, true);
   let output: unknown;
   try { output = JSON.parse(content); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
@@ -183,7 +183,9 @@ function parseStage(stage: ExecutionStage, content: string, context?: { freezeCo
   if (stage === "qualityReviewer" && (!object(output.requirementCompliance) || !items.every(item => Number.isFinite(item.score) && item.score >= 1 && item.score <= 10))) {
     throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid quality review`);
   }
-  if (stage === "factReviewer" && (typeof output.overallPass !== "boolean" || !items.every(item => typeof item.pass === "boolean" && Array.isArray(item.claims)) || !["totalInventedFacts", "totalAlteredFacts", "totalInterpretiveElaborations", "totalAmbiguousClaims"].every(key => Number.isInteger(output[key]) && output[key] >= 0))) {
+  // Compact contract: the four totals may be omitted — the server derives
+  // them via deriveFactReviewTotals. When present they must still be valid.
+  if (stage === "factReviewer" && (typeof output.overallPass !== "boolean" || !items.every(item => typeof item.pass === "boolean" && Array.isArray(item.claims)) || !["totalInventedFacts", "totalAlteredFacts", "totalInterpretiveElaborations", "totalAmbiguousClaims"].every(key => output[key] === undefined || (Number.isInteger(output[key]) && output[key] >= 0)))) {
     throw new StageExecutionError("CONTENT_SCHEMA_INVALID", `${stage}: invalid fact review`);
   }
   return output;

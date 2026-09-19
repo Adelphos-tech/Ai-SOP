@@ -16,6 +16,7 @@ import { resolveVersionContent, createSingleFlightSubmitter } from "../src/lib/a
 import { computeApprovalWarnings } from "../src/lib/application/application-repository";
 import { mergePersonalData } from "../src/lib/application/cv-merge";
 import { calculateIntakeCompletion, getProfileReadiness } from "../src/lib/application/intake-completion";
+import { parseStage } from "../src/lib/ai/pipeline/stage-execution";
 
 let passed = 0, failed = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -282,6 +283,49 @@ async function main() {
     const r = getProfileReadiness(optOnly);
     check("RDY-E optional empty ≠ required missing",
       r.sections.filter(s => s.optional).every(s => s.status !== "missing"));
+  }
+
+  // ---------- parseStage — compact FR must pass validation ----------
+  console.log("parseStage — compact fact review acceptance");
+  {
+    // The live regression: model omits totals per the compact prompt →
+    // parseStage must accept (server derives totals).
+    const compactFR = JSON.stringify({
+      overallPass: true,
+      blockingReason: null,
+      components: [
+        { componentId: "intro", pass: true, claims: [{ claim: "x", classification: "SUPPORTED", supportingFactIds: ["f1"], severity: "LOW" }] },
+      ],
+    });
+    let ok = true;
+    try { parseStage("factReviewer", compactFR); } catch (e) { ok = false; }
+    check("PS-1 compact FR (no totals) accepted", ok);
+
+    // Legacy full FR still accepted
+    const legacyFR = JSON.stringify({
+      overallPass: false,
+      blockingReason: "invented",
+      totalInventedFacts: 1, totalAlteredFacts: 0, totalInterpretiveElaborations: 0, totalAmbiguousClaims: 0,
+      components: [{ componentId: "intro", pass: false, claims: [] }],
+    });
+    ok = true;
+    try { parseStage("factReviewer", legacyFR); } catch { ok = false; }
+    check("PS-2 legacy FR (with totals) accepted", ok);
+
+    // Invalid totals still rejected
+    const badFR = JSON.stringify({
+      overallPass: true,
+      totalInventedFacts: -1,
+      components: [{ componentId: "intro", pass: true, claims: [] }],
+    });
+    ok = false;
+    try { parseStage("factReviewer", badFR); } catch { ok = true; }
+    check("PS-3 invalid totals still rejected", ok);
+
+    // Missing overallPass still rejected
+    ok = false;
+    try { parseStage("factReviewer", JSON.stringify({ components: [{ componentId: "x", pass: true, claims: [] }] })); } catch { ok = true; }
+    check("PS-4 missing overallPass rejected", ok);
   }
 
   console.log(`\n=== RESULT: ${passed} passed, ${failed} failed ===`);
