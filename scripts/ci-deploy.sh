@@ -44,6 +44,15 @@ echo "=== CI Deploy ==="
 echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Build ID: $BUILD_ID"
 
+# Step 0: Disk guard — refuse to deploy below 10G free on the
+# release filesystem (build + node_modules + rollback backup need it).
+MIN_FREE_KB=$((10 * 1024 * 1024))
+FREE_KB=$(df --output=avail "$(dirname "$APP_DIR")" | tail -1 | tr -d ' ')
+if [ "${FREE_KB:-0}" -lt "$MIN_FREE_KB" ]; then
+  echo "=== ERROR: only $((FREE_KB / 1024 / 1024))G free (<10G required) — deploy aborted ==="
+  exit 1
+fi
+
 # Step 1: Install dependencies (if package-lock changed)
 echo "=== Installing dependencies ==="
 npm ci --include=dev --no-audit --no-fund
@@ -67,16 +76,16 @@ for env_file in "$APP_DIR"/.env "$APP_DIR"/.env.*; do
   [ "$(basename "$env_file")" = .env.example ] && continue
   cp -p "$env_file" "$STAGING_DIR/"
 done
+# Persistent runtime data lives OUTSIDE releases in the shared root.
+# Every release only ever gets symlinks — never owned data dirs —
+# so release pruning can never touch logs/uploads/backups/baselines.
+SHARED_DIR="${SHARED_DIR:-/opt/sop-ai-shared}"
 for entry in logs uploads backups baselines; do
-  if [ -d "$APP_DIR/$entry" ]; then
-    [ ! -e "$STAGING_DIR/$entry" ]
-    [ ! -L "$STAGING_DIR/$entry" ]
-    if [ -L "$APP_DIR/$entry" ]; then
-      ln -s "$(cd -P "$APP_DIR/$entry" && pwd)" "$STAGING_DIR/$entry"
-    else
-      ln -s "$PREVIOUS_DIR/$entry" "$STAGING_DIR/$entry"
-    fi
-  fi
+  mkdir -p "$SHARED_DIR/$entry"
+  chmod 755 "$SHARED_DIR" "$SHARED_DIR/$entry"
+  [ ! -e "$STAGING_DIR/$entry" ]
+  [ ! -L "$STAGING_DIR/$entry" ]
+  ln -s "$SHARED_DIR/$entry" "$STAGING_DIR/$entry"
 done
 
 # Step 2b: Backup current build for rollback
@@ -99,5 +108,24 @@ if ! check_release_health; then
   exit 1
 fi
 echo "Local HTTP status: 200"
+
+# Step 6: Prune stale releases — ONLY after the new release is live
+# and healthy. Keeps the newest KEEP_PREV rollback releases; skips any
+# release dir that still owns real (non-symlink) runtime data dirs.
+echo "=== Pruning stale releases ==="
+KEEP_PREV=2
+cd "$(dirname "$APP_DIR")"
+for d in $(ls -dt "${APP_DIR}".previous-* 2>/dev/null | tail -n +$((KEEP_PREV + 1))); do
+  skip=0
+  for entry in logs uploads backups baselines; do
+    if [ -e "$d/$entry" ] && [ ! -L "$d/$entry" ]; then
+      echo "KEEP (owns real $entry data): $d"
+      skip=1
+    fi
+  done
+  [ "$skip" = 1 ] && continue
+  echo "PRUNE $d"
+  rm -rf "$d"
+done
 
 echo "=== CI Deploy Complete ==="
