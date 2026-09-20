@@ -108,6 +108,8 @@ export default function ApplicationWorkspacePage() {
   const [resolutionPath, setResolutionPath] = useState<string | null>(null);
   const [resolutionLabel, setResolutionLabel] = useState<string | null>(null);
   const [showCVUpload, setShowCVUpload] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const loadTokenRef = useRef(0);
 
@@ -447,8 +449,60 @@ export default function ApplicationWorkspacePage() {
               {application?.intake ? ` · ${application.intake} ${application.intakeYear}` : ""}
             </p>
           </div>
-          <StatusBadge status={application?.status || "DRAFT"} />
+          <div className="flex flex-col items-end gap-2">
+            <StatusBadge status={application?.status || "DRAFT"} />
+            {!confirmDelete && (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-xs text-dvivid-error/70 hover:text-dvivid-error hover:underline"
+              >
+                Delete application
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Delete application — danger action, explicit confirm */}
+        {confirmDelete && (
+          <div className="mt-4 p-4 bg-dvivid-error-light border border-dvivid-error/30 rounded-input">
+            <p className="text-sm font-semibold text-dvivid-error mb-1">Delete application?</p>
+            <p className="text-sm text-dvivid-text-secondary mb-3">
+              This will permanently delete this application and its associated documents
+              and generation history. The student's reusable profile will NOT be deleted.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={async () => {
+                  setDeleting(true);
+                  try {
+                    const res = await fetch("/api/application/delete", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ applicationId, studentId }),
+                    });
+                    if (!res.ok) {
+                      const data = await res.json().catch(() => ({}));
+                      setError(data.error || "Failed to delete application.");
+                      setConfirmDelete(false);
+                      return;
+                    }
+                    router.push(`/students/${studentId}`);
+                  } catch {
+                    setError("Failed to delete application.");
+                    setConfirmDelete(false);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                disabled={deleting}
+                className="px-4 py-2 text-sm font-medium rounded-input bg-dvivid-error text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {deleting ? "Deleting..." : "Yes, delete this application"}
+              </button>
+              <SecondaryButton onClick={() => setConfirmDelete(false)}>Cancel</SecondaryButton>
+            </div>
+          </div>
+        )}
 
         {/* APPLICATION STATUS — what is missing / what is next */}
         {readiness && (() => {

@@ -307,6 +307,73 @@ export async function listStudentApplications(studentId: string, limit = 100, of
 }
 
 /**
+ * Delete an application and ALL data owned by it — atomically.
+ *
+ * FK cascades cover application_documents → document_versions, but
+ * generation_runs / generation_stage_responses have NO FK constraints,
+ * so they are deleted explicitly in dependency order.
+ *
+ * Shared program-level data (application_requirement_sets,
+ * writing_requirements, requirement_sources, institutions, programs)
+ * is NEVER touched — it is library data, not application-owned.
+ * The student's profile_data is untouched by design.
+ */
+export async function deleteApplicationCascade(applicationId: string): Promise<boolean> {
+  const pool = getDbPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Lock the application row
+    const [appRows] = await conn.execute(
+      "SELECT id FROM applications WHERE id = ? FOR UPDATE",
+      [applicationId],
+    );
+    if (!(appRows as any[])[0]) {
+      await conn.rollback();
+      return false;
+    }
+
+    // 1. Stage responses — via runs and via documents (no FK on either)
+    await conn.execute(
+      `DELETE gsr FROM generation_stage_responses gsr
+       JOIN generation_runs gr ON gsr.run_id = gr.id
+       WHERE gr.application_id = ?`,
+      [applicationId],
+    );
+    await conn.execute(
+      `DELETE gsr FROM generation_stage_responses gsr
+       JOIN application_documents d ON gsr.document_id = d.id
+       WHERE d.application_id = ?`,
+      [applicationId],
+    );
+
+    // 2. Generation runs (no FK)
+    await conn.execute("DELETE FROM generation_runs WHERE application_id = ?", [applicationId]);
+
+    // 3. Document versions → documents (explicit; mirrors FK cascade)
+    await conn.execute(
+      `DELETE dv FROM document_versions dv
+       JOIN application_documents d ON dv.document_id = d.id
+       WHERE d.application_id = ?`,
+      [applicationId],
+    );
+    await conn.execute("DELETE FROM application_documents WHERE application_id = ?", [applicationId]);
+
+    // 4. The application itself
+    await conn.execute("DELETE FROM applications WHERE id = ?", [applicationId]);
+
+    await conn.commit();
+    return true;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
  * List all applications across all students, with student info joined.
  * Used by the cross-student Applications listing page.
  */

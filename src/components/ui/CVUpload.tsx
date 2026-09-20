@@ -36,6 +36,9 @@ interface CVUploadProps {
   /** students row identity — shown next to parsed CV identity so the
    * consultant can catch wrong-person uploads before Apply. */
   studentIdentity?: { firstName?: string; lastName?: string; email?: string };
+  /** When the current profile already contains cv-* imported items, the
+   * "Replace previous CV-imported data" action becomes available. */
+  hasCvDerivedData?: boolean;
 }
 
 interface IdentityConflict {
@@ -51,7 +54,7 @@ interface IdentityConflict {
  * - Shows detected data summary
  * - Apply to Profile button
  */
-export function CVUpload({ studentId, profileRevision, onApplied, studentIdentity }: CVUploadProps) {
+export function CVUpload({ studentId, profileRevision, onApplied, studentIdentity, hasCvDerivedData }: CVUploadProps) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [parsing, setParsing] = useState(false);
@@ -65,6 +68,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
   const [staleProfile, setStaleProfile] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [identityConflict, setIdentityConflict] = useState<IdentityConflict | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(async (file: File) => {
@@ -144,7 +148,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
     if (file) handleFile(file);
   }, [handleFile]);
 
-  async function handleApply(identityOverride = false) {
+  async function handleApply(identityOverride = false, replaceCvDerived = false) {
     if (!parsedCV) return;
     setApplying(true);
     setError("");
@@ -159,6 +163,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
           overwrite: false,
           profileRevision: parseRevision,
           ...(identityOverride ? { identityConflictOverride: true } : {}),
+          ...(replaceCvDerived ? { replaceCvDerived: true } : {}),
         }),
       });
       if (res.status === 409) {
@@ -200,6 +205,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
     setStaleProfile(false);
     setParseRevision(null);
     setIdentityConflict(null);
+    setConfirmReplace(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -447,27 +453,56 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
             </div>
           </details>
 
+          {/* Replace confirm — explicit second step, never the default */}
+          {confirmReplace && !identityConflict && (
+            <div className="p-4 bg-amber-50 border border-amber-300 rounded-input space-y-2">
+              <p className="text-sm font-semibold text-amber-900">
+                Replace previous CV-imported data?
+              </p>
+              <p className="text-sm text-amber-800">
+                This removes education, experience, project and achievement entries that were
+                previously imported from a CV, then applies this CV instead.
+                Manually entered information is preserved.
+              </p>
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => handleApply(false, true)}
+                  disabled={applying}
+                  className="px-4 py-2 text-sm font-medium rounded-input bg-amber-600 text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
+                >
+                  {applying ? "Replacing..." : "Confirm replace"}
+                </button>
+                <SecondaryButton onClick={() => setConfirmReplace(false)}>Cancel</SecondaryButton>
+              </div>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-3 flex-wrap">
             {identityConflict ? (
               <>
                 <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
                 <button
-                  onClick={() => handleApply(true)}
+                  onClick={() => handleApply(true, confirmReplace)}
                   disabled={applying}
                   className="px-4 py-2 text-sm font-medium rounded-input border border-dvivid-error text-dvivid-error hover:bg-dvivid-error hover:text-white transition-colors disabled:opacity-50"
                 >
                   {applying ? "Applying..." : "Apply Anyway (I verified the identity)"}
                 </button>
               </>
-            ) : (
+            ) : !confirmReplace ? (
               <>
                 <PrimaryButton onClick={() => handleApply(false)} disabled={applying}>
                   {applying ? "Applying..." : "Apply to Profile"}
                 </PrimaryButton>
+                {hasCvDerivedData && (
+                  <SecondaryButton onClick={() => setConfirmReplace(true)}>
+                    Replace previous CV-imported data
+                  </SecondaryButton>
+                )}
                 <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
               </>
-            )}
+            ) : null}
           </div>
         </div>
       )}

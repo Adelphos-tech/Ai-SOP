@@ -374,6 +374,10 @@ export default function IntakePage() {
               studentId={studentId}
               profileRevision={profileRevision}
               studentIdentity={studentIdentity || undefined}
+              hasCvDerivedData={["education", "experience", "projects", "achievements"].some(
+                k => Array.isArray((liveProfile as any)?.[k]) &&
+                  (liveProfile as any)[k].some((it: any) => String(it?.id ?? "").startsWith("cv-")),
+              )}
               onApplied={async () => {
                 // Preserve typed-but-unsaved edits before reloading —
                 // a bare loadAll() would silently wipe them.

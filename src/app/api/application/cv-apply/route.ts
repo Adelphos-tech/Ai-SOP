@@ -113,6 +113,31 @@ export async function POST(request: NextRequest) {
 
     const merged: any = { ...existingProfile };
 
+    // ===== REPLACE-PREVIOUS-CV-IMPORT MODE =====
+    // Removes items provably imported by a prior CV apply (id "cv-*")
+    // BEFORE merging the new CV. Manual and unknown-provenance entries
+    // are always preserved — this mode repairs a corrupted profile
+    // (e.g. a wrong-person CV applied earlier) without destroying
+    // consultant-entered data. Skills arrays have no per-item
+    // provenance so they are left untouched.
+    if (body.replaceCvDerived === true) {
+      for (const key of ["education", "experience", "projects", "achievements"] as const) {
+        if (Array.isArray(merged[key])) {
+          merged[key] = merged[key].filter(
+            (item: any) => !String(item?.id ?? "").startsWith("cv-"),
+          );
+        }
+      }
+      console.warn(
+        `[cv-apply] REPLACE_CV_DERIVED studentId=${body.studentId} consultant=${consultant.id} removedCvItems=${
+          (existingProfile.education || []).length - merged.education.length +
+          (existingProfile.experience || []).length - merged.experience.length +
+          (existingProfile.projects || []).length - merged.projects.length +
+          (existingProfile.achievements || []).length - merged.achievements.length
+        }`,
+      );
+    }
+
     // ===== Personal Data =====
     merged.personalData = mergePersonalData(merged.personalData, parsed.personalData, overwrite);
 
