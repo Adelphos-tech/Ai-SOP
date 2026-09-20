@@ -222,9 +222,15 @@ async function generateApplicationDocumentInner(
       max: merged.characterLimit || null,
       status: merged.characterLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
     },
+    // Topics inherited from consultant-entered University Requirements are
+    // "DECLARED" — they reach Planner/Writer/QR prompts but are NOT subject
+    // to the hard mandatory-evidence gate, which exists to protect
+    // OFFICIAL_VERIFIED requirement topics. Marking consultant topics
+    // REQUIRED would block generation on pattern-matched evidence checks
+    // designed for verified official requirements.
     requiredTopics: (merged.requiredTopics || []).map(t => ({
       topic: t,
-      status: "REQUIRED",
+      status: merged.writingRequirementId ? "REQUIRED" : "DECLARED",
       sourceId: merged.writingRequirementId || "university_requirements",
       sourceQuote: t,
     })),
