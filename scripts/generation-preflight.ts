@@ -134,7 +134,13 @@ async function main() {
     const fin = buildBoundedFinalizerPrompt({
       calibratedOutput: { responses: [{ componentId: "RC-DOC", text: "draft" }] },
       responseComponents: [rc],
-      actionPlan: { plans: [{ componentId: "RC-DOC", action: "FREEZE", missingTopics: [], topicEvidence: [] }] } as any,
+      actionPlan: {
+        plans: [{ componentId: "RC-DOC", action: "FREEZE", reason: "preflight stub", missingTopics: [], allowedEvidenceIds: [], physicallyFits: true, preFinalCharacterCount: 5, preFinalPageCount: 0, topicEvidence: [], requiredTopics: [] }],
+        frozenComponentIds: ["RC-DOC"],
+        editableComponentIds: [],
+        blockingIssues: [],
+        allowedEvidenceIds: [],
+      } as any,
       evidenceLedger: bundle.ledger,
       complianceConstraints: pipelineWritingInstructions,
     });

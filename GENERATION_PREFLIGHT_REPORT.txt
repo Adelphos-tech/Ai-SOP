@@ -1,0 +1,40 @@
+
+GENERATION PREFLIGHT
+
+PASS  Context compilation — loaded
+PASS  Completeness issues — none
+PASS  Resolved prompt — source=CONSULTANT_PROVIDED path=MANUAL len=552
+PASS  Student evidence (CV core) — EDU=2 EXP=7 PROJ=3 ACH=1
+PASS  Motivation evidence — entries=7
+PASS  Country evidence — entries=5
+PASS  Career evidence — entries=7
+PASS  Word limits — min=850 max=1000
+PASS  Additional questions — count=8
+PASS  Formatting rules — count=1
+PASS  Topic: Academic preparation and relevant undergraduate learning — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Professional experience in business analysis and product man — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: One specific project or professional experience and what was — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Motivation for pursuing a master's degree now — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Technical knowledge gaps: software architecture, databases,  — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Why Germany rather than studying only in India — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Why this specific master's program — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: How the applicant's product-management background connects w — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Short-term career goal in technical product management, tech — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: Long-term goal in technology leadership and digital transfor — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: How AI-assisted development influenced the applicant's desir — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic: What distinctive perspective the applicant will contribute t — status=DECLARED mandatory=false hardBlockEligible=false source=university_requirements
+PASS  Topic provenance (DECLARED not hard-blocking)
+PASS  Generation gate (mandatory topic evidence) — passed
+PASS  Post-LC gate (all topics uncovered worst-case) — no hard-mandatory topics → cannot block
+PASS  Planner context
+PASS  Writer context — evidence packets + instructions present
+PASS  QR context — compliance instructions present
+PASS  Language context — length + style constraints
+PASS  Finalizer context — constraints present
+PASS  Fact Reviewer evidence — entries=36
+PASS  Writer-only compliance requirements — none
+
+OPENAI CALLS: 0
+DOCUMENT GENERATIONS: 0
+
+ZERO-TOKEN PREFLIGHT PASS — READY FOR ONE MANUAL PAID GENERATION
