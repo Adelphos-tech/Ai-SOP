@@ -22,7 +22,7 @@ import { join } from "path";
 import { createHash } from "crypto";
 import { parseCVFile, CVParseFailure, ParsedCV } from "@/lib/application/cv-parser";
 import { parseWithDocling, DoclingServiceError } from "@/lib/application/docling-client";
-import { mapDoclingToParsedCV } from "@/lib/application/cv-mapper-docling";
+import { mapDoclingToParsedCV, CV_MAPPER_VERSION } from "@/lib/application/cv-mapper-docling";
 import { getStudent } from "@/lib/application/application-repository";
 import { getStudentProfileRevision } from "@/lib/application/application-repository";
 import { validateDocx } from "@/lib/application/docx-validator";
@@ -177,23 +177,42 @@ export async function POST(request: NextRequest) {
       // Not found — new upload
     }
 
+    // ===== PARSE ENGINE (declared early — dedup reuse depends on it) =====
+    // CV_PARSER_ENGINE=legacy (default) | docling
+    // Optional fallback: CV_PARSER_FALLBACK=legacy retries via the
+    // legacy parser when the docling service fails.
+    const parserEngine = process.env.CV_PARSER_ENGINE === "docling" ? "docling" : "legacy";
+    const fallbackToLegacy = process.env.CV_PARSER_FALLBACK === "legacy";
+
     if (existingMeta) {
-      // Idempotent: reuse existing parse result
-      // But still return fresh profile revision for concurrency
-      const revision = await getStudentProfileRevision(studentId);
-      return NextResponse.json({
-        success: true,
-        filename: existingMeta.filename,
-        savedFilename: existingMeta.savedFilename,
-        fileHash,
-        uploadedAt: existingMeta.uploadedAt,
-        reused: true,
-        parsed: existingMeta.parsed,
-        profileRevision: revision,
+      // Idempotent reuse ONLY when the stored parse came from the same
+      // engine AND mapper version — a pre-fix cached result must never
+      // replay a broken parse for the same file hash.
+      const metaEngine = existingMeta.parsed?.parserMeta?.engine || "legacy";
+      const metaMapperV = existingMeta.parsed?.parserMeta?.mapperVersion || "";
+      const currentMapperV = parserEngine === "docling" ? CV_MAPPER_VERSION : "";
+      if (metaEngine === parserEngine && metaMapperV === currentMapperV) {
+        const revision = await getStudentProfileRevision(studentId);
+        return NextResponse.json({
+          success: true,
+          filename: existingMeta.filename,
+          savedFilename: existingMeta.savedFilename,
+          fileHash,
+          uploadedAt: existingMeta.uploadedAt,
+          reused: true,
+          parsed: existingMeta.parsed,
+          profileRevision: revision,
+        });
+      }
+      // Parser changed → fall through to re-parse and overwrite meta.
+      logCVParseFailure({
+        event: "cv_parse_stale_meta_reparse",
+        reason: `${metaEngine}@${metaMapperV || "0"} → ${parserEngine}@${currentMapperV || "0"}`,
+        studentId, mimeType: file.type || ext, fileSize: buffer.length, buildId: BUILD_ID,
       });
     }
 
-    // ===== SAVE FILE (new) =====
+    // ===== SAVE FILE =====
     await mkdir(studentDir, { recursive: true });
 
     // Sanitize filename
@@ -203,13 +222,6 @@ export async function POST(request: NextRequest) {
     const savedFilename = `cv-${Date.now()}-${sanitized}`;
 
     await writeFile(hashFilePath, buffer);
-
-    // ===== PARSE (concurrency-limited) =====
-    // Engine flag: CV_PARSER_ENGINE=legacy (default) | docling
-    // Optional fallback: CV_PARSER_FALLBACK=legacy retries via the
-    // legacy parser when the docling service fails.
-    const parserEngine = process.env.CV_PARSER_ENGINE === "docling" ? "docling" : "legacy";
-    const fallbackToLegacy = process.env.CV_PARSER_FALLBACK === "legacy";
 
     let parsed: ParsedCV;
     try {

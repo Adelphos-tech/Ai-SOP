@@ -88,6 +88,7 @@ export interface ParsedCV {
    * persisted to canonical profile (cv-apply maps fields explicitly). */
   parserMeta?: {
     engine: "legacy" | "docling";
+    mapperVersion?: string;
     doclingVersion?: string;
     sourceHash?: string;
     ocrUsed?: boolean;

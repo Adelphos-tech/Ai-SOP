@@ -17,6 +17,9 @@ import type {
 } from "./cv-parser";
 import { sanitizeCandidate } from "./cv-sanity";
 
+/** Bump on any mapper logic change — invalidates cached dedup metas. */
+export const CV_MAPPER_VERSION = "2";
+
 type Section =
   | "PERSONAL" | "SUMMARY" | "EDUCATION" | "EXPERIENCE" | "PROJECTS"
   | "SKILLS" | "CERTIFICATIONS" | "ACHIEVEMENTS" | "LANGUAGES" | "OTHER";
@@ -560,6 +563,7 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
     // Parser provenance — engine, version, source hash, timing
     parserMeta: {
       engine: "docling",
+      mapperVersion: CV_MAPPER_VERSION,
       doclingVersion: doc.doclingVersion || "unknown",
       sourceHash: doc.sourceHash || "",
       ocrUsed: !!doc.ocrUsed,
