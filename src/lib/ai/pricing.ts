@@ -25,11 +25,20 @@ const GPT_56_TERRA_PRICING: ModelPricing = {
   outputPerMillion: 12.00,
 };
 
+// Groq gpt-oss-120b — Groq on-demand pricing (testing tier)
+const GROQ_GPT_OSS_120B_PRICING: ModelPricing = {
+  inputPerMillion: 0.15,
+  cachedInputPerMillion: 0.15,
+  outputPerMillion: 0.75,
+};
+
 // Pricing registry — keyed by model name
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.6-sol": GPT_56_SOL_PRICING,
   "gpt-5.6-terra": GPT_56_TERRA_PRICING,
   "gpt-5.6-luna": GPT_56_SOL_PRICING,  // placeholder — update when Luna pricing confirmed
+  "openai/gpt-oss-120b": GROQ_GPT_OSS_120B_PRICING,
+  "openai/gpt-oss-20b": { inputPerMillion: 0.075, cachedInputPerMillion: 0.075, outputPerMillion: 0.30 },
 };
 
 export function getPricingForModel(model: string): ModelPricing {

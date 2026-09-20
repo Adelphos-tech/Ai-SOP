@@ -9,6 +9,8 @@ export function getOpenAIClient(): OpenAI | null {
   if (!_client) {
     _client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      // Optional OpenAI-compatible endpoint (e.g. Groq) — unset = api.openai.com
+      baseURL: process.env.OPENAI_BASE_URL || undefined,
       timeout: 120000,
       maxRetries: 2,
     });
