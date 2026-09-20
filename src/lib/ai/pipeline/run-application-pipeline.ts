@@ -644,6 +644,12 @@ export async function runApplicationPipeline(
       maxTechnicalRetries: 2,
       call: async (stage, system, user, onUsage) => {
         try {
+          // Provider-rate pacing — low-TPM tiers (e.g. free Groq) need calls
+          // spread across minute windows. Unset = no pacing (OpenAI).
+          const gapMs = Number(process.env.STAGE_CALL_GAP_MS || 0);
+          if (gapMs > 0 && !abortController.signal.aborted) {
+            await new Promise(r => setTimeout(r, gapMs));
+          }
           const result = BACKGROUND_RESPONSES_ENABLED
             ? await callOpenAIForStageBackground(stage as StageName, system, user, {
                 generationRunId,
