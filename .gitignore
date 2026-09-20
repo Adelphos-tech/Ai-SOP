@@ -43,3 +43,4 @@ coverage/
 # docling sidecar venv + fixtures
 services/cv-parser/.venv/
 services/cv-parser/fixtures/
+__pycache__/
