@@ -343,7 +343,10 @@ async function callOpenAIForStage(
     ],
     max_completion_tokens: getMaxCompletionTokensForStage(stage),
     response_format: { type: "json_object" },
-  }, abortSignal ? { signal: abortSignal } : undefined);
+    // Providers with a thinking budget (Gemini 2.5, Groq gpt-oss) —
+    // unset/omit on real OpenAI where the param is unknown.
+    ...(process.env.PROVIDER_REASONING_EFFORT ? { reasoning_effort: process.env.PROVIDER_REASONING_EFFORT } : {}),
+  } as any, abortSignal ? { signal: abortSignal } : undefined);
 
   let content = response.choices[0]?.message?.content || "";
   // Some OpenAI-compatible providers (Gemini) wrap JSON in markdown fences
