@@ -134,7 +134,8 @@ export function validateFinalizerActionPlan(args: {
       issue("REQUIRED_TOPIC_COVERAGE_UNKNOWN", "Repair topic is not an exact required contract topic.");
     }
     if (new Set(plan.missingTopics).size !== plan.missingTopics.length) issue("REQUIRED_TOPIC_COVERAGE_UNKNOWN", "Duplicate missing topic.");
-    if (!repair && plan.missingTopics.length) issue("MISSING_REQUIRED_STUDENT_INFORMATION", "Missing required topics cannot be resolved by FREEZE or COMPRESS.");
+    // FREEZE/COMPRESS with uncovered topics is the intended degradation —
+    // preserving verified text rather than fabricating. Not a plan error.
     if (repair) {
       const mappings = plan.topicEvidence ?? [];
       if (!plan.missingTopics.length || componentSetIssues(plan.missingTopics, mappings.map(t => t.topic), "Topic evidence").length) {

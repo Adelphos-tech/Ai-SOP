@@ -1148,6 +1148,25 @@ export async function runApplicationPipeline(
       }
     }
 
+    // The stage cursor must advance even when the Finalizer is skipped —
+    // otherwise stage 6 hits STAGE_ORDER_VIOLATION. Record a deterministic
+    // no-provider FREEZE-equivalent checkpoint preserving calibrated text.
+    if (!finalizerRan) {
+      const skipOutput = {
+        responses: calibratedResponses.map(r => ({
+          componentId: r.componentId,
+          title: r.label,
+          text: r.text,
+          retainedClaimIds: [] as string[],
+          removedClaimIds: [] as string[],
+          repairClaims: [] as any[],
+        })),
+      };
+      await stageExecution.skip("finalizer", skipOutput, {
+        freezeComponentIds: new Set(input.responseComponents.map(rc => rc.componentId)),
+      });
+    }
+
     // Normalise responses (finalizer output, or calibrated fallback)
     const responses: ApplicationResponseItem[] = rawResponses.map((r: any) => ({
       componentId: r.componentId,

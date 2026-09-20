@@ -39,6 +39,11 @@ export interface StageExecutionOptions {
 export interface StageExecution {
   generationId: string;
   execute(stage: ExecutionStage, system: string, user: string, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Promise<StageExecutionResult>;
+  /** Persist a deterministic stage result WITHOUT a provider call and
+   *  advance the cursor — used when a stage is legitimately skipped
+   *  (e.g. Finalizer fallback to calibrated text). Keeps stage order
+   *  intact for subsequent stages and resume. */
+  skip(stage: ExecutionStage, output: Record<string, any>, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Promise<StageExecutionResult>;
   finish(success: boolean): Promise<void>;
   accounting(): AttemptAccounting;
   close(): Promise<void>;
@@ -493,6 +498,61 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
           }
           throw error;
         } finally { acceptingUsage = false; busy = false; }
+      },
+      async skip(stage, output, context) {
+        assertOpen();
+        if (state.status !== "RUNNING") throw new StageExecutionError("RUN_NOT_ACTIVE");
+        if (stage !== EXECUTION_STAGES[cursor]) throw new StageExecutionError("STAGE_ORDER_VIOLATION");
+        if (busy) throw new StageExecutionError("STAGE_EXECUTION_IN_PROGRESS");
+        busy = true;
+        const stageIndex = cursor + 1;
+        try {
+          const restored = checkpoints[cursor];
+          if (restored) {
+            cursor++;
+            return { content: restored.rawOutput!, output: restored.output, stageUsage: { ...restored.usage, stage, success: true } };
+          }
+          const raw = JSON.stringify(output);
+          const parsed = parseStage(stage, raw, context);
+          const stageUsage: StageUsage = {
+            stage, model: "deterministic-fallback", responseId: `skip-${randomUUID()}`, success: true,
+            durationMs: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0,
+            reasoningTokens: 0, estimatedCostUsd: 0,
+          };
+          const callRecord: CallRecord = {
+            id: randomUUID(), runId: run.id, stage, stageIndex, inputHash: computeHash({ stage, stageIndex, skip: true }),
+            applicationRetries: 0, sdkRetries: 0, startedAt: new Date().toISOString(),
+            status: "SUCCESS", usages: [stageUsage], completedAt: new Date().toISOString(), reason: "SKIPPED_DETERMINISTIC_FALLBACK",
+          };
+          state.calls.push(callRecord);
+          await persist("CALL_STARTED", callRecord);
+          const checkpoint: StageCheckpoint = {
+            generationId: options.generationId, stageName: stage, stageIndex,
+            generationContractHash: hashes.generationContractHash, contractSemanticHash: hashes.contractSemanticHash, studentFactsHash: hashes.studentFactsHash,
+            applicationRequirementsHash: hashes.applicationRequirementsHash, aiPolicyHash: hashes.aiPolicyHash,
+            applicationSpecificFactsHash: hashes.applicationSpecificFactsHash, modelConfigurationHash: hashes.modelConfigurationHash,
+            promptVersionHash: hashes.promptVersionHash, renderProfileVersion: hashes.renderProfileVersion,
+            configurationHash: hashes.modelConfigurationHash, dependencies: hashes, dependenciesHash, inputHash: callRecord.inputHash,
+            output: parsed, outputHash: computeHash(parsed), rawOutput: raw, rawOutputHash: computeHash(raw),
+            previousCheckpointHash: state.checkpoints.length ? state.checkpoints[state.checkpoints.length - 1] : null,
+            callId: callRecord.id, usage: stageUsage, completedAt: callRecord.completedAt!,
+          };
+          const prefix = `${String(stageIndex).padStart(2, "0")}-${stage}`;
+          try {
+            await atomicWriteDurable(path.join(basePath, `raw-${prefix}.txt`), raw);
+            await atomicWriteDurable(path.join(basePath, `artifact-${prefix}.json`), JSON.stringify(parsed, null, 2));
+            await atomicWriteDurable(getCheckpointPath({ basePath, generationId: options.generationId }, stageIndex, stage), JSON.stringify(checkpoint, null, 2));
+          } catch (error) { poisoned = true; throw error; }
+          checkpoints.push(checkpoint);
+          state.checkpoints.push(computeHash(checkpoint));
+          delete state.failure;
+          await persist("STAGE_COMPLETED", { callId: callRecord.id, checkpointHash: computeHash(checkpoint), skipped: true });
+          cursor++;
+          return { content: raw, output: parsed, stageUsage };
+        } catch (error) {
+          if (!poisoned) await fail(classifyFailure(error), stageIndex, (error as Error)?.message || String(error));
+          throw error;
+        } finally { busy = false; }
       },
       async finish(success) {
         assertOpen();
