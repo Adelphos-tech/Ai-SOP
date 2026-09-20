@@ -33,9 +33,9 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    if (!body.applicationId || !body.documentType || !body.promptText) {
+    if (!body.applicationId || !body.documentType) {
       return NextResponse.json(
-        { error: "applicationId, documentType, and promptText are required" },
+        { error: "applicationId and documentType are required" },
         { status: 400 },
       );
     }
@@ -45,6 +45,21 @@ export async function POST(request: NextRequest) {
         { error: `Invalid document type: ${body.documentType}` },
         { status: 400 },
       );
+    }
+
+    // Prompt requirement is document-type specific. Optional types (Visa SOP,
+    // cover letter, LOR, ...) fall through to the existing default-template
+    // path — no new resolution chain is invented here.
+    const { isPromptRequired } = await import("@/lib/application/document-prompt-ui");
+    if (!body.promptText) {
+      if (isPromptRequired(body.documentType)) {
+        return NextResponse.json(
+          { error: "promptText is required for this document type" },
+          { status: 400 },
+        );
+      }
+      body.promptText = getDefaultTemplate(body.documentType).promptText;
+      body.promptSource = "DVIVID_DEFAULT_TEMPLATE";
     }
 
     const promptSource = body.promptSource || "CONSULTANT_PROVIDED";

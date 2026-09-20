@@ -9,6 +9,7 @@ import {
   DocumentType,
   PromptSource,
 } from "@/lib/application/application-types";
+import { getDocumentPromptUi } from "@/lib/application/document-prompt-ui";
 import {
   PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
   SectionCard, EmptyState, StatusBadge, PromptSourceBadge,
@@ -95,6 +96,7 @@ export default function ApplicationWorkspacePage() {
   const [selectedWritingReqId, setSelectedWritingReqId] = useState<string | null>(null);
 
   const [documentType, setDocumentType] = useState<DocumentType>("STATEMENT_OF_PURPOSE");
+  const promptUi = getDocumentPromptUi(documentType);
   const [documentTitle, setDocumentTitle] = useState("");
   const [promptText, setPromptText] = useState("");
   const [promptSource, setPromptSource] = useState<PromptSource>("CONSULTANT_PROVIDED");
@@ -189,8 +191,8 @@ export default function ApplicationWorkspacePage() {
   }
 
   async function handleAddDocument() {
-    if (!promptText) {
-      setError("A university/portal prompt is required. Paste it above or use 'Find university prompt' to look one up automatically.");
+    if (!promptText && promptUi.required) {
+      setError(`A prompt is required for this document type — enter text under "${promptUi.label}"${promptUi.primaryLookupLabel ? ` or use '${promptUi.primaryLookupLabel}'` : ""}.`);
       return;
     }
 
@@ -697,32 +699,38 @@ export default function ApplicationWorkspacePage() {
           <div className="mb-5">
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-sm font-medium text-dvivid-text-primary">
-                University / Portal Prompt <span className="text-dvivid-error">*</span>
+                {promptUi.label} {promptUi.required && <span className="text-dvivid-error">*</span>}
               </label>
+              {(promptUi.primaryLookupLabel || promptUi.secondaryLookupLabel) && (
               <div className="flex gap-2">
+                {promptUi.primaryLookupLabel && (
                 <button
                   type="button"
                   onClick={handleAutoResolve}
                   disabled={resolving}
                   className="px-3 py-1.5 text-xs font-medium text-dvivid-primary border border-dvivid-primary/30 rounded-button hover:bg-dvivid-primary-light transition-colors disabled:opacity-50"
                 >
-                  {resolving ? "Finding requirements..." : "Find university prompt"}
+                  {resolving ? "Finding requirements..." : promptUi.primaryLookupLabel}
                 </button>
+                )}
+                {promptUi.secondaryLookupLabel && (
                 <button
                   type="button"
                   onClick={handleTriggerDiscovery}
                   disabled={resolving}
                   className="px-3 py-1.5 text-xs font-medium text-dvivid-text-secondary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt transition-colors disabled:opacity-50"
                 >
-                  {resolving ? "Searching..." : "Search official pages"}
+                  {resolving ? "Searching..." : promptUi.secondaryLookupLabel}
                 </button>
+                )}
               </div>
+              )}
             </div>
             <textarea
               className={`${inputClass} min-h-[120px] resize-y`}
               value={promptText}
               onChange={e => setPromptText(e.target.value)}
-              placeholder="Paste the exact question from the university or application portal. If you don't have one, use 'Find university prompt' — do not write 'follow university prompt' here."
+              placeholder={promptUi.placeholder}
             />
             {resolutionLabel && (
               <div className="mt-2 flex items-center gap-2">
