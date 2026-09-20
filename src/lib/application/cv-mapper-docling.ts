@@ -33,6 +33,7 @@ const SECTION_KEYWORDS: Array<[RegExp, Section]> = [
 ];
 
 const DATE_RANGE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)?[a-z]*\.?\s*\d{4}\s*[-–—to]+\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)?[a-z]*\.?\s*\d{4}|present|current|ongoing\b/i;
+const DATE_RANGE_G = /(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4}\s*[-–—]+\s*(?:(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{4}|present|current|ongoing)/gi;
 const DATE_ONLY = /^\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)?[a-z]*\.?\s*\d{4}\s*[-–—to]+\s*((jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)?[a-z]*\.?\s*\d{4}|present|current|ongoing)?\s*$/i;
 const DEGREE_WORDS = /bachelor|master|phd|doctorate|diploma|b\.?tech|m\.?tech|b\.?e\.|m\.?e\.|bca|mca|b\.?sc|m\.?sc|mba|b\.?com|b\.?a\.|associate|12th|10th|intermediate|higher secondary|high school|secondary/i;
 const GPA_RE = /(cgpa|gpa|percentage|score)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:\/\s*(\d+(?:\.\d+)?)|%)?/i;
@@ -185,20 +186,71 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
   const consumedBlocks = new Set<number>();
 
   // ===== EDUCATION =====
+  // Handles BOTH layouts:
+  //   A) per-entry headers ("Indus University, Ahmedabad" + degree/date lines)
+  //   B) merged text blocks ("MBA in IT | Intl Univ, Berlin Sep 2024 - Dec 2025
+  //      Bachelor of … | Indus University, Ahmedabad Jun 2016 - Sep 2020
+  //      Product Management Certification - AltUni by Inside IIM")
+  // Cert-looking sub-records inside a combined EDUCATION & CERTIFICATIONS
+  // section are routed to certifications, not education.
   for (const seg of segments.filter(s => s.section === "EDUCATION")) {
     let cur: any = null;
     for (const b of seg.blocks.slice(1)) { // skip the EDUCATION heading itself
       const t = b.text.trim();
       if (b.type === "section_header" || b.type === "title") {
         if (detectedNameNorm && t.toLowerCase() === detectedNameNorm) { cur = null; continue; }
-        // entry title → new record; require ≥2 evidence signals later
         cur = { institution: "", degree: "", fieldOfStudy: "", gpa: "", maxGpa: "", startYear: "", endYear: "", bullets: [] as string[], sourceText: [t], page: b.page };
-        const { title } = splitEntry(t);
-        cur.institution = title;
+        cur.institution = splitEntry(t).title;
         cur.confidence = "HIGH";
         candidate.education.push(cur);
         continue;
       }
+
+      // Merged-block layout: one text block containing several records.
+      // Split on date-range boundaries; trailing no-date tail = one more
+      // record (e.g. a certification with no dates).
+      DATE_RANGE_G.lastIndex = 0;
+      const dateMatches: RegExpExecArray[] = [];
+      let dm: RegExpExecArray | null;
+      while ((dm = DATE_RANGE_G.exec(t))) dateMatches.push(dm);
+      if (dateMatches.length && DEGREE_WORDS.test(t) && t.includes("|")) {
+        const recs: string[] = [];
+        let lastEnd = 0;
+        for (const m of dateMatches) {
+          recs.push(t.slice(lastEnd, m.index! + m[0].length));
+          lastEnd = m.index! + m[0].length;
+        }
+        const tail = t.slice(lastEnd).trim();
+        if (tail) recs.push(tail);
+        for (const r of recs) {
+          const rec = r.trim();
+          if (!rec) continue;
+          if (/certif|certified|certificate|course\b/i.test(rec) && !DEGREE_WORDS.test(rec)) {
+            // "Product Management Certification - AltUni by Inside IIM"
+            const parts = rec.split(/\s+[-–—]\s+/);
+            candidate.certifications.push(parts.map(s => s.trim()).filter(Boolean).join(" - "));
+            continue;
+          }
+          const pipeParts = rec.split("|").map(s => s.trim()).filter(Boolean);
+          const e: any = { institution: "", degree: "", fieldOfStudy: "", gpa: "", maxGpa: "", startYear: "", endYear: "", confidence: "HIGH", sourceText: [rec], page: b.page };
+          const d = parseDateRange(rec);
+          e.startYear = d.start || ""; e.endYear = d.end || "";
+          if (pipeParts.length > 1) {
+            e.degree = pipeParts[0];
+            const inM = pipeParts[0].match(/^(.+?)\s+in\s+(.+)$/i);
+            if (inM) e.fieldOfStudy = inM[2];
+            const instLoc = pipeParts[1].replace(DATE_RANGE_G, "").trim();
+            const { title, location } = splitEntry(instLoc);
+            e.institution = title;
+            if (location) e.bullets = [];
+          } else {
+            e.institution = rec.replace(DATE_RANGE_G, "").trim();
+          }
+          candidate.education.push(e);
+        }
+        continue;
+      }
+
       if (DATE_ONLY.test(t)) {
         const d = parseDateRange(t);
         if (cur) { cur.startYear = d.start || cur.startYear; cur.endYear = d.end || cur.endYear; consumedBlocks.add(b.order); }
@@ -218,7 +270,6 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
         cur.sourceText.push(t);
         continue;
       }
-      // leftover text in education section → append to fieldOfStudy context only if short
       if (cur && t.length < 120 && !cur.degree) {
         cur.bullets.push(t);
       }
@@ -244,8 +295,48 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
         // It also ENDS the current entry context so stray sidebar text
         // (e.g. the education date) can't attach to the previous org.
         if (detectedNameNorm && t.toLowerCase() === detectedNameNorm) { cur = null; continue; }
-        cur = { organization: splitEntry(t).title, role: "", location: splitEntry(t).location || "", startDate: "", endDate: "", bullets: [] as string[], sectionHeading: segHeading, confidence: "HIGH", source: { text: t, page: b.page } };
-        candidate.experience.push(cur);
+
+        // Header carrying a date-range → ROLE+DATE entry opener:
+        //   "Business Analyst Sep 2023 - Aug 2024"
+        DATE_RANGE_G.lastIndex = 0;
+        if (DATE_RANGE_G.test(t)) {
+          const d = parseDateRange(t);
+          cur = {
+            organization: "", role: t.replace(DATE_RANGE_G, "").replace(/[\s\-–—|,;:]+$/, "").trim(),
+            location: "", startDate: d.start || "", endDate: d.end || "",
+            bullets: [] as string[], sectionHeading: segHeading, confidence: "HIGH",
+            source: { text: t, page: b.page },
+          };
+          consumedBlocks.add(b.order);
+          candidate.experience.push(cur);
+          continue;
+        }
+
+        // Location-only header ("| Philadelphia, PA (Remote)") → attach
+        if (t.startsWith("|")) {
+          if (cur && !cur.location) cur.location = t.replace(/^\|+/, "").trim();
+          continue;
+        }
+
+        // Org (optionally "Org | Location") header — either opens a new
+        // entry (org-first layout) or completes the pending one.
+        if (cur === null || (cur.organization && cur.bullets.length > 0)) {
+          const { title, location } = splitEntry(t.split("|")[0].trim());
+          const locPart = t.split("|")[1]?.trim();
+          cur = { organization: title, role: "", location: locPart || location || "", startDate: "", endDate: "", bullets: [] as string[], sectionHeading: segHeading, confidence: "HIGH", source: { text: t, page: b.page } };
+          candidate.experience.push(cur);
+        } else {
+          // attach to pending entry: "Ambimat Electronics | Ahmedabad, India"
+          const parts = t.split("|").map(s => s.trim()).filter(Boolean);
+          if (!cur.organization) {
+            const { title, location } = splitEntry(parts[0]);
+            cur.organization = title;
+            if (parts[1]) cur.location = parts.slice(1).join(", ");
+            else if (location) cur.location = location;
+          } else if (!cur.location) {
+            cur.location = parts.join(", ");
+          }
+        }
         continue;
       }
       if (!cur) continue;
@@ -292,7 +383,11 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
       const t = b.text.trim();
       if (b.type === "section_header" || b.type === "title") {
         if (detectedNameNorm && t.toLowerCase() === detectedNameNorm) { cur = null; continue; }
-        cur = { name: t, role: "", description: "", technologies: "", confidence: "HIGH", source: { text: t, page: b.page } };
+        // "AI Real Estate Voice Agent -  Llama 3 + Qdrant + Deepgram GitHub ↗"
+        // → name + inline tech stack; strip GitHub link decorations.
+        const clean = t.replace(/\s*GitHub\s*↗?\s*/gi, "").trim();
+        const dash = clean.split(/\s+[-–—]\s+/);
+        cur = { name: dash[0], role: "", description: "", technologies: dash.length > 1 ? dash.slice(1).join(" - ") : "", confidence: "HIGH", source: { text: t, page: b.page } };
         candidate.projects.push(cur);
         continue;
       }
@@ -306,28 +401,68 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
   }
 
   // ===== SKILLS =====
+  // Handles both "Label: a, b, c" per-line AND merged blocks like
+  // "AI / GenAI: LLMs · RAG … Deepgram STT/TTS Product & BA: Roadmapping …
+  // Technical: SQL …" — a label is text between the last ·•| separator
+  // (or block start) and a colon, restricted to short alpha labels.
+  const skillBucket = (label: string, items: string[]) => {
+    if (!items.length) return;
+    const l = label.toLowerCase();
+    if (/program/.test(l)) candidate.skills.programming!.push(...items);
+    else if (/cloud|devops|tool|platform|framework/.test(l)) candidate.skills.tools!.push(...items);
+    else if (/language/.test(l)) candidate.skills.languages!.push(...items);
+    else if (/soft|interpersonal/.test(l)) candidate.skills.soft!.push(...items);
+    else if (/software/.test(l)) candidate.skills.software!.push(...items);
+    else if (/product|business|\bba\b|domain|area|interest/.test(l)) candidate.skills.domain!.push(...items);
+    else candidate.skills.technical!.push(...items);
+  };
+
   for (const seg of segments.filter(s => s.section === "SKILLS")) {
     let pendingLabel = "";
     for (const b of seg.blocks.slice(1)) { // skip the SKILLS heading
-      const t = b.text.trim().replace(/:$/, "");
+      const t = b.text.trim();
       if (!t) continue;
-      // Bare label line ("Cloud / DevOps:") — values come on the next block
-      if (/^[A-Za-z /&+]+:?$/.test(b.text.trim()) && b.text.trim().endsWith(":")) {
-        pendingLabel = t.toLowerCase();
-        continue;
+
+      // Locate label boundaries: colon preceded by a short alpha label
+      // anchored at a ·•| separator or block start. Labels allow spaced
+      // "/" ("AI / GenAI") but not intra-word slashes ("STT/TTS") — on
+      // failure drop leading words until a valid label suffix remains,
+      // so "Deepgram STT/TTS Product & BA:" yields label "Product & BA"
+      // and keeps "Deepgram STT/TTS" in the previous group's items.
+      const STRICT_LABEL = /^[A-Za-z][A-Za-z &+]*(?:\s+\/\s+[A-Za-z &+]+)*$/;
+      const bounds: Array<{ label: string; start: number; itemsStart: number }> = [];
+      const colonRe = /[:：]/g;
+      let cm: RegExpExecArray | null;
+      while ((cm = colonRe.exec(t))) {
+        const before = t.slice(0, cm.index);
+        const sepIdx = Math.max(before.lastIndexOf("·"), before.lastIndexOf("•"), before.lastIndexOf("|"), before.lastIndexOf("\n"));
+        let cand = before.slice(sepIdx + 1).trim();
+        while (cand && !(cand.length <= 40 && STRICT_LABEL.test(cand))) {
+          cand = cand.split(/\s+/).slice(1).join(" ");
+        }
+        if (cand && cand.length <= 40) {
+          bounds.push({ label: cand, start: before.lastIndexOf(cand), itemsStart: cm.index + 1 });
+        }
       }
-      const m = t.match(/^([A-Za-z /&+]+?)\s*[:：]\s*(.+)$/);
-      const label = (m ? m[1] : pendingLabel).toLowerCase();
-      const items = (m ? m[2] : t).split(/[,;•]/).map(s => s.trim()).filter(s => s.length > 0 && s.length < 60 && !s.endsWith(":"));
-      if (!items.length) continue;
-      if (/program/.test(label)) candidate.skills.programming!.push(...items);
-      else if (/cloud|devops|tool|platform|framework/.test(label)) candidate.skills.tools!.push(...items);
-      else if (/language/.test(label)) candidate.skills.languages!.push(...items);
-      else if (/soft|interpersonal/.test(label)) candidate.skills.soft!.push(...items);
-      else if (/software/.test(label)) candidate.skills.software!.push(...items);
-      else if (/domain|area|interest/.test(label)) candidate.skills.domain!.push(...items);
-      else candidate.skills.technical!.push(...items); // AI/Data, Web/Automation, unlabeled
-      pendingLabel = "";
+
+      if (bounds.length) {
+        bounds.forEach((bd, i) => {
+          const itemsText = t.slice(bd.itemsStart, bounds[i + 1]?.start ?? t.length);
+          const sep = /[·•]/.test(itemsText) ? /[·•]/ : /[,;]/;
+          const items = itemsText.split(sep).map(s => s.trim()).filter(s => s.length > 0 && s.length < 60 && !s.endsWith(":"));
+          skillBucket(bd.label, items);
+          pendingLabel = items.length ? "" : bd.label.toLowerCase();
+        });
+      } else {
+        // Bare label line ("Cloud / DevOps:") — values on next block
+        if (/^[A-Za-z][A-Za-z /&+]{1,40}:$/.test(t)) {
+          pendingLabel = t.slice(0, -1).toLowerCase();
+          continue;
+        }
+        const items = t.split(/[·•,;]/).map(s => s.trim()).filter(s => s.length > 0 && s.length < 60 && !s.endsWith(":"));
+        skillBucket(pendingLabel, items);
+        pendingLabel = "";
+      }
     }
   }
 
