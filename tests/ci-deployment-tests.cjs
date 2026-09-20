@@ -158,6 +158,7 @@ function fixture() {
       TMPDIR: root,
       LC_ALL: 'C',
       APP_DIR: app,
+      SHARED_DIR: path.join(root, 'shared'),
       PM2_NAME: 'fixture-app',
       LOCAL_HEALTH_URL: 'http://fixture.invalid',
       NEXT_PUBLIC_BUILD_ID: 'new-build',
@@ -390,10 +391,10 @@ test('second successful deployment retains original logs and uploads through ano
   assert.deepEqual(snapshot(secondPrevious), firstLive);
   assertEnvironment(f);
   assertPersistent(f, f.app, true);
-  assert.equal(fs.realpathSync(path.join(f.app, 'logs')), path.join(f.previous, 'logs'));
+  assert.equal(fs.realpathSync(path.join(f.app, 'logs')), path.join(f.root, 'shared', 'logs'));
   fs.appendFileSync(path.join(f.app, 'logs/server.log'), 'second deployment log\n');
   fs.appendFileSync(path.join(f.app, 'uploads/upload.txt'), 'second deployment upload\n');
-  assert.equal(fs.readFileSync(path.join(f.previous, 'logs/server.log'), 'utf8'), 'original logs\nsecond deployment log\n');
+  assert.equal(fs.readFileSync(path.join(f.root, 'shared', 'logs', 'server.log'), 'utf8'), 'original logs\nsecond deployment log\n');
   success(f.rollback({ RELEASE_ID: 'release-2' }));
   assert.deepEqual(snapshot(f.app), firstLive);
   assertEnvironment(f);

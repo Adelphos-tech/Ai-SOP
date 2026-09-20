@@ -47,7 +47,7 @@ echo "Build ID: $BUILD_ID"
 # Step 0: Disk guard — refuse to deploy below 10G free on the
 # release filesystem (build + node_modules + rollback backup need it).
 MIN_FREE_KB=$((10 * 1024 * 1024))
-FREE_KB=$(df --output=avail "$(dirname "$APP_DIR")" | tail -1 | tr -d ' ')
+FREE_KB=$(df -kP "$(dirname "$APP_DIR")" | awk 'NR==2 {print $4}' | tr -d ' ')
 if [ "${FREE_KB:-0}" -lt "$MIN_FREE_KB" ]; then
   echo "=== ERROR: only $((FREE_KB / 1024 / 1024))G free (<10G required) — deploy aborted ==="
   exit 1
@@ -77,15 +77,31 @@ for env_file in "$APP_DIR"/.env "$APP_DIR"/.env.*; do
   cp -p "$env_file" "$STAGING_DIR/"
 done
 # Persistent runtime data lives OUTSIDE releases in the shared root.
-# Every release only ever gets symlinks — never owned data dirs —
-# so release pruning can never touch logs/uploads/backups/baselines.
+# Releases get symlinks, never owned data dirs — so release pruning
+# can never touch logs/uploads/backups/baselines.
+#   - external symlink targets (e.g. persistent-uploads) are preserved
+#   - targets inside release dirs are redirected to the shared root
+#   - real release-owned dirs are migrated into shared once
 SHARED_DIR="${SHARED_DIR:-/opt/sop-ai-shared}"
+mkdir -p "$SHARED_DIR"
 for entry in logs uploads backups baselines; do
   mkdir -p "$SHARED_DIR/$entry"
   chmod 755 "$SHARED_DIR" "$SHARED_DIR/$entry"
   [ ! -e "$STAGING_DIR/$entry" ]
   [ ! -L "$STAGING_DIR/$entry" ]
-  ln -s "$SHARED_DIR/$entry" "$STAGING_DIR/$entry"
+  if [ -L "$APP_DIR/$entry" ]; then
+    target=$(cd -P "$APP_DIR/$entry" && pwd)
+    case "$target" in
+      "$APP_DIR".previous-*|"$APP_DIR".failed-*|"$APP_DIR".incoming-*)
+        target="$SHARED_DIR/$entry" ;;
+    esac
+    ln -s "$target" "$STAGING_DIR/$entry"
+  elif [ -d "$APP_DIR/$entry" ]; then
+    cp -a "$APP_DIR/$entry/." "$SHARED_DIR/$entry/"
+    ln -s "$SHARED_DIR/$entry" "$STAGING_DIR/$entry"
+  else
+    ln -s "$SHARED_DIR/$entry" "$STAGING_DIR/$entry"
+  fi
 done
 
 # Step 2b: Backup current build for rollback
