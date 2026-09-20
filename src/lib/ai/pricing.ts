@@ -39,6 +39,9 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.6-luna": GPT_56_SOL_PRICING,  // placeholder — update when Luna pricing confirmed
   "openai/gpt-oss-120b": GROQ_GPT_OSS_120B_PRICING,
   "openai/gpt-oss-20b": { inputPerMillion: 0.075, cachedInputPerMillion: 0.075, outputPerMillion: 0.30 },
+  // Gemini paid-tier rates (free tier bills $0 — rates recorded for visibility)
+  "gemini-2.5-flash": { inputPerMillion: 0.30, cachedInputPerMillion: 0.075, outputPerMillion: 2.50 },
+  "gemini-2.5-flash-lite": { inputPerMillion: 0.10, cachedInputPerMillion: 0.025, outputPerMillion: 0.40 },
 };
 
 export function getPricingForModel(model: string): ModelPricing {
