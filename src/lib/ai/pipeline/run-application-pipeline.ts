@@ -345,7 +345,12 @@ async function callOpenAIForStage(
     response_format: { type: "json_object" },
   }, abortSignal ? { signal: abortSignal } : undefined);
 
-  const content = response.choices[0]?.message?.content || "";
+  let content = response.choices[0]?.message?.content || "";
+  // Some OpenAI-compatible providers (Gemini) wrap JSON in markdown fences
+  // or emit leading whitespace — strip before structural parse.
+  if (content) {
+    content = content.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/, "");
+  }
   if (!content) throw new Error(`${stage} returned empty content`);
 
   const duration = Date.now() - start;
