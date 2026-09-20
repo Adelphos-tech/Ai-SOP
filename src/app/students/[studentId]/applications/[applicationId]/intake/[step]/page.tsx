@@ -966,7 +966,7 @@ function UniversityRequirementsSection({ application }: { application: any }) {
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="SOP Prompt / Question"><Area name="universityRequirements.promptText" rows={4} /></FormField>
+        <FormField label="Document Prompt / Question"><Area name="universityRequirements.promptText" rows={4} placeholder="Paste any prompt, question, or writing requirement provided by the university, portal, institution, embassy, employer, or other source." /></FormField>
         <div className="space-y-3">
           <FormField label="Word Limit (Min)"><input className={inputClass} {...register("universityRequirements.wordMin")} /></FormField>
           <FormField label="Word Limit (Max)"><input className={inputClass} {...register("universityRequirements.wordMax")} /></FormField>
