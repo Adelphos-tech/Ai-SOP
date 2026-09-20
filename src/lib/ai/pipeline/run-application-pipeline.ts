@@ -341,7 +341,7 @@ async function callOpenAIForStage(
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
-    max_completion_tokens: AI_CONFIG.maxCompletionTokensJson,
+    max_completion_tokens: getMaxCompletionTokensForStage(stage),
     response_format: { type: "json_object" },
   }, abortSignal ? { signal: abortSignal } : undefined);
 
