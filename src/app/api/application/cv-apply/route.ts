@@ -20,6 +20,7 @@ import {
 } from "@/lib/application/application-repository";
 import { randomUUID } from "crypto";
 import { mergePersonalData } from "@/lib/application/cv-merge";
+import { classifyIdentityMatch } from "@/lib/application/identity-check";
 import { getProfileReadiness } from "@/lib/application/intake-completion";
 import {
   requireConsultantSession,
@@ -54,6 +55,31 @@ export async function POST(request: NextRequest) {
     const student = await getStudent(body.studentId);
     if (!student) {
       return NextResponse.json({ error: "Student not found" }, { status: 404 });
+    }
+
+    // ===== IDENTITY CHECK =====
+    // Compare the CV's identity evidence against the students ROW
+    // (first_name/last_name/email) — NOT profile_data.personalData,
+    // which a previous wrong-person apply may have corrupted.
+    // A CONFLICT must never silently merge into the canonical profile.
+    const identity = classifyIdentityMatch(student, body.parsedCV?.personalData);
+    if (identity.status === "CONFLICT") {
+      if (body.identityConflictOverride !== true) {
+        return NextResponse.json(
+          {
+            error: `The uploaded CV appears to belong to ${identity.cvIdentity.name || "a different person"}${identity.cvIdentity.email ? ` (${identity.cvIdentity.email})` : ""}, while the selected student is ${identity.studentIdentity.name || "unknown"}${identity.studentIdentity.email ? ` (${identity.studentIdentity.email})` : ""}. Please verify the student or choose another CV.`,
+            code: "CV_IDENTITY_CONFLICT",
+            identityStatus: identity.status,
+            studentIdentity: identity.studentIdentity,
+            cvIdentity: identity.cvIdentity,
+          },
+          { status: 409 },
+        );
+      }
+      // Explicit consultant override — audit metadata only, no content.
+      console.warn(
+        `[cv-apply] IDENTITY_CONFLICT_OVERRIDE studentId=${body.studentId} student="${identity.studentIdentity.name}" cv="${identity.cvIdentity.name}/${identity.cvIdentity.email}" consultant=${consultant.id}`,
+      );
     }
 
     // ===== OPTIMISTIC CONCURRENCY CHECK =====

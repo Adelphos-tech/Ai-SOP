@@ -33,6 +33,15 @@ interface CVUploadProps {
   studentId: string;
   profileRevision?: number;
   onApplied?: () => void;
+  /** students row identity — shown next to parsed CV identity so the
+   * consultant can catch wrong-person uploads before Apply. */
+  studentIdentity?: { firstName?: string; lastName?: string; email?: string };
+}
+
+interface IdentityConflict {
+  studentIdentity: { name: string; email: string };
+  cvIdentity: { name: string; email: string };
+  message: string;
 }
 
 /**
@@ -42,7 +51,7 @@ interface CVUploadProps {
  * - Shows detected data summary
  * - Apply to Profile button
  */
-export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProps) {
+export function CVUpload({ studentId, profileRevision, onApplied, studentIdentity }: CVUploadProps) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [parsing, setParsing] = useState(false);
@@ -55,6 +64,7 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
   const [parseRevision, setParseRevision] = useState<number | null>(null);
   const [staleProfile, setStaleProfile] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [identityConflict, setIdentityConflict] = useState<IdentityConflict | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(async (file: File) => {
@@ -63,6 +73,7 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
     setParsedCV(null);
     setShowReview(false);
     setApplied(false);
+    setIdentityConflict(null);
 
     // Validate file type
     const ext = "." + file.name.toLowerCase().split(".").pop();
@@ -133,7 +144,7 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
     if (file) handleFile(file);
   }, [handleFile]);
 
-  async function handleApply() {
+  async function handleApply(identityOverride = false) {
     if (!parsedCV) return;
     setApplying(true);
     setError("");
@@ -147,10 +158,21 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
           parsedCV,
           overwrite: false,
           profileRevision: parseRevision,
+          ...(identityOverride ? { identityConflictOverride: true } : {}),
         }),
       });
       if (res.status === 409) {
         const data = await res.json().catch(() => ({}));
+        if (data.code === "CV_IDENTITY_CONFLICT") {
+          // Wrong-person CV — never silently applied. Show the conflict
+          // banner; "Apply Anyway" is a separate explicit second step.
+          setIdentityConflict({
+            studentIdentity: data.studentIdentity || { name: "", email: "" },
+            cvIdentity: data.cvIdentity || { name: "", email: "" },
+            message: data.error || "This CV appears to belong to a different person.",
+          });
+          return;
+        }
         setStaleProfile(true);
         setError(data.error || "The student profile changed after this CV was parsed. Review the latest information before importing.");
         return;
@@ -177,6 +199,7 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
     setFilename("");
     setStaleProfile(false);
     setParseRevision(null);
+    setIdentityConflict(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -278,6 +301,40 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
               CV imported: {filename}
             </span>
           </div>
+
+          {/* Identity comparison — always visible before Apply */}
+          {(parsedCV.personalData.firstName || parsedCV.personalData.email) && (
+            <div className={`p-3 border rounded-input text-sm space-y-1 ${
+              identityConflict
+                ? "bg-dvivid-error-light border-dvivid-error/30"
+                : "bg-gray-50 border-dvivid-border"
+            }`}>
+              {studentIdentity && (
+                <p className="text-dvivid-text-secondary">
+                  Selected student: <strong className="text-dvivid-text-primary">
+                    {[studentIdentity.firstName, studentIdentity.lastName].filter(Boolean).join(" ") || "—"}
+                  </strong>
+                  {studentIdentity.email ? ` (${studentIdentity.email})` : ""}
+                </p>
+              )}
+              <p className="text-dvivid-text-secondary">
+                CV belongs to: <strong className="text-dvivid-text-primary">
+                  {[parsedCV.personalData.firstName, parsedCV.personalData.lastName].filter(Boolean).join(" ") || "—"}
+                </strong>
+                {parsedCV.personalData.email ? ` (${parsedCV.personalData.email})` : ""}
+              </p>
+            </div>
+          )}
+
+          {/* Identity conflict — Apply Anyway is an explicit second step */}
+          {identityConflict && (
+            <div className="p-4 bg-dvivid-error-light border border-dvivid-error/30 rounded-input space-y-2">
+              <p className="text-sm font-semibold text-dvivid-error">
+                ⚠ This CV appears to belong to a different person.
+              </p>
+              <p className="text-sm text-dvivid-text-secondary">{identityConflict.message}</p>
+            </div>
+          )}
 
           {/* Detected summary */}
           <div>
@@ -391,11 +448,26 @@ export function CVUpload({ studentId, profileRevision, onApplied }: CVUploadProp
           </details>
 
           {/* Actions */}
-          <div className="flex gap-3">
-            <PrimaryButton onClick={handleApply} disabled={applying}>
-              {applying ? "Applying..." : "Apply to Profile"}
-            </PrimaryButton>
-            <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
+          <div className="flex gap-3 flex-wrap">
+            {identityConflict ? (
+              <>
+                <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
+                <button
+                  onClick={() => handleApply(true)}
+                  disabled={applying}
+                  className="px-4 py-2 text-sm font-medium rounded-input border border-dvivid-error text-dvivid-error hover:bg-dvivid-error hover:text-white transition-colors disabled:opacity-50"
+                >
+                  {applying ? "Applying..." : "Apply Anyway (I verified the identity)"}
+                </button>
+              </>
+            ) : (
+              <>
+                <PrimaryButton onClick={() => handleApply(false)} disabled={applying}>
+                  {applying ? "Applying..." : "Apply to Profile"}
+                </PrimaryButton>
+                <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
+              </>
+            )}
           </div>
         </div>
       )}

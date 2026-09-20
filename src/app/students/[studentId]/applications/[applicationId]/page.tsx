@@ -488,6 +488,7 @@ export default function ApplicationWorkspacePage() {
                       <CVUpload
                         key={studentId}
                         studentId={studentId}
+                        studentIdentity={student ? { firstName: student.firstName, lastName: student.lastName, email: student.email } : undefined}
                         onApplied={() => {
                           setShowCVUpload(false);
                           loadApplication();

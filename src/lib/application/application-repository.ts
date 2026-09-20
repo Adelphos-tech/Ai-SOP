@@ -164,6 +164,7 @@ export async function saveStudentProfileConditional(
   studentId: string,
   profileData: StudentProfileData,
   expectedRevision: number,
+  identitySync?: { firstName?: string; lastName?: string; email?: string },
 ): Promise<boolean> {
   const pool = getDbPool();
   const conn = await pool.getConnection();
@@ -200,6 +201,25 @@ export async function saveStudentProfileConditional(
       "UPDATE students SET profile_data = ? WHERE id = ?",
       [JSON.stringify(newProfile), studentId],
     );
+
+    // Keep students row identity in sync with explicit Student Details
+    // edits — same transaction, so profile and identity never diverge.
+    // Only non-empty values sync; CV apply intentionally does NOT pass
+    // identitySync, so a parsed CV can never rename the student row.
+    if (identitySync) {
+      const sets: string[] = [];
+      const params: any[] = [];
+      const fn = String(identitySync.firstName ?? "").trim();
+      const ln = String(identitySync.lastName ?? "").trim();
+      const em = String(identitySync.email ?? "").trim();
+      if (fn) { sets.push("first_name = ?"); params.push(fn); }
+      if (ln) { sets.push("last_name = ?"); params.push(ln); }
+      if (em) { sets.push("email = ?"); params.push(em); }
+      if (sets.length > 0) {
+        params.push(studentId);
+        await conn.execute(`UPDATE students SET ${sets.join(", ")} WHERE id = ?`, params);
+      }
+    }
 
     await conn.commit();
     return true;

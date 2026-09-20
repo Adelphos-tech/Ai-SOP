@@ -73,6 +73,9 @@ export default function IntakePage() {
 
   const [profileRevision, setProfileRevision] = useState<number>(0);
   const [application, setApplication] = useState<Application | null>(null);
+  // students row identity (first_name/last_name/email) — shown in the
+  // CV review so the consultant can spot wrong-person uploads.
+  const [studentIdentity, setStudentIdentity] = useState<{ firstName?: string; lastName?: string; email?: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -103,6 +106,7 @@ export default function IntakePage() {
     setSaveStatus("idle");
     setError("");
     setActiveWizardSection(null);
+    setStudentIdentity(null);
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId, applicationId]);
@@ -130,6 +134,13 @@ export default function IntakePage() {
         loadedProfile = data.profile || {};
         reset(loadedProfile);
         setProfileRevision(typeof data.revision === "number" ? data.revision : 0);
+        if (data.student) {
+          setStudentIdentity({
+            firstName: data.student.firstName,
+            lastName: data.student.lastName,
+            email: data.student.email,
+          });
+        }
       }
 
       if (appRes.ok) {
@@ -362,6 +373,7 @@ export default function IntakePage() {
               key={studentId}
               studentId={studentId}
               profileRevision={profileRevision}
+              studentIdentity={studentIdentity || undefined}
               onApplied={async () => {
                 // Preserve typed-but-unsaved edits before reloading —
                 // a bare loadAll() would silently wipe them.

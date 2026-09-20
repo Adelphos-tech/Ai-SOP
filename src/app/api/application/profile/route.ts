@@ -95,10 +95,14 @@ export async function PUT(request: NextRequest) {
 
     // Conditional save: if expectedRevision provided, use conditional write
     if (typeof body.expectedRevision === "number") {
+      // An explicit profile save IS the deliberate Student Details edit —
+      // sync the students row identity from personalData atomically.
+      const pd = body.profileData?.personalData || {};
       const saved = await saveStudentProfileConditional(
         body.studentId,
         body.profileData,
         body.expectedRevision,
+        { firstName: pd.firstName, lastName: pd.lastName, email: pd.email },
       );
       if (!saved) {
         return NextResponse.json(
