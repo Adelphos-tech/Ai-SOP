@@ -146,6 +146,41 @@ async function main() {
     await exec2.close();
   }
 
+  // 8. Crash mid-writer (state left RUNNING) → retry-mode resume replays
+  //    checkpoint, retries writer exactly once, no duplicate planner call
+  {
+    const gid = randomUUID(); const counters = new Map();
+    const hangCall = async (stage: ExecutionStage) => {
+      counters.set(stage, (counters.get(stage) || 0) + 1);
+      if (stage === "writer") return new Promise<never>(() => {}); // never resolves — crash mid-flight
+      return { content: JSON.stringify(OUTPUTS[stage]), stageUsage: usage(stage) };
+    };
+    const exec1 = await createStageExecution({
+      generationId: gid, mode: "CONTENT_REGENERATION",
+      basePath: path.join(base, gid),
+      hashes: HASHES as any, exchangeRate: 90,
+      call: hangCall as any,
+    });
+    await exec1.execute("planner", "s", "u");
+    // Simulate worker crash mid-writer: STARTED call never completes, lock
+    // file orphaned. Remove the lock directly (dead-process simulation —
+    // the stale-PID path can't trigger within the same live PID).
+    exec1.execute("writer", "s", "u").catch(() => {});
+    await new Promise(r => setTimeout(r, 50)); // let CALL_STARTED persist
+    await fs.unlink(path.join(base, gid, ".execution.lock"));
+
+    const exec2 = await makeExec("TECHNICAL_STAGE_RETRY", gid, base, counters);
+    const plannerBefore = counters.get("planner") || 0;
+    await exec2.execute("planner", "s", "u");
+    await exec2.execute("writer", "s", "u");
+    check("crash-mid-stage resume: planner replayed free, writer retried once", () => {
+      assert.strictEqual(counters.get("planner"), plannerBefore);
+      assert.strictEqual(counters.get("writer"), 2);
+    });
+    await exec2.finish(false);
+    await exec2.close();
+  }
+
   // 7. finish(true) then further execute → closed
   {
     const gid = randomUUID(); const counters = new Map();

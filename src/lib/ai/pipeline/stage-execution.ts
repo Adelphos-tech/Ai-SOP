@@ -345,6 +345,26 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
         previousJournalHash = hash;
       }
       if (previousJournalHash !== saved.journalHash || entries.length !== state.revision || entries[entries.length - 1]?.stateHash !== saved.stateHash) throw new StageExecutionError("CHECKPOINT_INTEGRITY_FAILED");
+      // Crash recovery: a worker that died mid-run leaves state RUNNING
+      // with STARTED calls that never finished. Normalize it to a technical
+      // failure at the interrupted stage so the retry path can resume —
+      // completed stages replay from checkpoints, the interrupted stage
+      // is re-called exactly once.
+      const crashedRunning = state.status === "RUNNING" && state.runs.every(run => run.status === "RUNNING");
+      if (crashedRunning) {
+        for (const call of state.calls) {
+          if (call.status === "STARTED") {
+            call.status = "TECHNICAL";
+            call.reason = "INTERRUPTED_BY_WORKER_CRASH";
+            call.completedAt = new Date().toISOString();
+          }
+        }
+        for (const r of state.runs) {
+          if (r.status === "RUNNING") { r.status = "FAILED"; r.completedAt = new Date().toISOString(); }
+        }
+        state.status = "FAILED_TECHNICAL";
+        state.failure = { kind: "TECHNICAL", stageIndex: state.checkpoints.length + 1, reason: "INTERRUPTED_BY_WORKER_CRASH" };
+      }
       if (state.status !== "FAILED_TECHNICAL" || state.failure?.kind !== "TECHNICAL" || state.runs.some(run => run.status === "RUNNING")) throw new StageExecutionError("TECHNICAL_RETRY_NOT_ALLOWED");
       if (state.checkpoints.length >= EXECUTION_STAGES.length || state.failure.stageIndex !== state.checkpoints.length + 1) throw new StageExecutionError("CHECKPOINT_INTEGRITY_FAILED");
       for (let i = 0; i < state.checkpoints.length; i++) {
@@ -360,7 +380,10 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
         checkpoints.push(checkpoint);
       }
       const failedStageCalls = state.calls.filter(call => call.stageIndex === state.failure!.stageIndex);
-      if (!failedStageCalls.length || failedStageCalls[failedStageCalls.length - 1].status !== "TECHNICAL") throw new StageExecutionError("CHECKPOINT_INTEGRITY_FAILED");
+      // A crash between stages leaves no call at the failure index — that is
+      // a clean resume (continue from cursor), not an integrity violation.
+      if (failedStageCalls.length && failedStageCalls[failedStageCalls.length - 1].status !== "TECHNICAL") throw new StageExecutionError("CHECKPOINT_INTEGRITY_FAILED");
+      if (!crashedRunning && !failedStageCalls.length) throw new StageExecutionError("CHECKPOINT_INTEGRITY_FAILED");
       if (failedStageCalls.length > maxTechnicalRetries) throw new StageExecutionError("TECHNICAL_RETRY_LIMIT_EXCEEDED");
     }
     const run: RunRecord = { id: randomUUID(), mode: options.mode, startedAt: new Date().toISOString(), status: "RUNNING" };

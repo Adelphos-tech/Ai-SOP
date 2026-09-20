@@ -223,7 +223,9 @@ async function generateApplicationDocumentInner(
       generationId,
       generationRunId: generationId,
       documentId,
-      mode: "CONTENT_REGENERATION" as const,
+      // Resume MUST restore persisted checkpoints — CONTENT_REGENERATION
+      // would re-pay for every completed stage.
+      mode: (resumeRunId ? "TECHNICAL_STAGE_RETRY" : "CONTENT_REGENERATION") as const,
     },
   };
 
