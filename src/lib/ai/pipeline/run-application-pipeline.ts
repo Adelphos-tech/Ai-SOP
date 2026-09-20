@@ -188,10 +188,18 @@ export interface ApplicationResponseItem {
   text: string;
 }
 
+/** Advisory issue — surfaced to the consultant, never aborts the draft. */
+export interface GenerationWarning {
+  code: string;
+  message: string;
+}
+
 export interface ApplicationPipelineResult {
   status: "success" | "error" | "cancelled";
   error?: string;
   generationId?: string;
+  /** Content/quality/compliance issues that did not prevent a usable draft. */
+  warnings: GenerationWarning[];
   planner: any;
   writerOutput: any;
   qualityReview: QualityReviewOutput | null;
@@ -578,6 +586,8 @@ export async function runApplicationPipeline(
 ): Promise<ApplicationPipelineResult> {
   const pipelineStart = Date.now();
   let renderCheckCount = 0;
+  // Content/quality/compliance uncertainty collects here — never fatal.
+  const generationWarnings: GenerationWarning[] = [];
 
   // Capture render profile at start — immutable during the attempt
   const renderProfile = DVIVID_STANDARD_APPLICATION_V1;
@@ -748,7 +758,15 @@ export async function runApplicationPipeline(
     // BEFORE any OpenAI call. This prevents wasted paid calls like #007.
     const topicGateResult = checkMandatoryTopicEvidence(contract, evidenceBundle);
     if (!topicGateResult.passed) {
-      return errorResult("MISSING_REQUIRED_STUDENT_INFORMATION", pipelineStart, renderCheckCount, generationId);
+      // Policy: only NO usable student information at all is fatal.
+      // Per-topic evidence gaps are warnings — the Writer still sees the
+      // closed evidence world and Fact Reviewer guards final claims.
+      if (evidenceBundle.ledger.studentFacts.length === 0) {
+        return errorResult("MISSING_REQUIRED_STUDENT_INFORMATION", pipelineStart, renderCheckCount, generationId, { warnings: generationWarnings });
+      }
+      for (const issue of topicGateResult.blockingIssues) {
+        generationWarnings.push({ code: "TOPIC_EVIDENCE_UNCERTAIN", message: issue.issue });
+      }
     }
 
     // Phase COST-OPT: document-type narrative profile — default ON.
@@ -832,11 +850,12 @@ export async function runApplicationPipeline(
     // Phase 14: Deterministic Writer evidence validation (no AI call)
     const writerValidation = validateWriterEvidenceReferences({ packets: evidencePackets, writerOutput: writerOutput as any });
     if (!writerValidation.valid) {
-      await stageExecution.finish(false);
-      const reason = "WRITER_EVIDENCE_REFERENCE_VIOLATION";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview: null, calibratedOutput: null,
-        evidenceLedger, accounting: stageExecution.accounting(),
+      // Writer cited unknown/unauthorized evidence IDs — the draft text
+      // still exists and downstream claim extraction + Fact Reviewer audit
+      // the actual final claims. Surface as warning, keep the draft.
+      generationWarnings.push({
+        code: "WRITER_EVIDENCE_REFERENCE_VIOLATION",
+        message: `Writer referenced evidence IDs outside the authorized packet: ${(writerValidation.violations || []).map((v: any) => v?.claim || v?.evidenceId || v?.message || JSON.stringify(v)).slice(0, 5).join("; ")}`,
       });
     }
 
@@ -882,11 +901,12 @@ export async function runApplicationPipeline(
     // Phase 38A: Validate Quality Reviewer output against typed contract
     const qualityValidation = validateQualityReviewOutput(qualityReview);
     if (!qualityValidation.valid) {
-      await stageExecution.finish(false);
-      const reason = "QUALITY_REVIEWER_OUTPUT_INVALID";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: null,
-        evidenceLedger, accounting: stageExecution.accounting(),
+      // QR output is malformed — review uncertainty is not fatal. The
+      // action planner handles missing coverage as FREEZE + warnings and
+      // Fact Reviewer still audits the final text.
+      generationWarnings.push({
+        code: "QUALITY_REVIEWER_OUTPUT_INVALID",
+        message: `Quality Reviewer output failed structural validation: ${(qualityValidation.errors || []).slice(0, 3).join("; ")}`,
       });
     }
     stageUsages.push(qualityResult.stageUsage);
@@ -934,24 +954,27 @@ export async function runApplicationPipeline(
     stageUsages.push(calibrateResult.stageUsage);
 
     // Phase 16: Build calibrated claims and validate Language Calibrator claim preservation
-    const calibratedClaims = buildCalibratedClaims(calibrated, writerClaims);
+    let calibratedClaims = buildCalibratedClaims(calibrated, writerClaims);
 
     const languageCalibratorClaimValidation = validateLanguageCalibratorClaims({
       writerClaims,
       calibratedClaims,
     });
+    // Policy: if the Calibrator introduced claims not present in the
+    // Writer output, keep the safe pre-calibration draft instead of
+    // failing the run.
+    const calibratedSource = languageCalibratorClaimValidation.valid ? calibrated : writerOutput;
     if (!languageCalibratorClaimValidation.valid) {
-      await stageExecution.finish(false);
-      const reason = "LANGUAGE_CALIBRATOR_NEW_FACTUAL_CLAIM";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-        evidenceLedger, accounting: stageExecution.accounting(),
+      calibratedClaims = writerClaims.map(c => ({ claimId: c.claimId, componentId: c.componentId, rewrittenText: c.text, evidenceIds: c.evidenceIds }));
+      generationWarnings.push({
+        code: "LANGUAGE_CALIBRATOR_NEW_FACTUAL_CLAIM",
+        message: "Language Calibrator introduced claims not present in the Writer draft; using Writer text as the safe draft.",
       });
     }
 
     // ===== DETERMINISTIC PRE-FINAL RENDER (NO OpenAI call) =====
     const calibratedResponses: Array<{ componentId: string; label: string; text: string }> =
-      (calibrated.responses || calibrated.componentPlans || []).map((r: any) => ({
+      (calibratedSource.responses || calibratedSource.componentPlans || []).map((r: any) => ({
         componentId: r.componentId,
         label: r.title || r.componentId,
         text: r.text || "",
@@ -980,30 +1003,38 @@ export async function runApplicationPipeline(
       calibratedResponses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })),
     });
 
-    // The action planner fails closed when required topic coverage is unknown,
-    // evidence is missing, or the pre-final render is invalid. The pipeline must
-    // NOT proceed to the Finalizer in those cases — there is no authorized scope.
+    // Technical integrity blocks stay fatal (a missing/empty calibrated
+    // text means there is no draft to finalize). Semantic issues — topic
+    // coverage uncertainty, missing-topic evidence, render validation
+    // gaps — degrade to warnings; FREEZE preserves the calibrated text.
     if (actionPlan.blocked) {
-      await stageExecution.finish(false);
-      const reason = actionPlan.blockingIssues?.[0]?.code || "ACTION_PLAN_BLOCKED";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-        actionPlan, evidenceLedger, accounting: stageExecution.accounting(),
-      });
+      const issues = actionPlan.blockingIssues || [];
+      const hardIssues = issues.filter(i => i.code === "FINALIZER_SCOPE_VIOLATION");
+      const softIssues = issues.filter(i => i.code !== "FINALIZER_SCOPE_VIOLATION");
+      for (const i of softIssues) {
+        generationWarnings.push({ code: i.code, message: i.message });
+      }
+      if (hardIssues.length > 0) {
+        await stageExecution.finish(false);
+        const reason = hardIssues[0].code;
+        return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
+          planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
+          actionPlan, evidenceLedger, accounting: stageExecution.accounting(), warnings: generationWarnings,
+        });
+      }
     }
 
-    // Phase 16: Check for missing mandatory topics with no adequate evidence
+    // Phase 16: Missing mandatory topics with no adequate evidence — the
+    // Writer already worked in a closed evidence world, so an uncovered
+    // topic means it could not be truthfully addressed. Warn, never fail.
     const missingMandatoryCheck = checkMissingMandatoryTopics({
       actionPlan,
       requiredTopics: requiredTopicProvenance,
     });
     if (missingMandatoryCheck.blocked) {
-      await stageExecution.finish(false);
-      const reason = "MISSING_REQUIRED_STUDENT_INFORMATION";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-        actionPlan, evidenceLedger, accounting: stageExecution.accounting(),
-      });
+      for (const b of missingMandatoryCheck.blockingReasons) {
+        generationWarnings.push({ code: "TOPIC_EVIDENCE_MISSING", message: b.reason });
+      }
     }
 
     // STAGE 5: BOUNDED FINALIZER (receives action plan + render feedback)
@@ -1011,6 +1042,23 @@ export async function runApplicationPipeline(
     // action plan is internally inconsistent.
     // Phase 34C: Pass calibratedClaims for expectedClaimIds and add retry loop
     // for FINALIZER_METADATA_INCOMPLETE with corrective feedback.
+    // STAGE 5: BOUNDED FINALIZER (best-effort)
+    // The calibrated text is already a complete, evidence-checked draft.
+    // Any finalizer-path failure — plan inconsistency, metadata retries
+    // exhausted, guard violation, provenance violation — preserves the
+    // calibrated text and records a warning instead of failing the run.
+    // Provider/transport failures still propagate as technical FAILED.
+    let finalized: any = { responses: calibratedResponses.map(r => ({ componentId: r.componentId, title: r.label, text: r.text })) };
+    let rawResponses: any[] = finalized.responses;
+    let finalizerGuard: FinalizerGuardResult | undefined;
+    let claimProvenanceValidation: ClaimProvenanceResult | undefined;
+    let finalizerRan = false;
+    const fallBackToCalibrated = (code: string, message: string) => {
+      generationWarnings.push({ code, message });
+      finalized = { responses: calibratedResponses.map(r => ({ componentId: r.componentId, title: r.label, text: r.text })) };
+      rawResponses = finalized.responses;
+    };
+
     let finalizerPrompt;
     try {
       finalizerPrompt = buildBoundedFinalizerPrompt({
@@ -1023,93 +1071,100 @@ export async function runApplicationPipeline(
         complianceConstraints: input.pipelineWritingInstructions,
       });
     } catch (error) {
-      await stageExecution.finish(false);
-      const reason = error instanceof BoundedFinalizerBlockedError
-        ? "BOUNDED_FINALIZER_BLOCKED"
-        : (error as Error)?.message || "BOUNDED_FINALIZER_BLOCKED";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-        actionPlan, evidenceLedger, accounting: stageExecution.accounting(),
-      });
+      fallBackToCalibrated(
+        "BOUNDED_FINALIZER_BLOCKED",
+        `Finalizer could not plan a safe repair (${error instanceof BoundedFinalizerBlockedError ? "action plan inconsistent" : (error as Error)?.message}); keeping the calibrated draft.`,
+      );
     }
 
-    // Phase 33B: Pass FREEZE component IDs to parseStage so it can distinguish
-    // FREEZE (empty metadata allowed, deterministic inference) from COMPRESS
-    // (empty metadata = technical retry for FINALIZER_METADATA_INCOMPLETE).
-    const freezeComponentIds = new Set(
-      actionPlan.plans.filter(p => p.action === "FREEZE").map(p => p.componentId)
-    );
+    if (finalizerPrompt) {
+      // Phase 33B: Pass FREEZE component IDs to parseStage so it can distinguish
+      // FREEZE (empty metadata allowed, deterministic inference) from COMPRESS
+      // (empty metadata = technical retry for FINALIZER_METADATA_INCOMPLETE).
+      const freezeComponentIds = new Set(
+        actionPlan.plans.filter(p => p.action === "FREEZE").map(p => p.componentId)
+      );
 
-    // Phase 34C: Build expectedClaimIds map for parseStage zero-claim edge case
-    const expectedClaimIdsMap = new Map<string, string[]>();
-    for (const claim of calibratedClaims) {
-      if (!expectedClaimIdsMap.has(claim.componentId)) {
-        expectedClaimIdsMap.set(claim.componentId, []);
-      }
-      expectedClaimIdsMap.get(claim.componentId)!.push(claim.claimId);
-    }
-
-    // Phase 34C: Retry loop for FINALIZER_METADATA_INCOMPLETE
-    // When the Finalizer returns empty claim metadata, retry with corrective
-    // feedback telling the model exactly which claim IDs to classify.
-    // Uses existing technical retry infrastructure (maxTechnicalRetries = 2).
-    // Stages 1-4 are NOT re-executed — only the Finalizer OpenAI call is retried.
-    let finalizerResult;
-    let finalizerRetryCount = 0;
-    const maxFinalizerRetries = 2;
-    while (true) {
-      try {
-        finalizerResult = await execStage(
-          "finalizer", finalizerPrompt.system, finalizerPrompt.user,
-          { freezeComponentIds, expectedClaimIds: expectedClaimIdsMap }
-        );
-        break;
-      } catch (error: any) {
-        const isMetadataIncomplete = error?.code === "FINALIZER_METADATA_INCOMPLETE";
-        if (!isMetadataIncomplete || finalizerRetryCount >= maxFinalizerRetries) {
-          // Not retryable or retry limit exceeded — fail closed
-          await stageExecution.finish(false);
-          const reason = isMetadataIncomplete
-            ? "FINALIZER_METADATA_INCOMPLETE_RETRY_EXHAUSTED"
-            : (error?.message || "FINALIZER_EXECUTION_FAILED");
-          return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-            planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-            actionPlan, evidenceLedger, accounting: stageExecution.accounting(),
-          });
+      // Phase 34C: Build expectedClaimIds map for parseStage zero-claim edge case
+      const expectedClaimIdsMap = new Map<string, string[]>();
+      for (const claim of calibratedClaims) {
+        if (!expectedClaimIdsMap.has(claim.componentId)) {
+          expectedClaimIdsMap.set(claim.componentId, []);
         }
-        // Phase 34C: Build corrective retry prompt
-        finalizerRetryCount++;
-        // Determine which components had empty metadata from the error message
-        // and build corrective feedback with their expected claim IDs
-        const failedComponents = actionPlan.plans
-          .filter(p => p.action !== "FREEZE")
-          .map(p => ({
-            componentId: p.componentId,
-            expectedClaimIds: expectedClaimIdsMap.get(p.componentId) ?? [],
-          }))
-          .filter(fc => fc.expectedClaimIds.length > 0);
+        expectedClaimIdsMap.get(claim.componentId)!.push(claim.claimId);
+      }
 
-        finalizerPrompt = buildBoundedFinalizerPrompt({
-          calibratedOutput: { responses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })) },
-          responseComponents: input.responseComponents,
-          actionPlan,
-          evidenceLedger,
-          renderFeedback: preFinalFeedback,
-          calibratedClaims: calibratedClaims.map(c => ({ claimId: c.claimId, componentId: c.componentId })),
-          retryCorrection: { failedComponents },
-        });
+      // Phase 34C: Retry loop for FINALIZER_METADATA_INCOMPLETE.
+      // Provider/transport errors propagate to the outer catch (technical
+      // FAILED); exhausted metadata retries fall back to calibrated text.
+      let finalizerResult;
+      let finalizerRetryCount = 0;
+      const maxFinalizerRetries = 2;
+      while (true) {
+        try {
+          finalizerResult = await execStage(
+            "finalizer", finalizerPrompt.system, finalizerPrompt.user,
+            { freezeComponentIds, expectedClaimIds: expectedClaimIdsMap }
+          );
+          break;
+        } catch (error: any) {
+          const isMetadataIncomplete = error?.code === "FINALIZER_METADATA_INCOMPLETE";
+          if (!isMetadataIncomplete) throw error;
+          if (finalizerRetryCount >= maxFinalizerRetries) {
+            fallBackToCalibrated("FINALIZER_METADATA_INCOMPLETE", "Finalizer did not return claim provenance metadata after retries; keeping the calibrated draft.");
+            break;
+          }
+          finalizerRetryCount++;
+          const failedComponents = actionPlan.plans
+            .filter(p => p.action !== "FREEZE")
+            .map(p => ({
+              componentId: p.componentId,
+              expectedClaimIds: expectedClaimIdsMap.get(p.componentId) ?? [],
+            }))
+            .filter(fc => fc.expectedClaimIds.length > 0);
+          try {
+            finalizerPrompt = buildBoundedFinalizerPrompt({
+              calibratedOutput: { responses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })) },
+              responseComponents: input.responseComponents,
+              actionPlan,
+              evidenceLedger,
+              renderFeedback: preFinalFeedback,
+              calibratedClaims: calibratedClaims.map(c => ({ claimId: c.claimId, componentId: c.componentId })),
+              retryCorrection: { failedComponents },
+              complianceConstraints: input.pipelineWritingInstructions,
+            });
+          } catch {
+            fallBackToCalibrated("BOUNDED_FINALIZER_BLOCKED", "Finalizer retry plan inconsistent; keeping the calibrated draft.");
+            finalizerResult = undefined;
+            break;
+          }
+        }
+      }
+      if (finalizerResult) {
+        finalized = finalizerResult.output;
+        stageUsages.push(finalizerResult.stageUsage);
+        rawResponses = finalized.responses || finalized.componentPlans || [];
+        finalizerRan = true;
       }
     }
-    const finalized = finalizerResult.output;
-    stageUsages.push(finalizerResult.stageUsage);
 
-    // Normalise responses
-    const rawResponses: any[] = finalized.responses || finalized.componentPlans || [];
+    // Normalise responses (finalizer output, or calibrated fallback)
     const responses: ApplicationResponseItem[] = rawResponses.map((r: any) => ({
       componentId: r.componentId,
       title: r.title || r.componentId,
       text: r.text || "",
     }));
+
+    // A run that produced no usable text at all is a technical failure —
+    // there is no draft to warn about.
+    if (!responses.some(r => typeof r.text === "string" && r.text.trim().length > 0)) {
+      await stageExecution.finish(false);
+      return errorResult("EMPTY_FINAL_DOCUMENT", pipelineStart, renderCheckCount, generationId, {
+        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
+        finalizedOutput: finalized, actionPlan, evidenceLedger,
+        accounting: stageExecution.accounting(), warnings: generationWarnings,
+      });
+    }
 
     // ===== DETERMINISTIC FINAL RENDER (NO OpenAI call) =====
     let finalFeedback: RenderFeedback | null = null;
@@ -1127,75 +1182,84 @@ export async function runApplicationPipeline(
       } catch (e) {
         finalFeedback = null;
         renderLifecycle = null;
+        generationWarnings.push({ code: "PAGE_LIMIT_WARNING", message: "Final physical page validation could not run; page-limit compliance is unverified." });
       }
     }
 
-    // ===== DETERMINISTIC FINALIZER GUARD (NO OpenAI call) =====
-    // Validate the Finalizer output against the action plan BEFORE stage 6.
-    // A guard failure is a content failure: the pipeline must not present
-    // unverified final text to the student.
-    const finalizerGuard = validateFinalizerOutput({
-      actionPlan,
-      calibratedResponses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })),
-      finalResponses: responses.map(r => ({ componentId: r.componentId, text: r.text, repairReferences: (rawResponses.find((rr: any) => rr.componentId === r.componentId)?.repairReferences) })),
-      finalRenderFeedback: finalFeedback,
-      evidenceLedger,
-      responseComponents: input.responseComponents,
-    });
-
-    if (!finalizerGuard.passed) {
-      await stageExecution.finish(false);
-      const reason = finalizerGuard.violations[0] || "FINALIZER_GUARD_FAILED";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-        finalizedOutput: finalized, actionPlan, finalizerGuard, evidenceLedger,
-        accounting: stageExecution.accounting(),
+    // ===== DETERMINISTIC FINALIZER GUARD + CLAIM PROVENANCE (only when the
+    // Finalizer actually produced output) =====
+    // Guard/provenance failures are content failures — the calibrated draft
+    // remains the safe text, so they become warnings with a text fallback.
+    if (finalizerRan) {
+      finalizerGuard = validateFinalizerOutput({
+        actionPlan,
+        calibratedResponses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })),
+        finalResponses: responses.map(r => ({ componentId: r.componentId, text: r.text, repairReferences: (rawResponses.find((rr: any) => rr.componentId === r.componentId)?.repairReferences) })),
+        finalRenderFeedback: finalFeedback,
+        evidenceLedger,
+        responseComponents: input.responseComponents,
       });
+
+      if (!finalizerGuard.passed) {
+        fallBackToCalibrated("FINALIZER_GUARD_FAILED", `Finalizer output failed the deterministic guard (${finalizerGuard.violations[0] || "unknown"}); keeping the calibrated draft.`);
+        responses.length = 0;
+        responses.push(...rawResponses.map((r: any) => ({ componentId: r.componentId, title: r.title || r.componentId, text: r.text || "" })));
+      } else {
+        try {
+          const finalizerClaimOutputs: FinalizerClaimOutput[] = rawResponses.map((r: any) => {
+            const hasRetained = "retainedClaimIds" in r;
+            const hasRemoved = "removedClaimIds" in r;
+            const hasRepair = "repairClaims" in r;
+            const componentPlan = actionPlan.plans.find(p => p.componentId === r.componentId);
+            const isFreeze = componentPlan?.action === "FREEZE";
+            if (!isFreeze && (!hasRetained || !hasRemoved || !hasRepair)) {
+              const missing: string[] = [];
+              if (!hasRetained) missing.push("retainedClaimIds");
+              if (!hasRemoved) missing.push("removedClaimIds");
+              if (!hasRepair) missing.push("repairClaims");
+              throw new Error(`FINALIZER_GUARD_INCOMPLETE: Missing required claim metadata fields [${missing.join(", ")}] for component ${r.componentId}`);
+            }
+            return {
+              componentId: r.componentId,
+              text: r.text || "",
+              retainedClaimIds: hasRetained ? (Array.isArray(r.retainedClaimIds) ? r.retainedClaimIds : []) : [],
+              removedClaimIds: hasRemoved ? (Array.isArray(r.removedClaimIds) ? r.removedClaimIds : []) : [],
+              repairClaims: hasRepair ? (Array.isArray(r.repairClaims) ? r.repairClaims : []) : [],
+            };
+          });
+
+          claimProvenanceValidation = validateFinalizerClaims({
+            preFinalClaims: calibratedClaims,
+            finalizerOutputs: finalizerClaimOutputs,
+            actionPlan,
+            requiredTopics: requiredTopicProvenance,
+          });
+
+          if (!claimProvenanceValidation.valid) {
+            fallBackToCalibrated("CLAIM_PROVENANCE_VIOLATION", `Finalizer claim provenance invalid (${claimProvenanceValidation.violations[0]?.code || "unknown"}); keeping the calibrated draft.`);
+            responses.length = 0;
+            responses.push(...rawResponses.map((r: any) => ({ componentId: r.componentId, title: r.title || r.componentId, text: r.text || "" })));
+          }
+        } catch (e: any) {
+          fallBackToCalibrated("FINALIZER_GUARD_INCOMPLETE", `${e?.message || "Finalizer claim metadata incomplete"}; keeping the calibrated draft.`);
+          responses.length = 0;
+          responses.push(...rawResponses.map((r: any) => ({ componentId: r.componentId, title: r.title || r.componentId, text: r.text || "" })));
+        }
+      }
     }
 
-    // ===== DETERMINISTIC CLAIM PROVENANCE VALIDATION (Phase 16, NO OpenAI call) =====
-    // Phase 21: Strict Finalizer output parsing.
-    // Distinguish FIELD_MISSING from FIELD_EXPLICITLY_RETURNED_EMPTY.
-    // For non-FREEZE actions, missing claim metadata is TECHNICAL_STAGE_OUTPUT_INVALID.
-    const finalizerClaimOutputs: FinalizerClaimOutput[] = rawResponses.map((r: any) => {
-      const hasRetained = "retainedClaimIds" in r;
-      const hasRemoved = "removedClaimIds" in r;
-      const hasRepair = "repairClaims" in r;
-      // Check if any required field is missing for non-FREEZE actions
-      const componentPlan = actionPlan.plans.find(p => p.componentId === r.componentId);
-      const isFreeze = componentPlan?.action === "FREEZE";
-      if (!isFreeze && (!hasRetained || !hasRemoved || !hasRepair)) {
-        const missing: string[] = [];
-        if (!hasRetained) missing.push("retainedClaimIds");
-        if (!hasRemoved) missing.push("removedClaimIds");
-        if (!hasRepair) missing.push("repairClaims");
-        throw new Error(`FINALIZER_GUARD_INCOMPLETE: Missing required claim metadata fields [${missing.join(", ")}] for component ${r.componentId}`);
-      }
-      return {
-        componentId: r.componentId,
-        text: r.text || "",
-        retainedClaimIds: hasRetained ? (Array.isArray(r.retainedClaimIds) ? r.retainedClaimIds : []) : [],
-        removedClaimIds: hasRemoved ? (Array.isArray(r.removedClaimIds) ? r.removedClaimIds : []) : [],
-        repairClaims: hasRepair ? (Array.isArray(r.repairClaims) ? r.repairClaims : []) : [],
-      };
-    });
-
-    const claimProvenanceValidation = validateFinalizerClaims({
-      preFinalClaims: calibratedClaims,
-      finalizerOutputs: finalizerClaimOutputs,
-      actionPlan,
-      requiredTopics: requiredTopicProvenance,
-    });
-
-    if (!claimProvenanceValidation.valid) {
-      await stageExecution.finish(false);
-      const reason = claimProvenanceValidation.violations[0]?.code || "CLAIM_PROVENANCE_VIOLATION";
-      return errorResult(reason, pipelineStart, renderCheckCount, generationId, {
-        planner: plan, writerOutput, qualityReview, calibratedOutput: calibrated,
-        finalizedOutput: finalized, actionPlan, finalizerGuard, evidenceLedger,
-        claimProvenanceValidation, writerClaims, calibratedClaims,
-        accounting: stageExecution.accounting(),
-      });
+    // If a guard/provenance fallback swapped the final text after the
+    // render above, re-render the text that will actually be persisted.
+    if (hasPageConstraint && finalizerRan && generationWarnings.some(w =>
+      w.code === "FINALIZER_GUARD_FAILED" || w.code === "CLAIM_PROVENANCE_VIOLATION" || w.code === "FINALIZER_GUARD_INCOMPLETE")) {
+      try {
+        const reRender = await runFinalRender(
+          responses.map(r => ({ componentId: r.componentId, label: r.title, text: r.text })),
+          input.responseComponents, renderProfile, preFinalFeedback
+        );
+        finalFeedback = reRender.feedback;
+        renderLifecycle = reRender.lifecycle;
+      } catch { /* keep previous feedback */ }
     }
 
     // STAGE 6: FINAL FACT REVIEWER — audits the ACTUAL final text
@@ -1294,6 +1358,22 @@ export async function runApplicationPipeline(
       physicalPageBlocker,
     };
 
+    // Advisory compliance → warnings (never fatal — consultant reviews)
+    if (!postChecks.pass) {
+      generationWarnings.push({ code: "POST_FINAL_CHECK_WARNING", message: "Deterministic post-final checks reported issues; review the draft." });
+    }
+    if (compliance.requiredTopicCoverage === "FAIL") {
+      generationWarnings.push({ code: "TOPIC_COVERAGE_INCOMPLETE", message: "One or more required/requested topics were not fully covered." });
+    }
+    if (pageLimitStatus === "FAIL") {
+      generationWarnings.push({ code: "PAGE_LIMIT_WARNING", message: "Final render exceeds the physical page limit." });
+    } else if (pageLimitStatus === "RENDER_VALIDATION_REQUIRED") {
+      generationWarnings.push({ code: "PAGE_LIMIT_WARNING", message: "Page-limit compliance could not be verified." });
+    }
+    if (!factPass) {
+      generationWarnings.push({ code: "FACT_REVIEW_WARNING", message: `Fact review flagged issues — invented: ${totalInvented}, altered: ${totalAltered}, elaborations: ${totalElaborations}.` });
+    }
+
     const docLabel = input.documentTypeLabel || "APPLICATION DOCUMENT";
     // Phase 34D: Remove internal component IDs from student-facing output.
     // Component IDs (e.g., "RC-DOC") are internal pipeline metadata and must
@@ -1325,6 +1405,7 @@ export async function runApplicationPipeline(
     return {
       status: "success",
       generationId,
+      warnings: generationWarnings,
       planner: plan,
       writerOutput,
       qualityReview,
@@ -1370,6 +1451,7 @@ export async function runApplicationPipeline(
         status: "cancelled",
         error: "GENERATION_CANCELLED",
         generationId,
+        warnings: generationWarnings,
         planner: null, writerOutput: null, qualityReview: null, factReview: null,
         calibratedOutput: null, finalizedOutput: null,
         compliance: null, responses: [], finalText: "",
@@ -1383,6 +1465,7 @@ export async function runApplicationPipeline(
       status: "error",
       error: error?.message || "PIPELINE_ERROR",
       generationId,
+      warnings: generationWarnings,
       planner: null, writerOutput: null, qualityReview: null, factReview: null,
       calibratedOutput: null, finalizedOutput: null,
       compliance: null, responses: [], finalText: "",
@@ -1407,6 +1490,7 @@ function errorResult(
     status: "error",
     error: reason,
     generationId,
+    warnings: partial?.warnings ?? [],
     planner: partial?.planner ?? null,
     writerOutput: partial?.writerOutput ?? null,
     qualityReview: partial?.qualityReview ?? null,

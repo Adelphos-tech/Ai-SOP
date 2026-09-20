@@ -768,6 +768,16 @@ export default function DocumentWorkspacePage() {
               </div>
             )}
           </div>
+          {Array.isArray((generationResult as any).warnings) && (generationResult as any).warnings.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-4">
+              <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide mb-1">Completed with warnings — review before use</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                {(generationResult as any).warnings.slice(0, 8).map((w: any, i: number) => (
+                  <li key={i} className="text-xs text-amber-800"><span className="font-mono">{w.code}</span> — {String(w.message).slice(0, 200)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <details className="group">
             <summary className="text-xs text-dvivid-text-muted cursor-pointer list-none flex items-center gap-1.5">
               <span className="group-open:rotate-90 transition-transform inline-block">▸</span> View details (model, cost)

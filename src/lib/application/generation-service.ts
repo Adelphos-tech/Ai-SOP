@@ -341,6 +341,7 @@ async function generateApplicationDocumentInner(
       status: "success",
       generationId,
       documentType: config.displayName,
+      warnings: result.warnings || [],
       version: {
         id: version.id,
         versionNumber: version.versionNumber,
