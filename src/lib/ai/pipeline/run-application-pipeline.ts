@@ -41,7 +41,7 @@
  */
 
 import { StudentProfile } from "@/types";
-import { AI_CONFIG, getAllModelsUsed, getModelForStage, getPromptVersionHash, StageName } from "../config";
+import { AI_CONFIG, getAllModelsUsed, getMaxCompletionTokensForStage, getModelForStage, getPromptVersionHash, StageName } from "../config";
 import { isApiKeyConfigured } from "../openai-client";
 import { buildAiInput } from "./build-ai-input";
 import {
