@@ -26,6 +26,9 @@ export default function StudentsPage() {
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<StudentResult | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const fetchStudents = useCallback(async (searchQuery: string, pageOffset: number) => {
     setLoading(true);
@@ -185,11 +188,77 @@ export default function StudentsPage() {
                     <p className="text-xs text-dvivid-text-muted">
                       {new Date(student.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                     </p>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDeleteError("");
+                        setDeleteTarget(student);
+                      }}
+                      className="mt-1 text-xs text-dvivid-error/60 hover:text-dvivid-error hover:underline"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               </div>
             </Link>
           ))}
+
+          {/* Delete student — danger action, explicit confirm */}
+          {deleteTarget && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => !deleting && setDeleteTarget(null)}>
+              <div className="bg-white rounded-card shadow-card p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+                <p className="text-base font-semibold text-dvivid-error mb-2">
+                  Delete {deleteTarget.firstName} {deleteTarget.lastName}?
+                </p>
+                <p className="text-sm text-dvivid-text-secondary mb-1">
+                  This will permanently delete this student, their reusable profile,
+                  and <strong>ALL {deleteTarget.applicationCount ?? 0} application{(deleteTarget.applicationCount ?? 0) !== 1 ? "s" : ""}</strong> with
+                  their documents and generation history.
+                </p>
+                <p className="text-sm text-dvivid-text-secondary mb-4">This cannot be undone.</p>
+                {deleteError && <p className="text-sm text-dvivid-error mb-3">{deleteError}</p>}
+                <div className="flex gap-3">
+                  <button
+                    onClick={async () => {
+                      setDeleting(true);
+                      setDeleteError("");
+                      try {
+                        const res = await fetch("/api/application/student/delete", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ studentId: deleteTarget.id }),
+                        });
+                        if (!res.ok) {
+                          const data = await res.json().catch(() => ({}));
+                          setDeleteError(data.error || "Failed to delete student.");
+                          return;
+                        }
+                        setDeleteTarget(null);
+                        fetchStudents(query, offset);
+                      } catch {
+                        setDeleteError("Failed to delete student.");
+                      } finally {
+                        setDeleting(false);
+                      }
+                    }}
+                    disabled={deleting}
+                    className="px-4 py-2 text-sm font-medium rounded-input bg-dvivid-error text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+                  >
+                    {deleting ? "Deleting..." : "Yes, delete this student"}
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget(null)}
+                    disabled={deleting}
+                    className="px-4 py-2 text-sm font-medium rounded-input border border-dvivid-border text-dvivid-text-primary hover:bg-dvivid-surface-alt transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Pagination */}
           {totalPages > 1 && (

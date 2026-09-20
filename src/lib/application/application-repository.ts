@@ -374,6 +374,78 @@ export async function deleteApplicationCascade(applicationId: string): Promise<b
 }
 
 /**
+ * Delete a student and EVERYTHING owned by them — atomically.
+ *
+ * Scope: students row (incl. profile_data) + all of the student's
+ * applications + documents + versions + generation runs/stage
+ * responses. generation_runs/generation_stage_responses have no FK
+ * constraints so they are deleted explicitly in dependency order.
+ *
+ * Shared program-level data (application_requirement_sets,
+ * writing_requirements, requirement_sources, institutions, programs)
+ * is NEVER touched — it is library data, not student-owned.
+ */
+export async function deleteStudentCascade(studentId: string): Promise<boolean> {
+  const pool = getDbPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [stuRows] = await conn.execute(
+      "SELECT id FROM students WHERE id = ? FOR UPDATE",
+      [studentId],
+    );
+    if (!(stuRows as any[])[0]) {
+      await conn.rollback();
+      return false;
+    }
+
+    // 1. Stage responses — via runs (student_id) and via documents (no FKs)
+    await conn.execute(
+      "DELETE gsr FROM generation_stage_responses gsr JOIN generation_runs gr ON gsr.run_id = gr.id WHERE gr.student_id = ?",
+      [studentId],
+    );
+    await conn.execute(
+      `DELETE gsr FROM generation_stage_responses gsr
+       JOIN application_documents d ON gsr.document_id = d.id
+       JOIN applications a ON d.application_id = a.id
+       WHERE a.student_id = ?`,
+      [studentId],
+    );
+
+    // 2. Generation runs (no FK)
+    await conn.execute("DELETE FROM generation_runs WHERE student_id = ?", [studentId]);
+
+    // 3. Versions → documents → applications
+    await conn.execute(
+      `DELETE dv FROM document_versions dv
+       JOIN application_documents d ON dv.document_id = d.id
+       JOIN applications a ON d.application_id = a.id
+       WHERE a.student_id = ?`,
+      [studentId],
+    );
+    await conn.execute(
+      `DELETE d FROM application_documents d
+       JOIN applications a ON d.application_id = a.id
+       WHERE a.student_id = ?`,
+      [studentId],
+    );
+    await conn.execute("DELETE FROM applications WHERE student_id = ?", [studentId]);
+
+    // 4. The student (profile_data goes with the row)
+    await conn.execute("DELETE FROM students WHERE id = ?", [studentId]);
+
+    await conn.commit();
+    return true;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
  * List all applications across all students, with student info joined.
  * Used by the cross-student Applications listing page.
  */
