@@ -124,6 +124,29 @@ function classifyFailure(error: unknown): FailureKind {
 const object = (value: unknown): value is Record<string, any> => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
+/** Locate the outermost balanced {...} span, skipping braces inside strings. */
+function extractJsonObject(content: string): string | null {
+  const start = content.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < content.length; i++) {
+    const ch = content[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return content.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 /**
  * Parse + structurally validate a stage output.
  *
@@ -137,7 +160,20 @@ const text = (value: unknown): value is string => typeof value === "string" && v
 export function parseStage(stage: ExecutionStage, content: string, context?: { freezeComponentIds?: Set<string>; expectedClaimIds?: Map<string, string[]> }): Record<string, any> {
   if (!text(content)) throw new StageExecutionError("EMPTY_CONTENT", `${stage} returned empty content`, true);
   let parsed: unknown;
-  try { parsed = JSON.parse(content); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Some OpenAI-compatible providers wrap JSON in prose/fences —
+    // extract the outermost JSON object by brace matching and retry.
+    const extracted = extractJsonObject(content);
+    if (!extracted) {
+      throw new StageExecutionError(
+        "CONTENT_JSON_INVALID",
+        `CONTENT_JSON_INVALID: ${stage} output not parseable (starts: ${content.trim().slice(0, 80)})`,
+      );
+    }
+    try { parsed = JSON.parse(extracted); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
+  }
   if (!object(parsed)) throw new StageExecutionError("CONTENT_SCHEMA_INVALID");
   // Normalize harmless representation differences BEFORE strict checks —
   // e.g. factReviewer claims using `text` instead of `claim`, or an
