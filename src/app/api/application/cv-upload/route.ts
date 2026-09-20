@@ -20,7 +20,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { writeFile, mkdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { createHash } from "crypto";
-import { parseCVFile, CVParseFailure } from "@/lib/application/cv-parser";
+import { parseCVFile, CVParseFailure, ParsedCV } from "@/lib/application/cv-parser";
+import { parseWithDocling, DoclingServiceError } from "@/lib/application/docling-client";
+import { mapDoclingToParsedCV } from "@/lib/application/cv-mapper-docling";
 import { getStudent } from "@/lib/application/application-repository";
 import { getStudentProfileRevision } from "@/lib/application/application-repository";
 import { validateDocx } from "@/lib/application/docx-validator";
@@ -203,11 +205,32 @@ export async function POST(request: NextRequest) {
     await writeFile(hashFilePath, buffer);
 
     // ===== PARSE (concurrency-limited) =====
-    let parsed;
+    // Engine flag: CV_PARSER_ENGINE=legacy (default) | docling
+    // Optional fallback: CV_PARSER_FALLBACK=legacy retries via the
+    // legacy parser when the docling service fails.
+    const parserEngine = process.env.CV_PARSER_ENGINE === "docling" ? "docling" : "legacy";
+    const fallbackToLegacy = process.env.CV_PARSER_FALLBACK === "legacy";
+
+    let parsed: ParsedCV;
     try {
       const release = await cvParseLimiter.acquire();
       try {
-        parsed = await parseCVFile(buffer, file.name);
+        if (parserEngine === "docling") {
+          try {
+            const doc = await parseWithDocling(buffer, file.name);
+            parsed = mapDoclingToParsedCV(doc);
+          } catch (docErr: any) {
+            if (!fallbackToLegacy) throw docErr;
+            logCVParseFailure({
+              event: "cv_parse_docling_fallback",
+              reason: docErr?.code || "DOCLING_SERVICE_ERROR",
+              studentId, mimeType: file.type || ext, fileSize: buffer.length, buildId: BUILD_ID,
+            });
+            parsed = await parseCVFile(buffer, file.name);
+          }
+        } else {
+          parsed = await parseCVFile(buffer, file.name);
+        }
       } finally {
         release();
       }

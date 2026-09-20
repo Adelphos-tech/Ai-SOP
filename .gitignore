@@ -39,3 +39,7 @@ coverage/
 
 # Private data directory
 /opt/sop-ai-data/
+
+# docling sidecar venv + fixtures
+services/cv-parser/.venv/
+services/cv-parser/fixtures/

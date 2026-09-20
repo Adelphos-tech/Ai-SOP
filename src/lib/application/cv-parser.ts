@@ -84,9 +84,25 @@ export interface ParsedCV {
   achievements: string[];
   rawTextLength: number;
   parseWarnings: string[];
+  /** Parser provenance — present on docling-path results. Never
+   * persisted to canonical profile (cv-apply maps fields explicitly). */
+  parserMeta?: {
+    engine: "legacy" | "docling";
+    doclingVersion?: string;
+    sourceHash?: string;
+    ocrUsed?: boolean;
+    durationMs?: number;
+    parsedAt?: string;
+  };
 }
 
-export interface ParsedEducation {
+/** Field-level confidence + source — review UI hints, not persisted. */
+export interface ParsedFieldMeta {
+  confidence?: "HIGH" | "MEDIUM" | "LOW";
+  source?: { text: string; page?: number | null };
+}
+
+export interface ParsedEducation extends ParsedFieldMeta {
   id: string;
   institution: string;
   degree: string;
@@ -97,7 +113,7 @@ export interface ParsedEducation {
   cgpaScale: string;
 }
 
-export interface ParsedExperience {
+export interface ParsedExperience extends ParsedFieldMeta {
   id: string;
   type: string;
   organization: string;
@@ -109,7 +125,7 @@ export interface ParsedExperience {
   responsibilities: string;
 }
 
-export interface ParsedProject {
+export interface ParsedProject extends ParsedFieldMeta {
   id: string;
   name: string;
   type: string;
