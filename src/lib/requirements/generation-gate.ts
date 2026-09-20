@@ -302,6 +302,15 @@ function generateClarificationQuestion(topicText: string): string {
   return `Please provide specific information about: ${topicText}`;
 }
 
+/**
+ * Single definition of whether a required-topic status permits a hard
+ * pre/post-generation block. OFFICIAL/VERIFIED requirement topics may
+ * hard-block; consultant-entered DECLARED topics may not.
+ */
+export function isHardMandatoryTopicStatus(status: string | undefined | null): boolean {
+  return status === "VERIFIED" || status === "REQUIRED" || status === "MANDATORY_REQUIRED_TOPIC";
+}
+
 export interface MandatoryTopicEvidenceResult {
   passed: boolean;
   blockingIssues: BlockingIssue[];
@@ -332,7 +341,7 @@ export function checkMandatoryTopicEvidence(
   for (const rc of contract.responseComponents) {
     for (const topic of rc.requiredTopics) {
       const topicText = topic.topic || "";
-      const isMandatory = topic.status === "VERIFIED" || topic.status === "REQUIRED" || topic.status === "MANDATORY_REQUIRED_TOPIC";
+      const isMandatory = isHardMandatoryTopicStatus(topic.status);
 
       if (!isMandatory) {
         topicEvaluations.push({

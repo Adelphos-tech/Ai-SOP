@@ -2,6 +2,7 @@ import type { ResponseComponent, FacultyAlignment } from "@/lib/requirements/gen
 import type { EvidenceLedger } from "../../evidence-ledger";
 import type { ComponentEvidencePacket } from "../../component-evidence-packet";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { formatComponentRequirements } from "./component-requirements";
 import { resolveLengthContext, describeLengthContext, wordsOf } from "../../length-context";
 
 /**
@@ -19,7 +20,10 @@ export function buildGenericQualityReviewerPrompt(
   facultyAlignment: FacultyAlignment[],
   evidenceLedger?: EvidenceLedger,
   evidencePackets?: ComponentEvidencePacket[],
-  qualityRubricInstructions?: string
+  qualityRubricInstructions?: string,
+  /** Consultant instructions + formatting rules the Writer was given —
+   *  QR must be able to evaluate compliance with them. */
+  complianceInstructions?: string
 ): { system: string; user: string } {
   // Phase 38: Canonical approved faculty filter
   const approvedFaculty = facultyAlignment.filter(f => f.status === "STUDENT_APPROVED");
@@ -34,7 +38,7 @@ export function buildGenericQualityReviewerPrompt(
       .map(r => [r.componentId, wordsOf(r.text)])
   );
   const rcDesc = responseComponents.map(rc => {
-    const topics = rc.requiredTopics.map(t => t.topic).join("; ");
+    const topics = formatComponentRequirements(rc);
     const lenCtx = resolveLengthContext(rc.wordLimit);
     const current = writerWords.get(rc.componentId);
     const wordConstraint = lenCtx.minWords !== null || lenCtx.maxWords !== null
@@ -44,7 +48,7 @@ export function buildGenericQualityReviewerPrompt(
     const pageConstraint = rc.pageLimit?.maxPages ? `\nPage limit: max ${rc.pageLimit.maxPages} physical pages (render-validated, not word count)` : "";
     return `RESPONSE COMPONENT ${rc.componentId} (label: ${rc.label}):
 Official prompt: "${rc.exactPrompt}"
-Required topics: ${topics}${wordConstraint}${charConstraint}${pageConstraint}`;
+${topics}${wordConstraint}${charConstraint}${pageConstraint}`;
   }).join("\n\n---\n\n");
 
   const system = `You are a quality reviewer for an application document. Review EACH response component separately and the overall document.
@@ -52,6 +56,7 @@ Required topics: ${topics}${wordConstraint}${charConstraint}${pageConstraint}`;
 ${rcDesc}
 ${hasApprovedFaculty ? `Approved faculty: ${facultyNames}` : "No approved faculty for this application."}
 ${qualityRubricInstructions ? `\n${qualityRubricInstructions}` : ""}
+${complianceInstructions ? `\nCONSULTANT/FORMATTING INSTRUCTIONS GIVEN TO THE WRITER (evaluate whether the draft complies):\n${complianceInstructions}` : ""}
 
 Evaluate each component for:
 - Official prompt coverage

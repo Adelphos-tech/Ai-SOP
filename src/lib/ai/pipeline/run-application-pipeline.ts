@@ -98,7 +98,7 @@ import { countWords } from "../validation/word-count";
 import { computeSubmissionStatus, FinalCompliance } from "@/lib/output/submission-status";
 import { runPostFinalChecks } from "@/lib/output/post-final-checks";
 import { DVIVID_STANDARD_APPLICATION_V1 } from "@/lib/render/render-profile";
-import { checkMandatoryTopicEvidence } from "@/lib/requirements/generation-gate";
+import { checkMandatoryTopicEvidence, isHardMandatoryTopicStatus } from "@/lib/requirements/generation-gate";
 import { runPreFinalRender } from "@/lib/render/pre-final-render";
 import { runFinalRender } from "@/lib/render/final-render";
 import { RenderFeedback, RenderLifecycleResult } from "@/lib/render/render-lifecycle-types";
@@ -857,19 +857,23 @@ export async function runApplicationPipeline(
     const requiredTopicProvenance: Array<{ componentId: string; topics: RequiredTopicProvenance[] }> =
       input.responseComponents.map(rc => ({
         componentId: rc.componentId,
-        topics: rc.requiredTopics.map((t: any) => ({
-          topicId: t.topic,
-          text: t.topic,
-          requirementType: "MANDATORY_REQUIRED_TOPIC" as const,
-          sourceRequirementId: rc.sourceId || "CONTRACT",
-          sourceUrl: undefined,
-          mandatory: true,
-        })),
+        topics: rc.requiredTopics.map((t: any) => {
+          const mandatory = isHardMandatoryTopicStatus(t.status);
+          return {
+            topicId: t.topic,
+            text: t.topic,
+            requirementType: mandatory ? "MANDATORY_REQUIRED_TOPIC" as const : "OPTIONAL_QUALITY_SUGGESTION" as const,
+            sourceRequirementId: rc.sourceId || "CONTRACT",
+            sourceUrl: undefined,
+            mandatory,
+          };
+        }),
       }));
 
     // STAGE 3: QUALITY REVIEWER (receives the Evidence Ledger + evidence packets)
     const qualityPrompt = buildGenericQualityReviewerPrompt(
-      writerOutput, input.responseComponents, input.facultyAlignment, evidenceLedger, evidencePackets, input.qualityRubricInstructions
+      writerOutput, input.responseComponents, input.facultyAlignment, evidenceLedger, evidencePackets, input.qualityRubricInstructions,
+      input.pipelineWritingInstructions
     );
     const qualityResult = await execStage(
       "qualityReviewer", qualityPrompt.system, qualityPrompt.user
@@ -1016,6 +1020,7 @@ export async function runApplicationPipeline(
         evidenceLedger,
         renderFeedback: preFinalFeedback,
         calibratedClaims: calibratedClaims.map(c => ({ claimId: c.claimId, componentId: c.componentId })),
+        complianceConstraints: input.pipelineWritingInstructions,
       });
     } catch (error) {
       await stageExecution.finish(false);

@@ -1,6 +1,7 @@
 import { ResponseComponent, FacultyAlignment } from "@/lib/requirements/generation-contract-types";
 import type { ComponentEvidencePacket } from "../../component-evidence-packet";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { formatComponentRequirements } from "./component-requirements";
 import { resolveLengthContext, describeLengthContext } from "../../length-context";
 
 /**
@@ -74,7 +75,7 @@ export function buildGenericWriterPrompt(
     : "None";
 
   const rcDesc = responseComponents.map(rc => {
-    const topics = rc.requiredTopics.map(t => t.topic).join("; ");
+    const topics = formatComponentRequirements(rc);
     const constraint = rc.pageLimit.maxPages
       ? `Maximum physical pages: ${rc.pageLimit.maxPages}. Do NOT guess a word equivalent for this limit.`
       : "No page limit specified.";
@@ -87,7 +88,7 @@ export function buildGenericWriterPrompt(
       : "";
     return `RESPONSE COMPONENT ${rc.componentId} (label: ${rc.label}):
 Official prompt: "${rc.exactPrompt}"
-Required topics: ${topics}
+${topics}
 ${constraint}${wordConstraint}${charConstraint}`;
   }).join("\n\n---\n\n");
 

@@ -15,6 +15,7 @@
  */
 
 import type { ResponseComponent, ResponseComponentTopic } from "@/lib/requirements/generation-contract-types";
+import { isHardMandatoryTopicStatus } from "@/lib/requirements/generation-gate";
 import type { RenderFeedback } from "@/lib/render/render-lifecycle-types";
 import type { EvidenceLedger } from "./evidence-ledger";
 import { buildAuthorizedRepairEvidence, CandidateEvidence, TopicCoverageWithSuitability } from "./evidence-suitability";
@@ -207,14 +208,22 @@ export function planComponentActions(args: {
       blockingIssues.push({ componentId: rc.componentId, code: "REQUIRED_TOPIC_COVERAGE_UNKNOWN", message: "topicCoverage must contain each exact contract topic once, no extras, with explicit boolean covered." });
     }
 
-    // Determine if this component has missing required topics
+    // Determine if this component has missing required topics.
+    // Only hard-mandatory topics (VERIFIED/REQUIRED official requirements)
+    // may block; DECLARED consultant topics get repair opportunity but
+    // never a MISSING_REQUIRED_STUDENT_INFORMATION block.
     const missingTopics: string[] = [];
+    const softMissingTopics: string[] = [];
     const topicEvidence: TopicEvidence[] = [];
     {
       // Check which specific topics are missing
       for (const topic of requiredTopics) {
         const entries = coverage.filter(t => t?.topic === topic);
-        if (entries.length === 1 && entries[0].covered === false) missingTopics.push(topic);
+        if (entries.length === 1 && entries[0].covered === false) {
+          const meta = rc.requiredTopics.find(rt => rt.topic === topic);
+          if (isHardMandatoryTopicStatus(meta?.status)) missingTopics.push(topic);
+          else softMissingTopics.push(topic);
+        }
       }
       // If no specific topic coverage data, infer from score
       if (!Array.isArray(componentQuality?.topicCoverage)) {
@@ -225,43 +234,34 @@ export function planComponentActions(args: {
     // Find allowed evidence for missing topics
     // Phase 16B: Use evidence suitability — only SUITABLE evidence authorizes repair
     const allowedEvidenceIds: string[] = [];
-    for (const topic of missingTopics) {
+    for (const topic of [...missingTopics, ...softMissingTopics]) {
+      const hard = missingTopics.includes(topic);
+      const block = (code: ActionPlanIssue["code"], message: string) => {
+        if (hard) blockingIssues.push({ componentId: rc.componentId, topic, code, message });
+        topicEvidence.push({ topic, allowedEvidenceIds: [] });
+      };
       const topicCov = coverage.find(t => t?.topic === topic);
-      // Phase 16B: Check candidateEvidence for SUITABLE items
       const candidateEvidence: CandidateEvidence[] = Array.isArray(topicCov?.candidateEvidence) ? topicCov.candidateEvidence : [];
       const suitableIds = candidateEvidence.filter(ce => ce.suitability === "SUITABLE").map(ce => ce.evidenceId);
-
-      // Fallback: if no candidateEvidence structure, use legacy allowedEvidenceIds
       const legacyIds = Array.isArray(topicCov?.allowedEvidenceIds) ? topicCov.allowedEvidenceIds : [];
 
       if (candidateEvidence.length > 0) {
-        // Phase 16B: Use suitability-based evidence
         if (suitableIds.length === 0) {
-          // No SUITABLE evidence — BLOCK even if INSUFFICIENT/AMBIGUOUS evidence exists
-          blockingIssues.push({ componentId: rc.componentId, topic, code: "MISSING_REQUIRED_STUDENT_INFORMATION", message: `Missing topic ${topic} has no SUITABLE evidence. Authorized but INSUFFICIENT/AMBIGUOUS evidence cannot be used for repair.` });
-          topicEvidence.push({ topic, allowedEvidenceIds: [] });
+          block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} has no SUITABLE evidence. Authorized but INSUFFICIENT/AMBIGUOUS evidence cannot be used for repair.`);
         } else if (new Set(suitableIds).size !== suitableIds.length || suitableIds.some(id => !isLedgerEvidenceId(id, args.evidenceLedger))) {
-          blockingIssues.push({ componentId: rc.componentId, topic, code: "FINALIZER_EVIDENCE_VIOLATION", message: `Missing topic ${topic} references duplicate, unknown or empty ledger evidence.` });
-          topicEvidence.push({ topic, allowedEvidenceIds: [] });
-        } else if (!hasRequiredStudentEvidence(rc.requiredTopics.find(required => required.topic === topic), suitableIds, args.evidenceLedger)) {
-          blockingIssues.push({ componentId: rc.componentId, topic, code: "MISSING_REQUIRED_STUDENT_INFORMATION", message: `Missing topic ${topic} requires student-specific evidence; program or faculty context alone is insufficient.` });
-          topicEvidence.push({ topic, allowedEvidenceIds: [] });
+          block("FINALIZER_EVIDENCE_VIOLATION", `Missing topic ${topic} references duplicate, unknown or empty ledger evidence.`);
+        } else if (hard && !hasRequiredStudentEvidence(rc.requiredTopics.find(required => required.topic === topic), suitableIds, args.evidenceLedger)) {
+          block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} requires student-specific evidence; program or faculty context alone is insufficient.`);
         } else {
           topicEvidence.push({ topic, allowedEvidenceIds: [...suitableIds] });
           allowedEvidenceIds.push(...suitableIds);
         }
       } else if (legacyIds.length === 0) {
-        blockingIssues.push({ componentId: rc.componentId, topic, code: "MISSING_REQUIRED_STUDENT_INFORMATION", message: `Missing topic ${topic} has no explicitly authorized evidence.` });
-        topicEvidence.push({ topic, allowedEvidenceIds: [] });
+        block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} has no explicitly authorized evidence.`);
       } else if (new Set(legacyIds).size !== legacyIds.length || legacyIds.some(id => !isLedgerEvidenceId(id, args.evidenceLedger))) {
-        blockingIssues.push({ componentId: rc.componentId, topic, code: "FINALIZER_EVIDENCE_VIOLATION", message: `Missing topic ${topic} references duplicate, unknown or empty ledger evidence.` });
-        if (!legacyIds.some(id => isLedgerEvidenceId(id, args.evidenceLedger))) {
-          blockingIssues.push({ componentId: rc.componentId, topic, code: "MISSING_REQUIRED_STUDENT_INFORMATION", message: `Missing topic ${topic} has no usable authorized ledger evidence.` });
-        }
-        topicEvidence.push({ topic, allowedEvidenceIds: [] });
-      } else if (!hasRequiredStudentEvidence(rc.requiredTopics.find(required => required.topic === topic), legacyIds, args.evidenceLedger)) {
-        blockingIssues.push({ componentId: rc.componentId, topic, code: "MISSING_REQUIRED_STUDENT_INFORMATION", message: `Missing topic ${topic} requires student-specific evidence; program or faculty context alone is insufficient.` });
-        topicEvidence.push({ topic, allowedEvidenceIds: [] });
+        block("FINALIZER_EVIDENCE_VIOLATION", `Missing topic ${topic} references duplicate, unknown or empty ledger evidence.`);
+      } else if (hard && !hasRequiredStudentEvidence(rc.requiredTopics.find(required => required.topic === topic), legacyIds, args.evidenceLedger)) {
+        block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} requires student-specific evidence; program or faculty context alone is insufficient.`);
       } else {
         topicEvidence.push({ topic, allowedEvidenceIds: [...legacyIds] });
         allowedEvidenceIds.push(...legacyIds);
@@ -284,8 +284,12 @@ export function planComponentActions(args: {
     let reason: string;
 
     const hasOverflow = renderComp?.status === "RENDER_OVERFLOW";
-    const hasMissingTopics = missingTopics.length > 0;
-    const hasEvidence = topicEvidence.length === missingTopics.length && topicEvidence.every(t => t.allowedEvidenceIds.length > 0);
+    // Repair eligibility covers hard + soft (DECLARED) missing topics;
+    // only hard topics can produce blockingIssues above.
+    const allMissing = [...missingTopics, ...softMissingTopics];
+    const hasMissingTopics = allMissing.length > 0;
+    const missingLabel = allMissing.join(", ");
+    const hasEvidence = topicEvidence.length === allMissing.length && topicEvidence.every(t => t.allowedEvidenceIds.length > 0);
 
     // Phase 14: Extract factual risk claims from Quality Reviewer
     const factualRiskClaims: Array<{ claim: string; status: string; supportingEvidenceIds: string[]; reason: string }> =
@@ -310,11 +314,11 @@ export function planComponentActions(args: {
     if (hasOverflow && hasMissingTopics) {
       if (hasEvidence) {
         action = "COMPRESS_AND_REPAIR";
-        reason = `Compress overflow and repair only these missing topics: ${missingTopics.join(", ")}.`;
+        reason = `Compress overflow and repair only these missing topics: ${missingLabel}.`;
       } else {
         // No evidence for repair — cannot fix missing topics
         action = "COMPRESS";
-        reason = "BLOCKED: missing required topics lack authorized evidence; compression cannot resolve this.";
+        reason = "Missing topics lack authorized evidence; compression cannot resolve this.";
       }
     } else if (hasOverflow) {
       action = "COMPRESS";
@@ -322,11 +326,13 @@ export function planComponentActions(args: {
     } else if (hasMissingTopics) {
       if (hasEvidence) {
         action = "TARGETED_COMPLIANCE_REPAIR";
-        reason = `Repair only these missing topics: ${missingTopics.join(", ")}.`;
+        reason = `Repair only these missing topics: ${missingLabel}.`;
       } else {
-        // No evidence — cannot repair, mark for freeze and report
+        // No evidence — cannot repair, keep the calibrated text as-is
         action = "FREEZE";
-        reason = "BLOCKED: MISSING_REQUIRED_STUDENT_INFORMATION or invalid evidence authorization.";
+        reason = missingTopics.length > 0
+          ? "BLOCKED: MISSING_REQUIRED_STUDENT_INFORMATION or invalid evidence authorization."
+          : "Uncovered requested topics lack authorized evidence; preserving calibrated text.";
       }
     } else {
       // Phase 19: If semantic expansion claims exist, use COMPRESS to allow deletion

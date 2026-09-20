@@ -300,6 +300,9 @@ export function buildBoundedFinalizerPrompt(args: {
   evidenceLedger: EvidenceLedger;
   calibratedClaims?: Array<{ claimId: string; componentId: string }>;
   retryCorrection?: FinalizerRetryCorrection;
+  /** Contract constraints the Finalizer must preserve — word/page limits,
+   *  required+declared topics, formatting rules, consultant instruction. */
+  complianceConstraints?: string;
 }): { system: string; user: string } {
   const issues = validateFinalizerActionPlan({ ...args, calibratedResponses: args.calibratedOutput.responses });
   if (issues.length) throw new BoundedFinalizerBlockedError(issues);
@@ -495,9 +498,13 @@ CLAIM PROVENANCE RULES (Phase 16 + 38):
 AUTHORIZED REPAIR EVIDENCE (Phase 38):
 For repair actions, authorizedRepairEvidence is provided with the ACTUAL evidence text for each missing topic.
 You may create repairClaims ONLY from the supplied evidence text. Do NOT use studentFactsText or any other source as repair authority.
-If no authorized evidence supports a missing topic, do NOT invent a repair.`;
+If no authorized evidence supports a missing topic, do NOT invent a repair.${args.complianceConstraints ? `
 
-  // Phase 34C: Append corrective retry message if provided
+CONTRACT CONSTRAINTS TO PRESERVE:
+${args.complianceConstraints}
+Do not reintroduce prohibited formatting (e.g. headings/bullets if the
+contract forbids them), do not drop content needed for required or
+requested topics, and do not violate word/page/character limits.` : ""}`;
   if (args.retryCorrection && args.retryCorrection.failedComponents.length > 0) {
     const corrections = args.retryCorrection.failedComponents.map(fc => {
       const claimIdsList = fc.expectedClaimIds.length > 0

@@ -1,5 +1,6 @@
 import { ResponseComponent, FacultyAlignment } from "@/lib/requirements/generation-contract-types";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { formatComponentRequirements } from "./component-requirements";
 import { resolveLengthContext, describeLengthContext } from "../../length-context";
 
 /**
@@ -24,14 +25,14 @@ export function buildGenericPlannerPrompt(
   const hasApprovedFaculty = approvedFaculty.length > 0;
 
   const rcDesc = responseComponents.map((rc, i) => {
-    const topics = rc.requiredTopics.map(t => t.topic).join("; ");
+    const topics = formatComponentRequirements(rc);
     const lenCtx = resolveLengthContext(rc.wordLimit);
     const lengthBlock = lenCtx.minWords !== null || lenCtx.maxWords !== null
       ? `\n${describeLengthContext(lenCtx)}`
       : "";
     return `RESPONSE COMPONENT ${rc.componentId} (label: ${rc.label}, max ${rc.pageLimit.maxPages || "unspecified"} page(s)):
 Official prompt: "${rc.exactPrompt}"
-Required topics: ${topics}${lengthBlock}`;
+${topics}${lengthBlock}`;
   }).join("\n\n---\n\n");
 
   const facultyDesc = hasApprovedFaculty

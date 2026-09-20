@@ -115,6 +115,34 @@ export function buildEvidenceLedger(args: {
       });
     }
     appendEntry(studentEntries, "SF-WRITING-ENGLISH", sf.writingPreferences?.actualEnglishProficiency, "student", "studentFacts.writingPreferences.actualEnglishProficiency");
+
+    // Intake narrative sections — consultant/student-entered answers are
+    // approved applicant statements. Each field becomes its own evidence
+    // entry so topic matching and Fact Reviewer can resolve them.
+    // (Applicant-stated intentions/motivation — not externally verified facts.)
+    const mm = (sf as any).mastersMotivation;
+    if (mm && typeof mm === "object") {
+      for (const [key, value] of Object.entries(mm)) {
+        appendEntry(studentEntries, `SF-MOTIVATION-${key.toUpperCase()}`, value, "student", `studentFacts.mastersMotivation.${key}`);
+      }
+    }
+    const cq = (sf as any).countryQuestionnaire;
+    if (cq && typeof cq === "object") {
+      const answers = cq.answers && typeof cq.answers === "object" ? cq.answers : {};
+      for (const [key, value] of Object.entries(answers)) {
+        appendEntry(studentEntries, `SF-COUNTRY-${key.toUpperCase()}`, value, "student", `studentFacts.countryQuestionnaire.answers.${key}`);
+      }
+    }
+    const cgs = (sf as any).careerGoalsStructured;
+    if (cgs && typeof cgs === "object") {
+      for (const [scope, obj] of Object.entries(cgs)) {
+        if (obj && typeof obj === "object") {
+          for (const [key, value] of Object.entries(obj)) {
+            appendEntry(studentEntries, `SF-CAREER-${scope.toUpperCase()}-${key.toUpperCase()}`, value, "student", `studentFacts.careerGoalsStructured.${scope}.${key}`);
+          }
+        }
+      }
+    }
     if (sf.applicationSpecificFacts) {
       const appFacts = sf.applicationSpecificFacts;
       if (Array.isArray(appFacts)) {

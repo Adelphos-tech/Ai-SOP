@@ -136,6 +136,8 @@ export interface ResponseComponent {
   wordLimit: WordLimitConstraint;
   characterLimit: CharacterLimitConstraint;
   requiredTopics: ResponseComponentTopic[];
+  /** University-specific questions the draft should materially address. */
+  additionalQuestions?: string[];
   sourceId: string;
   status: string;
   verifiedAt: string;

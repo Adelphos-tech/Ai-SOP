@@ -228,6 +228,7 @@ async function generateApplicationDocumentInner(
     // OFFICIAL_VERIFIED requirement topics. Marking consultant topics
     // REQUIRED would block generation on pattern-matched evidence checks
     // designed for verified official requirements.
+    additionalQuestions: merged.additionalQuestions || [],
     requiredTopics: (merged.requiredTopics || []).map(t => ({
       topic: t,
       status: merged.writingRequirementId ? "REQUIRED" : "DECLARED",
