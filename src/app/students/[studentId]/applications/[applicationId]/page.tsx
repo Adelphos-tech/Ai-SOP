@@ -762,18 +762,22 @@ export default function ApplicationWorkspacePage() {
                 </FormField>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <FormField label="Word Min">
-                  <input className={inputClass} type="number" value={wordMin} onChange={e => setWordMin(e.target.value)} placeholder="—" />
-                </FormField>
-                <FormField label="Word Max">
-                  <input className={inputClass} type="number" value={wordMax} onChange={e => setWordMax(e.target.value)} placeholder="—" />
-                </FormField>
-                <FormField label="Character Limit">
-                  <input className={inputClass} type="number" value={characterLimit} onChange={e => setCharacterLimit(e.target.value)} placeholder="—" />
-                </FormField>
-                <FormField label="Page Limit">
-                  <input className={inputClass} type="number" value={pageLimit} onChange={e => setPageLimit(e.target.value)} placeholder="—" />
-                </FormField>
+                {([
+                  ["Word Min", "wordMin", wordMin, setWordMin],
+                  ["Word Max", "wordMax", wordMax, setWordMax],
+                  ["Character Limit", "characterLimit", characterLimit, setCharacterLimit],
+                  ["Page Limit", "pageLimit", pageLimit, setPageLimit],
+                ] as const).map(([label, key, val, setter]) => {
+                  const inherited = (profile as any)?.universityRequirements?.[key];
+                  return (
+                    <FormField key={key} label={label}>
+                      <input className={inputClass} type="number" value={val} onChange={e => setter(e.target.value)} placeholder={inherited ? String(inherited) : "—"} />
+                      {!val && inherited && (
+                        <p className="text-xs text-dvivid-text-muted mt-1">Inherited from University Requirements: {inherited}</p>
+                      )}
+                    </FormField>
+                  );
+                })}
               </div>
             </div>
           </details>

@@ -52,6 +52,9 @@ export interface MergedPrompt {
   specialInstructions?: string;
   facultyInstructions?: string;
   formattingInstructions?: string;
+  /** Inherited from saved University Requirements — not per-document. */
+  requiredTopics?: string[];
+  additionalQuestions?: string[];
   writingRequirementId?: string;
   requirementSetId?: string;
   /** How the prompt was resolved */
@@ -154,7 +157,13 @@ export async function loadDocumentGenerationContext(
   }
 
   // ===== RESOLVE AND MERGE PROMPT =====
-  const mergedPrompt = resolveAndMergePrompt(document, writingRequirement);
+  // Field-by-field: explicit document override > saved University
+  // Requirements (profile.universityRequirements) > default template.
+  const mergedPrompt = resolveAndMergePrompt(
+    document,
+    writingRequirement,
+    (profile as any)?.universityRequirements || null,
+  );
 
   // ===== LOAD DOCUMENT TYPE CONFIG =====
   const documentTypeConfig = getDocumentTypeConfig(document.documentType);
@@ -243,9 +252,36 @@ export async function loadDocumentGenerationContext(
  * When official information is partial (e.g., only word limit, no exact question),
  * merge official constraints with D-Vivid default template structure.
  */
-function resolveAndMergePrompt(document: any, writingRequirement: any): MergedPrompt {
+/**
+ * Saved University Requirements values arrive as strings from
+ * profile_data — normalize to usable numbers/lists.
+ */
+function uniReqNumber(v: any): number | undefined {
+  const n = parseInt(String(v ?? ""), 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+function uniReqLines(v: any): string[] {
+  return String(v ?? "")
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+}
+
+function resolveAndMergePrompt(
+  document: any,
+  writingRequirement: any,
+  universityRequirements: any = null,
+): MergedPrompt {
   const documentType = document.documentType as DocumentType;
   const defaultTemplate = getDefaultTemplate(documentType);
+  const uni = universityRequirements || {};
+  const uniWordMin = uniReqNumber(uni.wordMin);
+  const uniWordMax = uniReqNumber(uni.wordMax);
+  const uniCharLimit = uniReqNumber(uni.characterLimit);
+  const uniPageLimit = uniReqNumber(uni.pageLimit);
+  const uniFormatting = typeof uni.formattingRules === "string" && uni.formattingRules.trim() ? uni.formattingRules.trim() : undefined;
+  const uniTopics = uniReqLines(uni.mandatoryTopics);
+  const uniQuestions = uniReqLines(uni.specificQuestions);
 
   // Case 1: Document has OFFICIAL_VERIFIED prompt source (linked to writing requirement)
   if (document.promptSource === "OFFICIAL_VERIFIED" && writingRequirement) {
@@ -268,13 +304,15 @@ function resolveAndMergePrompt(document: any, writingRequirement: any): MergedPr
       return {
         promptText: officialPrompt,
         promptSource: "OFFICIAL_VERIFIED",
-        wordMin: officialWordMin,
-        wordMax: officialWordMax,
-        characterLimit: officialCharLimit,
-        pageLimit: officialPageLimit,
+        wordMin: officialWordMin || uniWordMin,
+        wordMax: officialWordMax || uniWordMax,
+        characterLimit: officialCharLimit || uniCharLimit,
+        pageLimit: officialPageLimit || uniPageLimit,
         specialInstructions: mergedSpecial,
         facultyInstructions: officialFaculty,
-        formattingInstructions: officialFormatting || defaultTemplate.formattingInstructions,
+        formattingInstructions: officialFormatting || uniFormatting || defaultTemplate.formattingInstructions,
+        requiredTopics: uniTopics.length ? uniTopics : undefined,
+        additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
         writingRequirementId: writingRequirement.id,
         requirementSetId: writingRequirement.requirementSetId,
         resolutionPath: "OFFICIAL_VERIFIED",
@@ -285,13 +323,15 @@ function resolveAndMergePrompt(document: any, writingRequirement: any): MergedPr
       return {
         promptText: defaultTemplate.promptText,
         promptSource: "OFFICIAL_VERIFIED",
-        wordMin: officialWordMin,
-        wordMax: officialWordMax,
-        characterLimit: officialCharLimit,
-        pageLimit: officialPageLimit,
+        wordMin: officialWordMin || uniWordMin,
+        wordMax: officialWordMax || uniWordMax,
+        characterLimit: officialCharLimit || uniCharLimit,
+        pageLimit: officialPageLimit || uniPageLimit,
         specialInstructions: officialSpecial || defaultTemplate.specialInstructions,
         facultyInstructions: officialFaculty,
-        formattingInstructions: officialFormatting || defaultTemplate.formattingInstructions,
+        formattingInstructions: officialFormatting || uniFormatting || defaultTemplate.formattingInstructions,
+        requiredTopics: uniTopics.length ? uniTopics : undefined,
+        additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
         writingRequirementId: writingRequirement.id,
         requirementSetId: writingRequirement.requirementSetId,
         resolutionPath: "OFFICIAL_VERIFIED",
@@ -302,12 +342,14 @@ function resolveAndMergePrompt(document: any, writingRequirement: any): MergedPr
       return {
         promptText: defaultTemplate.promptText,
         promptSource: "OFFICIAL_VERIFIED",
-        wordMin: defaultTemplate.wordMin,
-        wordMax: defaultTemplate.wordMax,
-        characterLimit: undefined,
-        pageLimit: defaultTemplate.pageLimit,
+        wordMin: uniWordMin || defaultTemplate.wordMin,
+        wordMax: uniWordMax || defaultTemplate.wordMax,
+        characterLimit: uniCharLimit,
+        pageLimit: uniPageLimit || defaultTemplate.pageLimit,
         specialInstructions: defaultTemplate.specialInstructions,
-        formattingInstructions: defaultTemplate.formattingInstructions,
+        formattingInstructions: uniFormatting || defaultTemplate.formattingInstructions,
+        requiredTopics: uniTopics.length ? uniTopics : undefined,
+        additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
         writingRequirementId: writingRequirement.id,
         requirementSetId: writingRequirement.requirementSetId,
         resolutionPath: "OFFICIAL_VERIFIED",
@@ -321,28 +363,35 @@ function resolveAndMergePrompt(document: any, writingRequirement: any): MergedPr
     return {
       promptText: document.promptText || defaultTemplate.promptText,
       promptSource: "DVIVID_DEFAULT_TEMPLATE",
-      wordMin: document.wordMin || defaultTemplate.wordMin,
-      wordMax: document.wordMax || defaultTemplate.wordMax,
-      characterLimit: document.characterLimit || undefined,
-      pageLimit: document.pageLimit || defaultTemplate.pageLimit,
+      wordMin: document.wordMin || uniWordMin || defaultTemplate.wordMin,
+      wordMax: document.wordMax || uniWordMax || defaultTemplate.wordMax,
+      characterLimit: document.characterLimit || uniCharLimit,
+      pageLimit: document.pageLimit || uniPageLimit || defaultTemplate.pageLimit,
       specialInstructions: document.specialInstructions || defaultTemplate.specialInstructions,
-      formattingInstructions: document.formattingInstructions || defaultTemplate.formattingInstructions,
+      formattingInstructions: document.formattingInstructions || uniFormatting || defaultTemplate.formattingInstructions,
+      requiredTopics: uniTopics.length ? uniTopics : undefined,
+      additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
       resolutionPath: "DEFAULT_TEMPLATE",
       mergedWithDefault: false,
     };
   }
 
-  // Case 3: Document has a manual prompt (USER_PROVIDED_PORTAL_PROMPT, CONSULTANT_PROVIDED, CUSTOM)
+  // Case 3: Document has a manual prompt (USER_PROVIDED_PORTAL_PROMPT, CONSULTANT_PROVIDED, CUSTOM).
+  // A consultant-provided PROMPT overrides the prompt only — limits,
+  // mandatory topics, questions and formatting still inherit from the
+  // saved University Requirements field-by-field.
   return {
     promptText: document.promptText,
     promptSource: document.promptSource,
-    wordMin: document.wordMin || undefined,
-    wordMax: document.wordMax || undefined,
-    characterLimit: document.characterLimit || undefined,
-    pageLimit: document.pageLimit || undefined,
+    wordMin: document.wordMin || uniWordMin,
+    wordMax: document.wordMax || uniWordMax,
+    characterLimit: document.characterLimit || uniCharLimit,
+    pageLimit: document.pageLimit || uniPageLimit,
     specialInstructions: document.specialInstructions || undefined,
     facultyInstructions: document.facultyInstructions || undefined,
-    formattingInstructions: document.formattingInstructions || undefined,
+    formattingInstructions: document.formattingInstructions || uniFormatting,
+    requiredTopics: uniTopics.length ? uniTopics : undefined,
+    additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
     resolutionPath: "MANUAL",
     mergedWithDefault: false,
   };
