@@ -183,7 +183,14 @@ export async function GET(request: NextRequest) {
           return NextResponse.json({ error: "Document does not belong to this student" }, { status: 403 });
         }
       }
-      return NextResponse.json({ document });
+      // Resolved requirements — same canonical merge generation uses, so
+      // the Review panel shows effective limits, not raw overrides.
+      let resolvedRequirements = null;
+      try {
+        const { loadDocumentRequirementsForDisplay } = await import("@/lib/application/generation-context");
+        resolvedRequirements = await loadDocumentRequirementsForDisplay(id);
+      } catch { /* display enrichment is best-effort */ }
+      return NextResponse.json({ document, resolvedRequirements });
     }
 
     if (applicationId) {

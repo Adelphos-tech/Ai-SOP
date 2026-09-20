@@ -42,6 +42,12 @@ import {
 } from "./document-type-config";
 import { StudentProfileData } from "./application-types";
 
+export type RequirementFieldSource =
+  | "DOCUMENT"
+  | "UNIVERSITY_REQUIREMENTS"
+  | "OFFICIAL_REQUIREMENT"
+  | "DEFAULT_TEMPLATE";
+
 export interface MergedPrompt {
   promptText: string;
   promptSource: PromptSource;
@@ -61,6 +67,14 @@ export interface MergedPrompt {
   resolutionPath: "OFFICIAL_VERIFIED" | "MANUAL" | "DEFAULT_TEMPLATE";
   /** Whether official values were merged with default template */
   mergedWithDefault: boolean;
+  /** Per-field provenance — where each resolved value came from.
+   *  Computed inside the same resolution logic so display cannot drift
+   *  from what generation receives. */
+  fieldSources?: Partial<Record<
+    "promptText" | "wordMin" | "wordMax" | "characterLimit" | "pageLimit"
+    | "specialInstructions" | "facultyInstructions" | "formattingInstructions",
+    RequirementFieldSource
+  >>;
 }
 
 export interface DocumentGenerationContext {
@@ -267,7 +281,7 @@ function uniReqLines(v: any): string[] {
     .filter(s => s.length > 0);
 }
 
-function resolveAndMergePrompt(
+export function resolveAndMergePrompt(
   document: any,
   writingRequirement: any,
   universityRequirements: any = null,
@@ -282,6 +296,13 @@ function resolveAndMergePrompt(
   const uniFormatting = typeof uni.formattingRules === "string" && uni.formattingRules.trim() ? uni.formattingRules.trim() : undefined;
   const uniTopics = uniReqLines(uni.mandatoryTopics);
   const uniQuestions = uniReqLines(uni.specificQuestions);
+
+  // Value + provenance in one evaluation — the fieldSources map always
+  // reflects exactly which candidate supplied the resolved value.
+  const pick = <T,>(...candidates: Array<[T | undefined, RequirementFieldSource]>): { v?: T; s?: RequirementFieldSource } => {
+    for (const [v, s] of candidates) if (v !== undefined) return { v, s };
+    return {};
+  };
 
   // Case 1: Document has OFFICIAL_VERIFIED prompt source (linked to writing requirement)
   if (document.promptSource === "OFFICIAL_VERIFIED" && writingRequirement) {
@@ -301,16 +322,28 @@ function resolveAndMergePrompt(
     if (hasOfficialQuestion) {
       // Full official prompt — use as-is, but add default structure guidance if no special instructions
       const mergedSpecial = officialSpecial || (!hasOfficialConstraints ? defaultTemplate.specialInstructions : undefined);
+      const wMin = pick([officialWordMin, "OFFICIAL_REQUIREMENT"], [uniWordMin, "UNIVERSITY_REQUIREMENTS"]);
+      const wMax = pick([officialWordMax, "OFFICIAL_REQUIREMENT"], [uniWordMax, "UNIVERSITY_REQUIREMENTS"]);
+      const ch = pick([officialCharLimit, "OFFICIAL_REQUIREMENT"], [uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
+      const pg = pick([officialPageLimit, "OFFICIAL_REQUIREMENT"], [uniPageLimit, "UNIVERSITY_REQUIREMENTS"]);
+      const fmt = pick([officialFormatting, "OFFICIAL_REQUIREMENT"], [uniFormatting, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.formattingInstructions, "DEFAULT_TEMPLATE"]);
       return {
         promptText: officialPrompt,
         promptSource: "OFFICIAL_VERIFIED",
-        wordMin: officialWordMin || uniWordMin,
-        wordMax: officialWordMax || uniWordMax,
-        characterLimit: officialCharLimit || uniCharLimit,
-        pageLimit: officialPageLimit || uniPageLimit,
+        wordMin: wMin.v,
+        wordMax: wMax.v,
+        characterLimit: ch.v,
+        pageLimit: pg.v,
         specialInstructions: mergedSpecial,
         facultyInstructions: officialFaculty,
-        formattingInstructions: officialFormatting || uniFormatting || defaultTemplate.formattingInstructions,
+        formattingInstructions: fmt.v,
+        fieldSources: {
+          promptText: "OFFICIAL_REQUIREMENT",
+          wordMin: wMin.s, wordMax: wMax.s, characterLimit: ch.s, pageLimit: pg.s,
+          specialInstructions: mergedSpecial ? (officialSpecial ? "OFFICIAL_REQUIREMENT" : "DEFAULT_TEMPLATE") : undefined,
+          facultyInstructions: officialFaculty ? "OFFICIAL_REQUIREMENT" : undefined,
+          formattingInstructions: fmt.s,
+        },
         requiredTopics: uniTopics.length ? uniTopics : undefined,
         additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
         writingRequirementId: writingRequirement.id,
@@ -320,16 +353,28 @@ function resolveAndMergePrompt(
       };
     } else if (hasOfficialConstraints) {
       // Partial official: constraints but no question — merge with default template
+      const wMin = pick([officialWordMin, "OFFICIAL_REQUIREMENT"], [uniWordMin, "UNIVERSITY_REQUIREMENTS"]);
+      const wMax = pick([officialWordMax, "OFFICIAL_REQUIREMENT"], [uniWordMax, "UNIVERSITY_REQUIREMENTS"]);
+      const ch = pick([officialCharLimit, "OFFICIAL_REQUIREMENT"], [uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
+      const pg = pick([officialPageLimit, "OFFICIAL_REQUIREMENT"], [uniPageLimit, "UNIVERSITY_REQUIREMENTS"]);
+      const fmt = pick([officialFormatting, "OFFICIAL_REQUIREMENT"], [uniFormatting, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.formattingInstructions, "DEFAULT_TEMPLATE"]);
       return {
         promptText: defaultTemplate.promptText,
         promptSource: "OFFICIAL_VERIFIED",
-        wordMin: officialWordMin || uniWordMin,
-        wordMax: officialWordMax || uniWordMax,
-        characterLimit: officialCharLimit || uniCharLimit,
-        pageLimit: officialPageLimit || uniPageLimit,
+        wordMin: wMin.v,
+        wordMax: wMax.v,
+        characterLimit: ch.v,
+        pageLimit: pg.v,
         specialInstructions: officialSpecial || defaultTemplate.specialInstructions,
         facultyInstructions: officialFaculty,
-        formattingInstructions: officialFormatting || uniFormatting || defaultTemplate.formattingInstructions,
+        formattingInstructions: fmt.v,
+        fieldSources: {
+          promptText: "DEFAULT_TEMPLATE",
+          wordMin: wMin.s, wordMax: wMax.s, characterLimit: ch.s, pageLimit: pg.s,
+          specialInstructions: officialSpecial ? "OFFICIAL_REQUIREMENT" : "DEFAULT_TEMPLATE",
+          facultyInstructions: officialFaculty ? "OFFICIAL_REQUIREMENT" : undefined,
+          formattingInstructions: fmt.s,
+        },
         requiredTopics: uniTopics.length ? uniTopics : undefined,
         additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
         writingRequirementId: writingRequirement.id,
@@ -339,15 +384,26 @@ function resolveAndMergePrompt(
       };
     } else {
       // Official but no useful info — use default template
+      const wMin = pick([uniWordMin, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.wordMin, "DEFAULT_TEMPLATE"]);
+      const wMax = pick([uniWordMax, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.wordMax, "DEFAULT_TEMPLATE"]);
+      const ch = pick([uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
+      const pg = pick([uniPageLimit, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.pageLimit, "DEFAULT_TEMPLATE"]);
+      const fmt = pick([uniFormatting, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.formattingInstructions, "DEFAULT_TEMPLATE"]);
       return {
         promptText: defaultTemplate.promptText,
         promptSource: "OFFICIAL_VERIFIED",
-        wordMin: uniWordMin || defaultTemplate.wordMin,
-        wordMax: uniWordMax || defaultTemplate.wordMax,
-        characterLimit: uniCharLimit,
-        pageLimit: uniPageLimit || defaultTemplate.pageLimit,
+        wordMin: wMin.v,
+        wordMax: wMax.v,
+        characterLimit: ch.v,
+        pageLimit: pg.v,
         specialInstructions: defaultTemplate.specialInstructions,
-        formattingInstructions: uniFormatting || defaultTemplate.formattingInstructions,
+        formattingInstructions: fmt.v,
+        fieldSources: {
+          promptText: "DEFAULT_TEMPLATE",
+          wordMin: wMin.s, wordMax: wMax.s, characterLimit: ch.s, pageLimit: pg.s,
+          specialInstructions: "DEFAULT_TEMPLATE",
+          formattingInstructions: fmt.s,
+        },
         requiredTopics: uniTopics.length ? uniTopics : undefined,
         additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
         writingRequirementId: writingRequirement.id,
@@ -360,15 +416,28 @@ function resolveAndMergePrompt(
 
   // Case 2: Document has DVIVID_DEFAULT_TEMPLATE
   if (document.promptSource === "DVIVID_DEFAULT_TEMPLATE") {
+    const pt = pick([document.promptText, "DOCUMENT"], [defaultTemplate.promptText, "DEFAULT_TEMPLATE"]);
+    const wMin = pick([document.wordMin, "DOCUMENT"], [uniWordMin, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.wordMin, "DEFAULT_TEMPLATE"]);
+    const wMax = pick([document.wordMax, "DOCUMENT"], [uniWordMax, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.wordMax, "DEFAULT_TEMPLATE"]);
+    const ch = pick([document.characterLimit, "DOCUMENT"], [uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
+    const pg = pick([document.pageLimit, "DOCUMENT"], [uniPageLimit, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.pageLimit, "DEFAULT_TEMPLATE"]);
+    const sp = pick([document.specialInstructions, "DOCUMENT"], [defaultTemplate.specialInstructions, "DEFAULT_TEMPLATE"]);
+    const fmt = pick([document.formattingInstructions, "DOCUMENT"], [uniFormatting, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.formattingInstructions, "DEFAULT_TEMPLATE"]);
     return {
-      promptText: document.promptText || defaultTemplate.promptText,
+      promptText: pt.v!,
       promptSource: "DVIVID_DEFAULT_TEMPLATE",
-      wordMin: document.wordMin || uniWordMin || defaultTemplate.wordMin,
-      wordMax: document.wordMax || uniWordMax || defaultTemplate.wordMax,
-      characterLimit: document.characterLimit || uniCharLimit,
-      pageLimit: document.pageLimit || uniPageLimit || defaultTemplate.pageLimit,
-      specialInstructions: document.specialInstructions || defaultTemplate.specialInstructions,
-      formattingInstructions: document.formattingInstructions || uniFormatting || defaultTemplate.formattingInstructions,
+      wordMin: wMin.v,
+      wordMax: wMax.v,
+      characterLimit: ch.v,
+      pageLimit: pg.v,
+      specialInstructions: sp.v,
+      formattingInstructions: fmt.v,
+      fieldSources: {
+        promptText: pt.s,
+        wordMin: wMin.s, wordMax: wMax.s, characterLimit: ch.s, pageLimit: pg.s,
+        specialInstructions: sp.s,
+        formattingInstructions: fmt.s,
+      },
       requiredTopics: uniTopics.length ? uniTopics : undefined,
       additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
       resolutionPath: "DEFAULT_TEMPLATE",
@@ -380,21 +449,65 @@ function resolveAndMergePrompt(
   // A consultant-provided PROMPT overrides the prompt only — limits,
   // mandatory topics, questions and formatting still inherit from the
   // saved University Requirements field-by-field.
+  const wMin = pick([document.wordMin, "DOCUMENT"], [uniWordMin, "UNIVERSITY_REQUIREMENTS"]);
+  const wMax = pick([document.wordMax, "DOCUMENT"], [uniWordMax, "UNIVERSITY_REQUIREMENTS"]);
+  const ch = pick([document.characterLimit, "DOCUMENT"], [uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
+  const pg = pick([document.pageLimit, "DOCUMENT"], [uniPageLimit, "UNIVERSITY_REQUIREMENTS"]);
+  const fmt = pick([document.formattingInstructions, "DOCUMENT"], [uniFormatting, "UNIVERSITY_REQUIREMENTS"]);
   return {
     promptText: document.promptText,
     promptSource: document.promptSource,
-    wordMin: document.wordMin || uniWordMin,
-    wordMax: document.wordMax || uniWordMax,
-    characterLimit: document.characterLimit || uniCharLimit,
-    pageLimit: document.pageLimit || uniPageLimit,
+    wordMin: wMin.v,
+    wordMax: wMax.v,
+    characterLimit: ch.v,
+    pageLimit: pg.v,
     specialInstructions: document.specialInstructions || undefined,
     facultyInstructions: document.facultyInstructions || undefined,
-    formattingInstructions: document.formattingInstructions || uniFormatting,
+    formattingInstructions: fmt.v,
+    fieldSources: {
+      promptText: "DOCUMENT",
+      wordMin: wMin.s, wordMax: wMax.s, characterLimit: ch.s, pageLimit: pg.s,
+      specialInstructions: document.specialInstructions ? "DOCUMENT" : undefined,
+      facultyInstructions: document.facultyInstructions ? "DOCUMENT" : undefined,
+      formattingInstructions: fmt.s,
+    },
     requiredTopics: uniTopics.length ? uniTopics : undefined,
     additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
     resolutionPath: "MANUAL",
     mergedWithDefault: false,
   };
+}
+
+/**
+ * Read-only resolved requirements for display (document Review page).
+ * Reuses the canonical resolveAndMergePrompt — the same function the
+ * generation contract consumes — but without generation gates, so the
+ * UI can show effective values even when generation is blocked.
+ */
+export async function loadDocumentRequirementsForDisplay(
+  documentId: string,
+): Promise<MergedPrompt | null> {
+  const document = await getDocument(documentId);
+  if (!document) return null;
+  const application = await getApplication(document.applicationId);
+  const profile = application ? await getStudentProfile(application.studentId) : null;
+
+  let writingRequirement: any = null;
+  const pool = (await import("./db")).getDbPool();
+  const [rows] = await pool.execute(
+    "SELECT writing_requirement_id FROM application_documents WHERE id = ?",
+    [documentId],
+  );
+  const writingRequirementId = (rows as any[])[0]?.writing_requirement_id;
+  if (writingRequirementId) {
+    writingRequirement = await getWritingRequirement(writingRequirementId);
+  }
+
+  return resolveAndMergePrompt(
+    document,
+    writingRequirement,
+    (profile as any)?.universityRequirements || null,
+  );
 }
 
 /**

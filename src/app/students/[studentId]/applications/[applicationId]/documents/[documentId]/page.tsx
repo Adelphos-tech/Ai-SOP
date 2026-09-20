@@ -37,6 +37,26 @@ interface Document {
   updatedAt: string;
 }
 
+type RequirementFieldSource = "DOCUMENT" | "UNIVERSITY_REQUIREMENTS" | "OFFICIAL_REQUIREMENT" | "DEFAULT_TEMPLATE";
+
+interface ResolvedRequirements {
+  promptText?: string;
+  promptSource?: string;
+  wordMin?: number;
+  wordMax?: number;
+  characterLimit?: number;
+  pageLimit?: number;
+  resolutionPath?: string;
+  fieldSources?: Partial<Record<string, RequirementFieldSource>>;
+}
+
+const REQUIREMENT_SOURCE_LABELS: Record<RequirementFieldSource, string> = {
+  DOCUMENT: "Document override",
+  UNIVERSITY_REQUIREMENTS: "University Requirements",
+  OFFICIAL_REQUIREMENT: "Official requirement",
+  DEFAULT_TEMPLATE: "D-Vivid default",
+};
+
 interface Version {
   id: string;
   documentId: string;
@@ -153,6 +173,7 @@ export default function DocumentWorkspacePage() {
   const documentId = params.documentId as string;
 
   const [document, setDocument] = useState<Document | null>(null);
+  const [resolvedReqs, setResolvedReqs] = useState<ResolvedRequirements | null>(null);
   const [student, setStudent] = useState<Student | null>(null);
   const [application, setApplication] = useState<Application | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
@@ -200,6 +221,7 @@ export default function DocumentWorkspacePage() {
       }
       const data = await res.json();
       setDocument(data.document);
+      setResolvedReqs(data.resolvedRequirements || null);
 
       const versionRes = await fetch(`/api/application/version?documentId=${documentId}`);
       if (versionRes.ok) {
@@ -1015,22 +1037,24 @@ export default function DocumentWorkspacePage() {
                   <p className="text-sm text-dvivid-text-primary whitespace-pre-wrap">{document?.promptText}</p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <p className="text-xs text-dvivid-text-muted">Word Min</p>
-                    <p className="text-sm font-medium text-dvivid-text-primary mt-0.5">{document?.wordMin || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-dvivid-text-muted">Word Max</p>
-                    <p className="text-sm font-medium text-dvivid-text-primary mt-0.5">{document?.wordMax || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-dvivid-text-muted">Character Limit</p>
-                    <p className="text-sm font-medium text-dvivid-text-primary mt-0.5">{document?.characterLimit || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-dvivid-text-muted">Page Limit</p>
-                    <p className="text-sm font-medium text-dvivid-text-primary mt-0.5">{document?.pageLimit || "—"}</p>
-                  </div>
+                  {([
+                    ["Word Min", "wordMin"],
+                    ["Word Max", "wordMax"],
+                    ["Character Limit", "characterLimit"],
+                    ["Page Limit", "pageLimit"],
+                  ] as const).map(([label, field]) => {
+                    const value = resolvedReqs?.[field];
+                    const source = resolvedReqs?.fieldSources?.[field];
+                    return (
+                      <div key={field}>
+                        <p className="text-xs text-dvivid-text-muted">{label}</p>
+                        <p className="text-sm font-medium text-dvivid-text-primary mt-0.5">{value ?? "—"}</p>
+                        {value !== undefined && source && (
+                          <p className="text-[11px] text-dvivid-text-muted mt-0.5">{REQUIREMENT_SOURCE_LABELS[source]}</p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 {document?.specialInstructions && (
                   <div>
