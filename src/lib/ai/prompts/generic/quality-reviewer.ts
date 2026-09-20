@@ -164,22 +164,31 @@ Return ONLY valid JSON:
   }
 }`;
 
+  // PROMPT_COMPACT_MODE=1 — for providers with low TPM limits (e.g. free
+  // tiers): non-indented JSON + truncated evidence text. Semantics unchanged;
+  // only whitespace and per-entry evidence length differ. Unset = full fidelity.
+  const compact = !!process.env.PROMPT_COMPACT_MODE;
+  const MAX_ENTRY_CHARS = 160;
+
   let evidenceSection: string;
   if (evidencePackets && evidencePackets.length > 0) {
     evidenceSection = evidencePackets.map(pkt => {
-      const entries = pkt.allEntries.map(e =>
-        `  ${e.id}: ${e.canonicalText} [category: ${e.category}]`
-      ).join("\n");
+      const entries = pkt.allEntries.map(e => {
+        const t = compact && e.canonicalText.length > MAX_ENTRY_CHARS
+          ? e.canonicalText.slice(0, MAX_ENTRY_CHARS) + "…"
+          : e.canonicalText;
+        return `  ${e.id}: ${t} [category: ${e.category}]`;
+      }).join("\n");
       return `EVIDENCE PACKET FOR ${pkt.componentId}:\n${entries || "  (no evidence authorized)"}`;
     }).join("\n\n---\n\n");
   } else {
     evidenceSection = evidenceLedger
-      ? JSON.stringify(evidenceLedger.allEntries, null, 2)
+      ? JSON.stringify(evidenceLedger.allEntries, null, compact ? 0 : 2)
       : "Not supplied; return empty candidateEvidence arrays. Do not infer evidence from the draft.";
   }
 
   const user = `WRITER OUTPUT:
-${JSON.stringify(writerOutput, null, 2)}
+${compact ? JSON.stringify(writerOutput) : JSON.stringify(writerOutput, null, 2)}
 
 EVIDENCE (the only source of evidence for missing-topic repair and factual risk assessment):
 ${evidenceSection}
