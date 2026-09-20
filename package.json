@@ -6,7 +6,8 @@
     "dev": "next dev -p 5010 -H 127.0.0.1",
     "build": "next build",
     "start": "next start -p 5010 -H 127.0.0.1",
-    "lint": "next lint"
+    "lint": "next lint",
+    "generation:preflight": "tsx scripts/generation-preflight.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",

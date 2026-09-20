@@ -23,7 +23,7 @@
 //   9. FAILED status on any error
 // ============================================================
 
-import { loadDocumentGenerationContext, buildPipelineWritingInstructions } from "@/lib/application/generation-context";
+import { loadDocumentGenerationContext, buildPipelineWritingInstructions, DocumentGenerationContext } from "@/lib/application/generation-context";
 import { adaptProfile } from "@/lib/application/profile-adapter";
 import { buildQualityRubricInstructions } from "@/lib/application/document-type-config";
 import { updateDocumentStatus, createDocumentVersion, acquireGenerationLock } from "@/lib/application/application-repository";
@@ -203,122 +203,10 @@ async function generateApplicationDocumentInner(
   const merged = ctx.mergedPrompt;
   const config = ctx.documentTypeConfig;
 
-  const responseComponent: ResponseComponent = {
-    componentId: "RC-DOC",
-    label: ctx.document.documentTitle || config.displayName,
-    exactPrompt: merged.promptText,
-    pageLimit: {
-      type: "PER_DOCUMENT" as const,
-      maxPages: merged.pageLimit || null,
-      status: merged.pageLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
-    },
-    wordLimit: {
-      min: merged.wordMin || null,
-      max: merged.wordMax || null,
-      status: merged.wordMax ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
-    },
-    characterLimit: {
-      min: null,
-      max: merged.characterLimit || null,
-      status: merged.characterLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
-    },
-    // Topics inherited from consultant-entered University Requirements are
-    // "DECLARED" — they reach Planner/Writer/QR prompts but are NOT subject
-    // to the hard mandatory-evidence gate, which exists to protect
-    // OFFICIAL_VERIFIED requirement topics. Marking consultant topics
-    // REQUIRED would block generation on pattern-matched evidence checks
-    // designed for verified official requirements.
-    additionalQuestions: merged.additionalQuestions || [],
-    requiredTopics: (merged.requiredTopics || []).map(t => ({
-      topic: t,
-      status: merged.writingRequirementId ? "REQUIRED" : "DECLARED",
-      sourceId: merged.writingRequirementId || "university_requirements",
-      sourceQuote: t,
-    })),
-    sourceId: merged.writingRequirementId || "document",
-    status: merged.resolutionPath === "OFFICIAL_VERIFIED" ? "VERIFIED" : "MANUAL",
-    verifiedAt: new Date().toISOString(),
-  };
-
-  const pageLimit: PageLimitConstraint = {
-    type: "PER_DOCUMENT",
-    maxPages: merged.pageLimit || null,
-    status: merged.pageLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
-  };
-
-  const pipelineWritingInstructions = buildPipelineWritingInstructions(ctx);
-  const qualityRubricInstructions = buildQualityRubricInstructions(config);
-
-  const programContextText = ctx.application
-    ? `University: ${ctx.application.universityName}\nProgram: ${ctx.application.programName}\nDegree: ${ctx.application.degree}\nIntake: ${ctx.application.intake} ${ctx.application.intakeYear}\nCountry: ${ctx.application.country}`
-    : "";
+  const artifacts = buildGenerationArtifacts(ctx, profile);
+  const { responseComponent, pageLimit, pipelineWritingInstructions, qualityRubricInstructions, programContextText, contract } = artifacts;
 
   const generationId = resumeRunId || randomUUID();
-
-  // ===== BUILD GENERATION CONTRACT =====
-  const writingRequirement: ContractWritingRequirement = {
-    documentType: ctx.document.documentType,
-    documentTypeLabel: config.displayName,
-    officialPrompt: merged.promptText,
-    officialPromptStatus: merged.resolutionPath === "OFFICIAL_VERIFIED" ? "VERIFIED" : "MANUAL",
-    wordLimit: {
-      min: merged.wordMin || null,
-      max: merged.wordMax || null,
-      status: merged.wordMax ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
-    },
-    characterLimit: {
-      min: null,
-      max: merged.characterLimit || null,
-      status: merged.characterLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
-    },
-    requiredTopics: merged.requiredTopics || [],
-    formatInstructions: merged.formattingInstructions ? [merged.formattingInstructions] : [],
-    additionalQuestions: merged.additionalQuestions || [],
-    sourceId: merged.writingRequirementId || null,
-    responseComponentCount: 1,
-  };
-
-  const languageProfile: ContractLanguageProfile = {
-    testType: (profile as any).englishProficiency?.testType || "",
-    overallScore: (profile as any).englishProficiency?.overallScore || "",
-    writingScore: (profile as any).englishProficiency?.writing || "",
-    desiredProfile: (profile as any).writingPreferences?.sopWritingProfile?.level || "Natural Professional",
-    tone: (profile as any).writingPreferences?.sopWritingProfile?.tone || "Professional & Personal",
-    personalization: (profile as any).writingPreferences?.sopWritingProfile?.personalization || "Balanced",
-    technicalDetail: (profile as any).writingPreferences?.sopWritingProfile?.technicalDetail || "Medium",
-    openingStyle: (profile as any).writingPreferences?.sopWritingProfile?.openingStyle || "Let AI Choose Best Opening",
-  };
-
-  const contract: GenerationContract = {
-    contractId: "GC-" + Date.now() + "-" + Math.random().toString(36).substring(2, 8),
-    createdAt: new Date().toISOString(),
-    studentFacts: profile,
-    application: {
-      country: ctx.application?.country || "",
-      university: ctx.application?.universityName || "",
-      program: ctx.application?.programName || "",
-      degreeLevel: ctx.application?.degree || "",
-      intake: ctx.application?.intake || "",
-      intakeYear: ctx.application?.intakeYear || "",
-    },
-    writingRequirement,
-    responseComponents: [responseComponent],
-    pageLimit,
-    programContext: null,
-    countryGuidance: null,
-    languageProfile,
-    facultyAlignment: [],
-    verification: {
-      requirementsVerified: true,
-      aiWritingAllowed: true,
-      aiPolicyStatus: "AI_GENERATION_ALLOWED",
-      conflicts: [],
-      factSheetApproved: true,
-    },
-    clearedForWriting: true,
-    blockingReasons: [],
-  };
-  contract.contractSemanticHash = computeContractSemanticHash(contract);
 
   const pipelineInput: ApplicationPipelineInput = {
     profile,
@@ -489,6 +377,142 @@ async function generateApplicationDocumentInner(
  * Release the generation lock on failure (best-effort).
  * Called by route catch blocks when generateApplicationDocument throws.
  */
+/**
+ * Build every deterministic generation artifact from a loaded context.
+ * Extracted so the zero-token preflight (scripts/generation-preflight.ts)
+ * uses the exact production construction — no duplicated logic to drift.
+ */
+export function buildGenerationArtifacts(ctx: DocumentGenerationContext, profile: any) {
+  const merged = ctx.mergedPrompt;
+  const config = ctx.documentTypeConfig;
+
+  const responseComponent: ResponseComponent = {
+    componentId: "RC-DOC",
+    label: ctx.document.documentTitle || config.displayName,
+    exactPrompt: merged.promptText,
+    pageLimit: {
+      type: "PER_DOCUMENT" as const,
+      maxPages: merged.pageLimit || null,
+      status: merged.pageLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+    },
+    wordLimit: {
+      min: merged.wordMin || null,
+      max: merged.wordMax || null,
+      status: merged.wordMax ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+    },
+    characterLimit: {
+      min: null,
+      max: merged.characterLimit || null,
+      status: merged.characterLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+    },
+    // Topics inherited from consultant-entered University Requirements are
+    // "DECLARED" — they reach Planner/Writer/QR prompts but are NOT subject
+    // to the hard mandatory-evidence gate, which exists to protect
+    // OFFICIAL_VERIFIED requirement topics. Marking consultant topics
+    // REQUIRED would block generation on pattern-matched evidence checks
+    // designed for verified official requirements.
+    additionalQuestions: merged.additionalQuestions || [],
+    requiredTopics: (merged.requiredTopics || []).map(t => ({
+      topic: t,
+      status: merged.writingRequirementId ? "REQUIRED" : "DECLARED",
+      sourceId: merged.writingRequirementId || "university_requirements",
+      sourceQuote: t,
+    })),
+    sourceId: merged.writingRequirementId || "document",
+    status: merged.resolutionPath === "OFFICIAL_VERIFIED" ? "VERIFIED" : "MANUAL",
+    verifiedAt: new Date().toISOString(),
+  };
+
+  const pageLimit: PageLimitConstraint = {
+    type: "PER_DOCUMENT",
+    maxPages: merged.pageLimit || null,
+    status: merged.pageLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+  };
+
+  const pipelineWritingInstructions = buildPipelineWritingInstructions(ctx);
+  const qualityRubricInstructions = buildQualityRubricInstructions(config);
+
+  const programContextText = ctx.application
+    ? `University: ${ctx.application.universityName}\nProgram: ${ctx.application.programName}\nDegree: ${ctx.application.degree}\nIntake: ${ctx.application.intake} ${ctx.application.intakeYear}\nCountry: ${ctx.application.country}`
+    : "";
+
+  // ===== GENERATION CONTRACT =====
+  const writingRequirement: ContractWritingRequirement = {
+    documentType: ctx.document.documentType,
+    documentTypeLabel: config.displayName,
+    officialPrompt: merged.promptText,
+    officialPromptStatus: merged.resolutionPath === "OFFICIAL_VERIFIED" ? "VERIFIED" : "MANUAL",
+    wordLimit: {
+      min: merged.wordMin || null,
+      max: merged.wordMax || null,
+      status: merged.wordMax ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+    },
+    characterLimit: {
+      min: null,
+      max: merged.characterLimit || null,
+      status: merged.characterLimit ? "VERIFIED" : "NOT_SPECIFIED_BY_OFFICIAL_SOURCE",
+    },
+    requiredTopics: merged.requiredTopics || [],
+    formatInstructions: merged.formattingInstructions ? [merged.formattingInstructions] : [],
+    additionalQuestions: merged.additionalQuestions || [],
+    sourceId: merged.writingRequirementId || null,
+    responseComponentCount: 1,
+  };
+
+  const languageProfile: ContractLanguageProfile = {
+    testType: (profile as any).englishProficiency?.testType || "",
+    overallScore: (profile as any).englishProficiency?.overallScore || "",
+    writingScore: (profile as any).englishProficiency?.writing || "",
+    desiredProfile: (profile as any).writingPreferences?.sopWritingProfile?.level || "Natural Professional",
+    tone: (profile as any).writingPreferences?.sopWritingProfile?.tone || "Professional & Personal",
+    personalization: (profile as any).writingPreferences?.sopWritingProfile?.personalization || "Balanced",
+    technicalDetail: (profile as any).writingPreferences?.sopWritingProfile?.technicalDetail || "Medium",
+    openingStyle: (profile as any).writingPreferences?.sopWritingProfile?.openingStyle || "Let AI Choose Best Opening",
+  };
+
+  const contract: GenerationContract = {
+    contractId: "GC-" + Date.now() + "-" + Math.random().toString(36).substring(2, 8),
+    createdAt: new Date().toISOString(),
+    studentFacts: profile,
+    application: {
+      country: ctx.application?.country || "",
+      university: ctx.application?.universityName || "",
+      program: ctx.application?.programName || "",
+      degreeLevel: ctx.application?.degree || "",
+      intake: ctx.application?.intake || "",
+      intakeYear: ctx.application?.intakeYear || "",
+    },
+    writingRequirement,
+    responseComponents: [responseComponent],
+    pageLimit,
+    programContext: null,
+    countryGuidance: null,
+    languageProfile,
+    facultyAlignment: [],
+    verification: {
+      requirementsVerified: true,
+      aiWritingAllowed: true,
+      aiPolicyStatus: "AI_GENERATION_ALLOWED",
+      conflicts: [],
+      factSheetApproved: true,
+    },
+    clearedForWriting: true,
+    blockingReasons: [],
+  };
+  contract.contractSemanticHash = computeContractSemanticHash(contract);
+
+  return {
+    responseComponent,
+    pageLimit,
+    pipelineWritingInstructions,
+    qualityRubricInstructions,
+    programContextText,
+    writingRequirement,
+    languageProfile,
+    contract,
+  };
+}
+
 export async function releaseGenerationLock(documentId: string): Promise<void> {
   try {
     await updateDocumentStatus(documentId, undefined, "FAILED");
