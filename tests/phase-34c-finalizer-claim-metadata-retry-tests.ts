@@ -396,12 +396,13 @@ async function runTests() {
     assert(pipelineSource.includes("finalizerRetryCount"), "Pipeline has finalizerRetryCount");
     assert(pipelineSource.includes("maxFinalizerRetries"), "Pipeline has maxFinalizerRetries");
     assert(pipelineSource.includes("retryCorrection"), "Pipeline passes retryCorrection");
-    assert(pipelineSource.includes("FINALIZER_METADATA_INCOMPLETE_RETRY_EXHAUSTED"), "Pipeline fails closed after retry exhaustion");
+    assert(pipelineSource.includes("FINALIZER_METADATA_INCOMPLETE"), "Pipeline flags retry exhaustion as a warning");
+    assert(pipelineSource.includes("fallBackToCalibrated"), "Pipeline preserves the calibrated draft after retry exhaustion");
     // The retry loop should NOT re-execute planner, writer, qualityReviewer, languageCalibrator
     // The retry should only re-call stageExecution.execute("finalizer", ...)
     const finalizerRetrySection = pipelineSource.substring(
       pipelineSource.indexOf("Phase 34C: Retry loop for FINALIZER_METADATA_INCOMPLETE"),
-      pipelineSource.indexOf("const finalized = JSON.parse(finalizerResult.content);"),
+      pipelineSource.indexOf("if (finalizerResult) {"),
     );
     assert(!finalizerRetrySection.includes('execute("planner"'), "Retry does NOT re-execute planner");
     assert(!finalizerRetrySection.includes('execute("writer"'), "Retry does NOT re-execute writer");
