@@ -105,6 +105,9 @@ export default function ApplicationWorkspacePage() {
   const [characterLimit, setCharacterLimit] = useState("");
   const [pageLimit, setPageLimit] = useState("");
   const [specialInstructions, setSpecialInstructions] = useState("");
+  const [mandatoryTopics, setMandatoryTopics] = useState("");
+  const [additionalQuestions, setAdditionalQuestions] = useState("");
+  const [formattingInstructions, setFormattingInstructions] = useState("");
   const [saving, setSaving] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [resolutionPath, setResolutionPath] = useState<string | null>(null);
@@ -216,6 +219,9 @@ export default function ApplicationWorkspacePage() {
           characterLimit: characterLimit ? parseInt(characterLimit) : undefined,
           pageLimit: pageLimit ? parseInt(pageLimit) : undefined,
           specialInstructions,
+          formattingInstructions,
+          mandatoryTopics,
+          additionalQuestions,
           writingRequirementId: selectedWritingReqId || undefined,
         }),
       });
@@ -238,6 +244,9 @@ export default function ApplicationWorkspacePage() {
       setCharacterLimit("");
       setPageLimit("");
       setSpecialInstructions("");
+      setMandatoryTopics("");
+      setAdditionalQuestions("");
+      setFormattingInstructions("");
       setSelectedWritingReqId(null);
       setResolutionPath(null);
       setResolutionLabel(null);
@@ -783,7 +792,7 @@ export default function ApplicationWorkspacePage() {
           <details className="mb-6 group">
             <summary className="text-sm font-medium text-dvivid-text-secondary cursor-pointer list-none flex items-center gap-2">
               <span className="text-dvivid-text-muted group-open:rotate-90 transition-transform inline-block">▸</span>
-              Advanced options (title, prompt source, length limits)
+              Advanced options (title, prompt source, length limits, topics, questions, formatting)
             </summary>
             <div className="pt-4 mt-3 border-t border-dvivid-border-light space-y-5">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -805,17 +814,40 @@ export default function ApplicationWorkspacePage() {
                   ["Character Limit", "characterLimit", characterLimit, setCharacterLimit],
                   ["Page Limit", "pageLimit", pageLimit, setPageLimit],
                 ] as const).map(([label, key, val, setter]) => {
-                  const inherited = (profile as any)?.universityRequirements?.[key];
                   return (
                     <FormField key={key} label={label}>
-                      <input className={inputClass} type="number" value={val} onChange={e => setter(e.target.value)} placeholder={inherited ? String(inherited) : "—"} />
-                      {!val && inherited && (
-                        <p className="text-xs text-dvivid-text-muted mt-1">Inherited from University Requirements: {inherited}</p>
-                      )}
+                      <input className={inputClass} type="number" value={val} onChange={e => setter(e.target.value)} placeholder="—" />
                     </FormField>
                   );
                 })}
               </div>
+              <FormField label="Mandatory Topics (one per line)">
+                <textarea
+                  className={inputClass}
+                  rows={3}
+                  value={mandatoryTopics}
+                  onChange={e => setMandatoryTopics(e.target.value)}
+                  placeholder={"Research methodology\nData ethics\nLeadership experience"}
+                />
+              </FormField>
+              <FormField label="Additional / Specific Questions (one per line)">
+                <textarea
+                  className={inputClass}
+                  rows={3}
+                  value={additionalQuestions}
+                  onChange={e => setAdditionalQuestions(e.target.value)}
+                  placeholder={"Describe a challenge you overcame.\nWhy this specific program?"}
+                />
+              </FormField>
+              <FormField label="Formatting Rules">
+                <textarea
+                  className={inputClass}
+                  rows={2}
+                  value={formattingInstructions}
+                  onChange={e => setFormattingInstructions(e.target.value)}
+                  placeholder="12pt font, 1.5 line spacing, margins 1 inch"
+                />
+              </FormField>
             </div>
           </details>
 

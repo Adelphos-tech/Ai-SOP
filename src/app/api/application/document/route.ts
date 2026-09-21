@@ -127,6 +127,8 @@ export async function POST(request: NextRequest) {
       specialInstructions: body.specialInstructions,
       facultyInstructions: body.facultyInstructions,
       formattingInstructions: body.formattingInstructions,
+      mandatoryTopics: body.mandatoryTopics,
+      additionalQuestions: body.additionalQuestions,
     };
 
     const document = useOfficialCreate

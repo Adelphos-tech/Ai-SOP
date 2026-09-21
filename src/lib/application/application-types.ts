@@ -216,6 +216,9 @@ export interface ApplicationDocument {
   specialInstructions?: string;
   facultyInstructions?: string;
   formattingInstructions?: string;
+  mandatoryTopics?: string;
+  additionalQuestions?: string;
+  useLegacyRequirements?: boolean;
   requirementsStatus: RequirementsStatus;
   generationStatus: GenerationStatus;
   reviewStatus: ReviewStatus;
@@ -280,6 +283,8 @@ export interface CreateDocumentInput {
   specialInstructions?: string;
   facultyInstructions?: string;
   formattingInstructions?: string;
+  mandatoryTopics?: string;
+  additionalQuestions?: string;
 }
 
 export interface CreateDocumentVersionInput {

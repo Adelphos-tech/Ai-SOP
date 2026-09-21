@@ -617,8 +617,9 @@ export async function createDocument(input: CreateDocumentInput): Promise<Applic
      (id, application_id, document_type, document_title, prompt_text, prompt_source,
       word_min, word_max, character_limit, page_limit,
       special_instructions, faculty_instructions, formatting_instructions,
+      mandatory_topics, additional_questions, use_legacy_requirements,
       requirements_status, generation_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NOT_STARTED', 'NOT_STARTED')`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 'NOT_STARTED', 'NOT_STARTED')`,
     [
       id,
       input.applicationId,
@@ -633,6 +634,8 @@ export async function createDocument(input: CreateDocumentInput): Promise<Applic
       input.specialInstructions || null,
       input.facultyInstructions || null,
       input.formattingInstructions || null,
+      input.mandatoryTopics || null,
+      input.additionalQuestions || null,
     ],
   );
 
@@ -665,8 +668,9 @@ export async function createOfficialDocument(input: CreateDocumentInput): Promis
      (id, application_id, document_type, document_title, prompt_text, prompt_source,
       word_min, word_max, character_limit, page_limit,
       special_instructions, faculty_instructions, formatting_instructions,
+      mandatory_topics, additional_questions, use_legacy_requirements,
       requirements_status, generation_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NOT_STARTED', 'NOT_STARTED')`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 'NOT_STARTED', 'NOT_STARTED')`,
     [
       id,
       input.applicationId,
@@ -681,6 +685,8 @@ export async function createOfficialDocument(input: CreateDocumentInput): Promis
       input.specialInstructions || null,
       input.facultyInstructions || null,
       input.formattingInstructions || null,
+      input.mandatoryTopics || null,
+      input.additionalQuestions || null,
     ],
   );
 
@@ -767,6 +773,9 @@ function rowToDocument(row: any): ApplicationDocument {
     specialInstructions: row.special_instructions || undefined,
     facultyInstructions: row.faculty_instructions || undefined,
     formattingInstructions: row.formatting_instructions || undefined,
+    mandatoryTopics: row.mandatory_topics || undefined,
+    additionalQuestions: row.additional_questions || undefined,
+    useLegacyRequirements: !!row.use_legacy_requirements,
     requirementsStatus: row.requirements_status,
     generationStatus: row.generation_status,
     reviewStatus: (row.review_status || "DRAFT") as ReviewStatus,

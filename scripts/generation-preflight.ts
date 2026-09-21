@@ -196,6 +196,26 @@ async function main() {
   if (merged.formattingInstructions && !qr.system.includes(merged.formattingInstructions.slice(0, 30))) writerOnly.push("formattingRules");
   check("Writer-only compliance requirements", writerOnly.length === 0, writerOnly.join(",") || "none");
 
+  // ===== DOCUMENT REQUIREMENT SCOPE =====
+  // For NEW documents (use_legacy_requirements=false), the prompt/limits/
+  // topics/questions/formatting must come from the document or default
+  // template — NOT from legacy application-level universityRequirements.
+  const doc: any = document;
+  const useLegacy = doc?.useLegacyRequirements === true;
+  const promptOwner = merged.fieldSources?.promptText || "UNKNOWN";
+  const lengthOwner = merged.fieldSources?.wordMax || "UNKNOWN";
+  const topicsOwner = merged.requiredTopics?.length ? (doc?.mandatoryTopics ? "DOCUMENT" : (useLegacy ? "UNIVERSITY_REQUIREMENTS" : "NONE")) : "NONE";
+  const questionsOwner = merged.additionalQuestions?.length ? (doc?.additionalQuestions ? "DOCUMENT" : (useLegacy ? "UNIVERSITY_REQUIREMENTS" : "NONE")) : "NONE";
+  const formattingOwner = merged.fieldSources?.formattingInstructions || "NONE";
+
+  check("Document Requirement Scope: Prompt owner", true, promptOwner);
+  check("Document Requirement Scope: Length owner", true, lengthOwner);
+  check("Document Requirement Scope: Topics owner", true, topicsOwner);
+  check("Document Requirement Scope: Questions owner", true, questionsOwner);
+  check("Document Requirement Scope: Formatting owner", true, formattingOwner);
+  check("Document Requirement Scope: Legacy application requirements used", useLegacy,
+    useLegacy ? "YES (legacy document — backward compatible)" : "NO (new document — isolated)");
+
   report();
 }
 

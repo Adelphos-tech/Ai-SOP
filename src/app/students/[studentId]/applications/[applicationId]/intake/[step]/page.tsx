@@ -952,7 +952,13 @@ function SubjectRequirementsSection() {
 }
 
 // ============================================================
-// SECTION 8: UNIVERSITY REQUIREMENTS
+// SECTION 8: PROGRAM / UNIVERSITY INFORMATION
+// ============================================================
+// Document-writing requirements (prompt, word limits, topics, questions,
+// formatting) have been MOVED to document creation. This section now only
+// collects reusable application-level context: official source URL for
+// program/university information. Each document owns its own writing
+// requirements independently.
 // ============================================================
 function UniversityRequirementsSection({ application }: { application: any }) {
   const { register, watch } = useFormContext<IntakeProfileForm>();
@@ -960,30 +966,28 @@ function UniversityRequirementsSection({ application }: { application: any }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-dvivid-text-secondary">
-        Show resolved university/document requirements. Resolution remains:
-        consultant/user prompt → D-Vivid requirements DB → official crawl → D-Vivid generic fallback.
-      </p>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="Document Prompt / Question"><Area name="universityRequirements.promptText" rows={4} placeholder="Paste any prompt, question, or writing requirement provided by the university, portal, institution, embassy, employer, or other source." /></FormField>
-        <div className="space-y-3">
-          <FormField label="Word Limit (Min)"><input className={inputClass} {...register("universityRequirements.wordMin")} /></FormField>
-          <FormField label="Word Limit (Max)"><input className={inputClass} {...register("universityRequirements.wordMax")} /></FormField>
-          <FormField label="Character Limit"><input className={inputClass} {...register("universityRequirements.characterLimit")} /></FormField>
-          <FormField label="Page Limit"><input className={inputClass} {...register("universityRequirements.pageLimit")} /></FormField>
-        </div>
-        <FormField label="Mandatory Topics" className="md:col-span-2"><Area name="universityRequirements.mandatoryTopics" rows={3} /></FormField>
-        <FormField label="University-Specific Questions" className="md:col-span-2"><Area name="universityRequirements.specificQuestions" rows={3} /></FormField>
-        <FormField label="Formatting Rules" className="md:col-span-2"><Area name="universityRequirements.formattingRules" rows={2} /></FormField>
-        <FormField label="Official Source URL" className="md:col-span-2"><input className={inputClass} {...register("universityRequirements.officialSourceUrl")} /></FormField>
+      <div className="bg-blue-50 border border-blue-200 rounded-input p-4">
+        <p className="text-sm text-blue-900">
+          <strong>Document writing requirements are now collected per document.</strong>
+          {" "}When you create a document (SOP, Visa SOP, Essay, LOR, etc.), you enter
+          its specific prompt, word limits, topics, questions, and formatting there.
+          This section only stores reusable program/university context.
+        </p>
       </div>
+
+      <FormField label="Official Source URL" className="md:col-span-2">
+        <input
+          className={inputClass}
+          {...register("universityRequirements.officialSourceUrl")}
+          placeholder="https://university.edu/program/admissions"
+        />
+      </FormField>
 
       {officialSourceUrl && (
         <div className="bg-blue-50 border border-blue-200 rounded-input p-3">
           <p className="text-sm text-blue-800">
-            <strong>Official source:</strong> Requirements from this URL are verified.
-            Do not modify verified official source text silently.
+            <strong>Official source:</strong> This URL is used for program/university
+            context. Document-specific requirements are resolved per document.
           </p>
         </div>
       )}

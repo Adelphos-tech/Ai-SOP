@@ -21,7 +21,7 @@ export const INTAKE_SECTIONS: IntakeSectionDef[] = [
   { id: 5, slug: "masters-motivation", label: "Master's Motivation", optional: false, description: "Why pursue a master's in this field now?" },
   { id: 6, slug: "country-questions", label: "Country Questions", optional: false, description: "Country-specific motivation and post-study plans." },
   { id: 7, slug: "subject-requirements", label: "Subject Requirements", optional: true, description: "Program-specific requirements and prerequisites." },
-  { id: 8, slug: "university-requirements", label: "University Requirements", optional: true, description: "Resolved university/document requirements." },
+  { id: 8, slug: "university-requirements", label: "Program / University Info", optional: true, description: "Official source URL and reusable program context. Document-specific writing requirements are collected per document." },
   { id: 9, slug: "career-goals", label: "Career Goals", optional: false, description: "Short-term and long-term career objectives." },
 ];
 

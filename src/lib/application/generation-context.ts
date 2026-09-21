@@ -288,7 +288,26 @@ export function resolveAndMergePrompt(
 ): MergedPrompt {
   const documentType = document.documentType as DocumentType;
   const defaultTemplate = getDefaultTemplate(documentType);
-  const uni = universityRequirements || {};
+
+  // ===== LEGACY CUTOVER =====
+  // Documents created BEFORE the requirements-scope migration have
+  // use_legacy_requirements=TRUE and keep inheriting from
+  // profile.universityRequirements. NEW documents (created after the
+  // migration) have use_legacy_requirements=FALSE and resolve from
+  // document fields → writing requirement → default template only.
+  // This prevents a generic application-level SOP prompt from bleeding
+  // into an unrelated new Visa SOP or Essay.
+  const useLegacy = document.useLegacyRequirements === true;
+  const uni = useLegacy ? (universityRequirements || {}) : {};
+
+  // Document-scoped requirement fields (NEW documents own these directly).
+  const docMandatoryTopics = typeof document.mandatoryTopics === "string" && document.mandatoryTopics.trim()
+    ? document.mandatoryTopics.trim()
+    : undefined;
+  const docAdditionalQuestions = typeof document.additionalQuestions === "string" && document.additionalQuestions.trim()
+    ? document.additionalQuestions.trim()
+    : undefined;
+
   const uniWordMin = uniReqNumber(uni.wordMin);
   const uniWordMax = uniReqNumber(uni.wordMax);
   const uniCharLimit = uniReqNumber(uni.characterLimit);
@@ -296,6 +315,15 @@ export function resolveAndMergePrompt(
   const uniFormatting = typeof uni.formattingRules === "string" && uni.formattingRules.trim() ? uni.formattingRules.trim() : undefined;
   const uniTopics = uniReqLines(uni.mandatoryTopics);
   const uniQuestions = uniReqLines(uni.specificQuestions);
+
+  // Document-scoped topics/questions (NEW documents). For legacy documents,
+  // these columns are NULL so they fall through to universityRequirements.
+  const docTopics = docMandatoryTopics ? docMandatoryTopics.split("\n").map((s: string) => s.trim()).filter(Boolean) : [];
+  const docQuestions = docAdditionalQuestions ? docAdditionalQuestions.split("\n").map((s: string) => s.trim()).filter(Boolean) : [];
+
+  // Final resolved topics/questions: document → university (legacy only) → none
+  const resolvedTopics = docTopics.length ? docTopics : (useLegacy ? uniTopics : []);
+  const resolvedQuestions = docQuestions.length ? docQuestions : (useLegacy ? uniQuestions : []);
 
   // Value + provenance in one evaluation — the fieldSources map always
   // reflects exactly which candidate supplied the resolved value.
@@ -344,8 +372,8 @@ export function resolveAndMergePrompt(
           facultyInstructions: officialFaculty ? "OFFICIAL_REQUIREMENT" : undefined,
           formattingInstructions: fmt.s,
         },
-        requiredTopics: uniTopics.length ? uniTopics : undefined,
-        additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
+        requiredTopics: resolvedTopics.length ? resolvedTopics : undefined,
+        additionalQuestions: resolvedQuestions.length ? resolvedQuestions : undefined,
         writingRequirementId: writingRequirement.id,
         requirementSetId: writingRequirement.requirementSetId,
         resolutionPath: "OFFICIAL_VERIFIED",
@@ -375,8 +403,8 @@ export function resolveAndMergePrompt(
           facultyInstructions: officialFaculty ? "OFFICIAL_REQUIREMENT" : undefined,
           formattingInstructions: fmt.s,
         },
-        requiredTopics: uniTopics.length ? uniTopics : undefined,
-        additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
+        requiredTopics: resolvedTopics.length ? resolvedTopics : undefined,
+        additionalQuestions: resolvedQuestions.length ? resolvedQuestions : undefined,
         writingRequirementId: writingRequirement.id,
         requirementSetId: writingRequirement.requirementSetId,
         resolutionPath: "OFFICIAL_VERIFIED",
@@ -404,8 +432,8 @@ export function resolveAndMergePrompt(
           specialInstructions: "DEFAULT_TEMPLATE",
           formattingInstructions: fmt.s,
         },
-        requiredTopics: uniTopics.length ? uniTopics : undefined,
-        additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
+        requiredTopics: resolvedTopics.length ? resolvedTopics : undefined,
+        additionalQuestions: resolvedQuestions.length ? resolvedQuestions : undefined,
         writingRequirementId: writingRequirement.id,
         requirementSetId: writingRequirement.requirementSetId,
         resolutionPath: "OFFICIAL_VERIFIED",
@@ -443,8 +471,8 @@ export function resolveAndMergePrompt(
         specialInstructions: sp.s,
         formattingInstructions: fmt.s,
       },
-      requiredTopics: uniTopics.length ? uniTopics : undefined,
-      additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
+      requiredTopics: resolvedTopics.length ? resolvedTopics : undefined,
+      additionalQuestions: resolvedQuestions.length ? resolvedQuestions : undefined,
       resolutionPath: "DEFAULT_TEMPLATE",
       mergedWithDefault: false,
     };
@@ -452,8 +480,10 @@ export function resolveAndMergePrompt(
 
   // Case 3: Document has a manual prompt (USER_PROVIDED_PORTAL_PROMPT, CONSULTANT_PROVIDED, CUSTOM).
   // A consultant-provided PROMPT overrides the prompt only — limits,
-  // mandatory topics, questions and formatting still inherit from the
-  // saved University Requirements field-by-field.
+  // mandatory topics, questions and formatting inherit from the document's
+  // own fields first. For legacy documents (use_legacy_requirements=TRUE),
+  // they also inherit from saved University Requirements. For NEW documents,
+  // universityRequirements is NOT used — only document fields and defaults.
   const wMin = pick([document.wordMin, "DOCUMENT"], [uniWordMin, "UNIVERSITY_REQUIREMENTS"]);
   const wMax = pick([document.wordMax, "DOCUMENT"], [uniWordMax, "UNIVERSITY_REQUIREMENTS"]);
   const ch = pick([document.characterLimit, "DOCUMENT"], [uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
@@ -476,8 +506,8 @@ export function resolveAndMergePrompt(
       facultyInstructions: document.facultyInstructions ? "DOCUMENT" : undefined,
       formattingInstructions: fmt.s,
     },
-    requiredTopics: uniTopics.length ? uniTopics : undefined,
-    additionalQuestions: uniQuestions.length ? uniQuestions : undefined,
+    requiredTopics: resolvedTopics.length ? resolvedTopics : undefined,
+    additionalQuestions: resolvedQuestions.length ? resolvedQuestions : undefined,
     resolutionPath: "MANUAL",
     mergedWithDefault: false,
   };
