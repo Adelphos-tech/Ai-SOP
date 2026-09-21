@@ -112,6 +112,8 @@ export default function ApplicationWorkspacePage() {
   const [showCVUpload, setShowCVUpload] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [docToDelete, setDocToDelete] = useState<Document | null>(null);
+  const [deletingDoc, setDeletingDoc] = useState(false);
 
   const loadTokenRef = useRef(0);
 
@@ -370,6 +372,33 @@ export default function ApplicationWorkspacePage() {
       setError(err?.message || "Failed to resolve prompt");
     } finally {
       setResolving(false);
+    }
+  }
+
+  async function handleDeleteDocument() {
+    if (!docToDelete) return;
+    setDeletingDoc(true);
+    setError("");
+    try {
+      const res = await fetch("/api/application/document/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: docToDelete.id,
+          applicationId,
+          studentId,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to delete document.");
+      }
+      setDocToDelete(null);
+      await loadApplication();
+    } catch (err: any) {
+      setError(err?.message || "Failed to delete document.");
+    } finally {
+      setDeletingDoc(false);
     }
   }
 
@@ -851,43 +880,72 @@ export default function ApplicationWorkspacePage() {
               actionColor = "text-dvivid-primary font-medium";
             }
             return (
-              <Link
+              <div
                 key={doc.id}
-                href={docHref}
-                className="block bg-white border border-dvivid-border rounded-card shadow-card p-6 hover:shadow-card-hover hover:border-dvivid-primary-border transition-all"
+                className="relative bg-white border border-dvivid-border rounded-card shadow-card p-6 hover:shadow-card-hover hover:border-dvivid-primary-border transition-all"
               >
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-card-title text-dvivid-text-primary">{doc.documentTitle}</h3>
-                    <p className="text-sm text-dvivid-text-secondary mt-1 line-clamp-2">
-                      {doc.promptText.substring(0, 120)}{doc.promptText.length > 120 ? "..." : ""}
-                    </p>
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      <PromptSourceBadge source={doc.promptSource} />
-                      <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-secondary text-xs font-medium rounded-full">
-                        {doc.documentType.replace(/_/g, " ").toLowerCase()}
-                      </span>
-                      {doc.wordMax && (
-                        <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
-                          {doc.wordMin || 0}-{doc.wordMax} words
+                <Link href={docHref} className="block">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-card-title text-dvivid-text-primary">{doc.documentTitle}</h3>
+                      <p className="text-sm text-dvivid-text-secondary mt-1 line-clamp-2">
+                        {doc.promptText.substring(0, 120)}{doc.promptText.length > 120 ? "..." : ""}
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        <PromptSourceBadge source={doc.promptSource} />
+                        <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-secondary text-xs font-medium rounded-full">
+                          {doc.documentType.replace(/_/g, " ").toLowerCase()}
                         </span>
+                        {doc.wordMax && (
+                          <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
+                            {doc.wordMin || 0}-{doc.wordMax} words
+                          </span>
+                        )}
+                        {doc.pageLimit && (
+                          <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
+                            {doc.pageLimit} page(s)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                      <StatusBadge status={doc.generationStatus} />
+                      {doc.generationStatus !== "NOT_STARTED" && doc.reviewStatus && (
+                        <StatusBadge status={doc.reviewStatus} />
                       )}
-                      {doc.pageLimit && (
-                        <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
-                          {doc.pageLimit} page(s)
-                        </span>
-                      )}
+                      <span className={`text-sm ${actionColor}`}>{actionLabel}</span>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                    <StatusBadge status={doc.generationStatus} />
-                    {doc.generationStatus !== "NOT_STARTED" && doc.reviewStatus && (
-                      <StatusBadge status={doc.reviewStatus} />
-                    )}
-                    <span className={`text-sm ${actionColor}`}>{actionLabel}</span>
+                </Link>
+                {/* Delete document — secondary/destructive, never more prominent than Open */}
+                {docToDelete?.id === doc.id ? (
+                  <div className="mt-4 pt-4 border-t border-dvivid-border-light bg-dvivid-error-light/50 -mx-6 -mb-6 px-6 pb-6 rounded-b-card">
+                    <p className="text-sm font-semibold text-dvivid-error mb-1">
+                      Delete &ldquo;{doc.documentTitle}&rdquo;?
+                    </p>
+                    <p className="text-sm text-dvivid-text-secondary mb-3">
+                      This will permanently delete this document, its generated versions, and its generation history. Other documents and the application will not be affected.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={(e) => { e.preventDefault(); handleDeleteDocument(); }}
+                        disabled={deletingDoc}
+                        className="px-4 py-2 text-sm font-medium rounded-input bg-dvivid-error text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+                      >
+                        {deletingDoc ? "Deleting..." : "Delete Document"}
+                      </button>
+                      <SecondaryButton onClick={() => setDocToDelete(null)}>Cancel</SecondaryButton>
+                    </div>
                   </div>
-                </div>
-              </Link>
+                ) : (
+                  <button
+                    onClick={(e) => { e.preventDefault(); setDocToDelete(doc); }}
+                    className="absolute bottom-4 right-6 text-xs text-dvivid-error/60 hover:text-dvivid-error hover:underline font-medium"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { PROMPT_SOURCE_LABELS } from "@/lib/application/application-types";
 import { getProfileReadiness } from "@/lib/application/intake-completion";
@@ -168,12 +168,15 @@ function humanizeGenerationFailure(message?: string | null): string {
 
 export default function DocumentWorkspacePage() {
   const params = useParams();
+  const router = useRouter();
   const studentId = params.studentId as string;
   const applicationId = params.applicationId as string;
   const documentId = params.documentId as string;
 
   const [document, setDocument] = useState<Document | null>(null);
   const [resolvedReqs, setResolvedReqs] = useState<ResolvedRequirements | null>(null);
+  const [confirmDocDelete, setConfirmDocDelete] = useState(false);
+  const [deletingDoc, setDeletingDoc] = useState(false);
   const [student, setStudent] = useState<Student | null>(null);
   const [application, setApplication] = useState<Application | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
@@ -523,6 +526,28 @@ export default function DocumentWorkspacePage() {
     }
   }
 
+  async function handleDeleteDocument() {
+    setDeletingDoc(true);
+    setError("");
+    try {
+      const res = await fetch("/api/application/document/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId, applicationId, studentId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to delete document.");
+      }
+      router.push(`/students/${studentId}/applications/${applicationId}`);
+    } catch (err: any) {
+      setError(err?.message || "Failed to delete document.");
+      setConfirmDocDelete(false);
+    } finally {
+      setDeletingDoc(false);
+    }
+  }
+
   async function handleExport(format: "PDF" | "DOCX", mode: "PREVIEW" | "FINAL", explicitVersionId?: string) {
     const versionId = explicitVersionId || selectedVersion?.id;
     if (!versionId) return;
@@ -636,6 +661,37 @@ export default function DocumentWorkspacePage() {
             <p className="text-sm text-dvivid-success font-medium">
               ✓ Approved Version {approvedVersion.versionNumber}
             </p>
+          </div>
+        )}
+
+        {/* Delete document — destructive, explicit confirmation */}
+        {!confirmDocDelete ? (
+          <div className="mt-4 pt-4 border-t border-dvivid-border-light">
+            <button
+              onClick={() => setConfirmDocDelete(true)}
+              className="text-xs text-dvivid-error/60 hover:text-dvivid-error hover:underline font-medium"
+            >
+              Delete document
+            </button>
+          </div>
+        ) : (
+          <div className="mt-4 pt-4 border-t border-dvivid-border-light">
+            <p className="text-sm font-semibold text-dvivid-error mb-1">
+              Delete &ldquo;{document?.documentTitle}&rdquo;?
+            </p>
+            <p className="text-sm text-dvivid-text-secondary mb-3">
+              This will permanently delete this document, its generated versions, and its generation history. Other documents and the application will not be affected.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleDeleteDocument}
+                disabled={deletingDoc}
+                className="px-4 py-2 text-sm font-medium rounded-input bg-dvivid-error text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {deletingDoc ? "Deleting..." : "Delete Document"}
+              </button>
+              <SecondaryButton onClick={() => setConfirmDocDelete(false)}>Cancel</SecondaryButton>
+            </div>
           </div>
         )}
       </div>

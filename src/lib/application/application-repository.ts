@@ -374,6 +374,96 @@ export async function deleteApplicationCascade(applicationId: string): Promise<b
 }
 
 /**
+ * Delete ONE document and all of its owned data — atomically.
+ *
+ * Scope: stage_responses (via runs + via document) → generation_runs →
+ * document_versions → application_documents row.
+ *
+ * NEVER touches: student, profile_data, application, other documents,
+ * shared program/requirement library data.
+ *
+ * Returns:
+ *   "DELETED"      — document removed
+ *   "NOT_FOUND"    — document does not exist
+ *   "MISMATCH"     — document does not belong to the stated application
+ *   "GENERATING"   — document has an active generation (RUNNING/QUEUED/
+ *                    CANCEL_REQUESTED) — caller must cancel first
+ */
+export async function deleteDocumentCascade(
+  documentId: string,
+  applicationId: string,
+): Promise<"DELETED" | "NOT_FOUND" | "MISMATCH" | "GENERATING"> {
+  const pool = getDbPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Lock the document row
+    const [docRows] = await conn.execute(
+      "SELECT id, application_id, generation_status FROM application_documents WHERE id = ? FOR UPDATE",
+      [documentId],
+    );
+    const doc = (docRows as any[])[0];
+    if (!doc) {
+      await conn.rollback();
+      return "NOT_FOUND";
+    }
+    if (doc.application_id !== applicationId) {
+      await conn.rollback();
+      return "MISMATCH";
+    }
+
+    // Active generation safety: do NOT delete underneath an active worker.
+    // The document's generation_status is the authoritative flag; the
+    // generation_runs row may also be RUNNING/QUEUED/CANCEL_REQUESTED.
+    if (doc.generation_status === "GENERATING") {
+      await conn.rollback();
+      return "GENERATING";
+    }
+    // Also check generation_runs for an active run (defensive — covers
+    // cases where generation_status was not yet flipped).
+    const [runRows] = await conn.execute(
+      "SELECT id, status FROM generation_runs WHERE document_id = ? AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED') LIMIT 1",
+      [documentId],
+    );
+    if ((runRows as any[])[0]) {
+      await conn.rollback();
+      return "GENERATING";
+    }
+
+    // 1. Stage responses — via runs (no FK on either table)
+    await conn.execute(
+      `DELETE gsr FROM generation_stage_responses gsr
+       JOIN generation_runs gr ON gsr.run_id = gr.id
+       WHERE gr.document_id = ?`,
+      [documentId],
+    );
+    // Stage responses linked directly by document_id (defensive)
+    await conn.execute(
+      "DELETE FROM generation_stage_responses WHERE document_id = ?",
+      [documentId],
+    );
+
+    // 2. Generation runs (no FK)
+    await conn.execute("DELETE FROM generation_runs WHERE document_id = ?", [documentId]);
+
+    // 3. Document versions (explicit; mirrors FK cascade)
+    await conn.execute("DELETE FROM document_versions WHERE document_id = ?", [documentId]);
+
+    // 4. The document itself
+    await conn.execute("DELETE FROM application_documents WHERE id = ?", [documentId]);
+
+    await conn.commit();
+    return "DELETED";
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
  * Delete a student and EVERYTHING owned by them — atomically.
  *
  * Scope: students row (incl. profile_data) + all of the student's
