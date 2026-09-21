@@ -216,13 +216,15 @@ async function runTests() {
     assert(template.wordMax === 1000, "SOP default word max is 1000");
   }
 
-  // --- Test 9: Default template for VISA_SOP mentions home country ties ---
-  console.log("Test 9: Default template for VISA_SOP mentions home country ties");
+  // --- Test 9: Default template for VISA_SOP is study-purpose focused ---
+  console.log("Test 9: Default template for VISA_SOP is study-purpose focused");
   {
     const template = getDefaultTemplate("VISA_SOP");
     assert(template.documentType === "VISA_SOP", "Document type is VISA_SOP");
-    assert(template.promptText.includes("Ties to Home Country"), "Prompt includes home country ties section");
-    assert(template.promptText.includes("intent to return"), "Prompt mentions intent to return");
+    assert(template.promptText.includes("Study Purpose"), "Prompt includes Study Purpose section");
+    assert(template.promptText.includes("Post-Study Intentions"), "Prompt includes Post-Study Intentions section");
+    assert(!template.promptText.includes("Ties to Home Country"), "Prompt must NOT include old 'Ties to Home Country' section");
+    assert(!template.promptText.includes("Demonstrate clear intent to return"), "Prompt must NOT force immediate-return claim");
   }
 
   // --- Test 10: Default templates are evidence-constrained ---

@@ -415,8 +415,13 @@ export function resolveAndMergePrompt(
   }
 
   // Case 2: Document has DVIVID_DEFAULT_TEMPLATE
+  // Always resolve against the CURRENT canonical default template, not the
+  // text persisted at creation time. The persisted promptText is a snapshot
+  // from when the document was created — it must NOT override the current
+  // default template, otherwise template updates never reach existing
+  // documents. The promptSource stays DVIVID_DEFAULT_TEMPLATE so the
+  // display/generation knows this is a default-template document.
   if (document.promptSource === "DVIVID_DEFAULT_TEMPLATE") {
-    const pt = pick([document.promptText, "DOCUMENT"], [defaultTemplate.promptText, "DEFAULT_TEMPLATE"]);
     const wMin = pick([document.wordMin, "DOCUMENT"], [uniWordMin, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.wordMin, "DEFAULT_TEMPLATE"]);
     const wMax = pick([document.wordMax, "DOCUMENT"], [uniWordMax, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.wordMax, "DEFAULT_TEMPLATE"]);
     const ch = pick([document.characterLimit, "DOCUMENT"], [uniCharLimit, "UNIVERSITY_REQUIREMENTS"]);
@@ -424,7 +429,7 @@ export function resolveAndMergePrompt(
     const sp = pick([document.specialInstructions, "DOCUMENT"], [defaultTemplate.specialInstructions, "DEFAULT_TEMPLATE"]);
     const fmt = pick([document.formattingInstructions, "DOCUMENT"], [uniFormatting, "UNIVERSITY_REQUIREMENTS"], [defaultTemplate.formattingInstructions, "DEFAULT_TEMPLATE"]);
     return {
-      promptText: pt.v!,
+      promptText: defaultTemplate.promptText,
       promptSource: "DVIVID_DEFAULT_TEMPLATE",
       wordMin: wMin.v,
       wordMax: wMax.v,
@@ -433,7 +438,7 @@ export function resolveAndMergePrompt(
       specialInstructions: sp.v,
       formattingInstructions: fmt.v,
       fieldSources: {
-        promptText: pt.s,
+        promptText: "DEFAULT_TEMPLATE",
         wordMin: wMin.s, wordMax: wMax.s, characterLimit: ch.s, pageLimit: pg.s,
         specialInstructions: sp.s,
         formattingInstructions: fmt.s,

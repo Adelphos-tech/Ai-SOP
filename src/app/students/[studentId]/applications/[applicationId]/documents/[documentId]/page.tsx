@@ -1034,7 +1034,7 @@ export default function DocumentWorkspacePage() {
               <div className="space-y-4">
                 <div className="bg-dvivid-surface-alt border border-dvivid-border-light rounded-input p-4">
                   <p className="text-xs text-dvivid-text-muted mb-1">Source: {promptSourceLabel}</p>
-                  <p className="text-sm text-dvivid-text-primary whitespace-pre-wrap">{document?.promptText}</p>
+                  <p className="text-sm text-dvivid-text-primary whitespace-pre-wrap">{resolvedReqs?.promptText ?? document?.promptText}</p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {([
