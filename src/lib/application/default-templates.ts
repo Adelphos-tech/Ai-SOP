@@ -220,36 +220,47 @@ Guidelines:
   VISA_SOP: {
     documentType: "VISA_SOP",
     label: "Visa SOP (D-Vivid Default)",
-    promptText: `Write a Visa Statement of Purpose for your student visa application.
+    promptText: `Write a Visa Statement of Purpose for the applicant's student visa application.
 
-Address the following:
+The statement should explain:
 
-1. Your Background
-   - Brief academic and professional summary.
-   - Your current status and qualifications.
+1. Academic and Professional Background
+- Relevant academic progression.
+- Relevant professional experience and current professional direction.
 
-2. Why This Country & Institution
-   - Why you chose to study in this country.
-   - Why this specific institution and program.
+2. Study Purpose
+- Why further study is appropriate at this stage.
+- How the proposed field/program connects with previous education and professional experience.
+- Specific knowledge or skill gaps the applicant wants to address.
 
-3. Your Study Plan
-   - What you will study and for how long.
-   - How this fits your career progression.
+3. Why This Country, Institution, and Program
+- Why the applicant has chosen the destination country.
+- Why the selected institution/program is appropriate, using only verified program information available in the application.
+- Do not invent courses, rankings, faculty, laboratories, employment outcomes, or other institution-specific claims.
 
-4. Ties to Home Country
-   - Family, property, or career ties that demonstrate intent to return.
-   - Long-term career plans in your home country.
+4. Career Relevance
+- How the proposed study supports the applicant's short-term professional goals.
+- How it connects with longer-term career development.
 
-5. Financial Support
-   - How you will fund your studies (if applicable).
+5. Post-Study Intentions
+- Explain the applicant's stated post-study intentions truthfully.
+- If the applicant has expressed interest in professional experience abroad, describe it only as subject to applicable immigration rules and available opportunities.
+- Where supported by applicant evidence, explain longer-term professional connections with the applicant's home country and/or international markets.
+
+6. Additional Visa-Relevant Circumstances
+- Include financial arrangements, sponsorship, family ties, property, employment commitments, immigration history, or other visa-related facts ONLY when they have explicitly been provided and approved.
+- Omit these topics when supporting evidence is unavailable.
 
 Guidelines:
-- Be factual and honest.
-- Demonstrate clear intent to return home after studies.
-- Do not fabricate financial details or ties.`,
+- Be factual, coherent, and professional.
+- Focus on genuine study purpose and logical academic/professional progression.
+- Use professional examples selectively; do not turn the statement into a CV in prose.
+- Do not fabricate missing information.
+- Do not assume property ownership, family circumstances, financial resources, sponsorship, job offers, immigration history, or permanent settlement intentions.
+- Do not force an immediate-return claim if the applicant's approved post-study intentions are more nuanced.`,
     wordMin: 800,
     wordMax: 1200,
-    specialInstructions: "Demonstrate strong home-country ties. Be factual about finances and plans.",
+    specialInstructions: "Use only approved applicant evidence. Do not fabricate finances, family ties, property, or immigration intent. Discuss visa-specific facts only when supplied.",
     formattingInstructions: "Standard 12pt font, 1-inch margins, single or 1.5 spacing.",
   },
 
