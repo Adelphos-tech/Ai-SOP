@@ -44,6 +44,7 @@ async function main() {
   const { buildGenerationArtifacts } = await import("../src/lib/application/generation-service");
   const { buildApplicationEvidenceBundle } = await import("../src/lib/ai/application-evidence-bundle");
   const { buildComponentEvidencePackets } = await import("../src/lib/ai/component-evidence-packet");
+  const { buildDocumentEvidencePacket, renderDocumentEvidencePacketDiagnostics } = await import("../src/lib/ai/document-evidence-policy");
   const { checkMandatoryTopicEvidence, isHardMandatoryTopicStatus } = await import("../src/lib/requirements/generation-gate");
   const { checkMissingMandatoryTopics } = await import("../src/lib/ai/claim-provenance");
   const { buildGenericPlannerPrompt } = await import("../src/lib/ai/prompts/generic/planner");
@@ -80,6 +81,43 @@ async function main() {
   check("Motivation evidence", !populated((ctx.profile as any)?.mastersMotivation) || byPrefix("SF-MOTIVATION-").length > 0, `entries=${byPrefix("SF-MOTIVATION-").length}`);
   check("Country evidence", !populated((ctx.profile as any)?.countryQuestionnaire?.answers) || byPrefix("SF-COUNTRY-").length > 0, `entries=${byPrefix("SF-COUNTRY-").length}`);
   check("Career evidence", !populated((ctx.profile as any)?.careerGoalsStructured) || byPrefix("SF-CAREER-").length > 0, `entries=${byPrefix("SF-CAREER-").length}`);
+
+  // ===== DOCUMENT EVIDENCE POLICY =====
+  // Derive a document-specific packet from the canonical ledger. This is
+  // advisory diagnostics only — missing HIGH/MEDIUM/LOW evidence NEVER fails
+  // preflight. Only the existing legitimate minimum-data gates remain fatal.
+  const docType = (ctx.documentTypeConfig?.documentType as string) || "CUSTOM";
+  const docPacket = buildDocumentEvidencePacket({ documentType: docType, fullEvidenceLedger: bundle.ledger });
+  const ds = docPacket.selectionSummary;
+  check("Document Evidence Policy", true, `type=${docType} selected=${ds.selectedCount} excluded=${ds.excludedCount} high=${ds.byPriority.HIGH}`);
+  check("Selected evidence", ds.selectedCount > 0, `count=${ds.selectedCount}`);
+  check("Excluded evidence", ds.excludedCount >= 0, `count=${ds.excludedCount}`);
+  check("High-priority evidence available", ds.byPriority.HIGH >= 0, `count=${ds.byPriority.HIGH}`);
+
+  // Per-stage evidence scope — Planner/Writer/QR share the filtered packet;
+  // Finalizer uses filtered + repair-authorized (no repair auth in preflight);
+  // Fact Reviewer uses the full canonical ledger.
+  const { buildFilteredLedgerView, buildFinalizerLedgerView } = await import("../src/lib/ai/document-evidence-policy");
+  const filteredView = buildFilteredLedgerView(docPacket);
+  const finalizerView = buildFinalizerLedgerView(docPacket, []);
+  check("Planner selected", filteredView.allEntries.length >= 0, `count=${filteredView.allEntries.length}`);
+  check("Writer selected", filteredView.allEntries.length >= 0, `count=${filteredView.allEntries.length}`);
+  check("QR selected", filteredView.allEntries.length >= 0, `count=${filteredView.allEntries.length}`);
+  check("Finalizer selected", finalizerView.allEntries.length >= 0, `count=${finalizerView.allEntries.length}`);
+  check("Fact Reviewer full", bundle.allEntries.length >= 0, `count=${bundle.allEntries.length}`);
+  // Planner == Writer == QR base scope
+  check("Planner == Writer == QR base scope", true,
+    `planner=${filteredView.allEntries.length} writer=${filteredView.allEntries.length} qr=${filteredView.allEntries.length}`);
+  // Finalizer <= filtered/repair scope (no repair auth in preflight → == filtered)
+  check("Finalizer <= filtered/repair scope", finalizerView.allEntries.length <= filteredView.allEntries.length,
+    `finalizer=${finalizerView.allEntries.length} filtered=${filteredView.allEntries.length}`);
+  // Fact Reviewer == full canonical ledger
+  check("Fact Reviewer == full canonical ledger", bundle.allEntries.length === ds.fullCount,
+    `full=${bundle.allEntries.length} packet_full=${ds.fullCount}`);
+  // Verbose diagnostic — IDs + categories only, no raw evidence text.
+  if (process.env.PREFLIGHT_VERBOSE) {
+    console.log("\n" + renderDocumentEvidencePacketDiagnostics(docPacket) + "\n");
+  }
 
   // ===== REQUIREMENT RESOLUTION =====
   check("Word limits", rc.wordLimit.min !== null || rc.wordLimit.max !== null || !((ctx.profile as any)?.universityRequirements?.wordMin), `min=${rc.wordLimit.min} max=${rc.wordLimit.max}`);

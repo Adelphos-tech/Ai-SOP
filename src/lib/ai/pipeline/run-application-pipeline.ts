@@ -68,6 +68,13 @@ import { buildEvidenceLedger, EvidenceLedger } from "../evidence-ledger";
 import { buildApplicationEvidenceBundle, ApplicationEvidenceBundle } from "../application-evidence-bundle";
 import { planComponentActions, ActionPlanResult } from "../component-action-planner";
 import { buildComponentEvidencePackets, validateWriterEvidenceReferences, ComponentEvidencePacket } from "../component-evidence-packet";
+import {
+  buildDocumentEvidencePacket,
+  formatDocumentEvidencePacketText,
+  buildFilteredLedgerView,
+  buildFinalizerLedgerView,
+  type DocumentEvidencePacket,
+} from "../document-evidence-policy";
 import { normalizeStageOutput } from "./stage-contracts";
 import { resolveLengthContext, lengthStatusFor, wordsOf, LengthStatus } from "../length-context";
 import {
@@ -764,8 +771,22 @@ export async function runApplicationPipeline(
       programContextText: input.programContextText,
       facultyAlignment: input.facultyAlignment,
     });
+    // FULL canonical studentFactsText — preserved for the Final Fact Reviewer
+    // (full-world factual verification). Planner/Writer/QR receive a filtered
+    // document-specific packet below.
     const studentFactsText = evidenceBundle.studentFactsText;
     const programFactsText = evidenceBundle.programFactsText;
+
+    // Document-Specific Evidence Selection: derive a filtered packet from the
+    // canonical ledger. The full ledger remains canonical and is preserved on
+    // the packet for the Fact Reviewer and checkpoints. Priority is advisory —
+    // missing HIGH/MEDIUM/LOW evidence NEVER fails generation.
+    const documentEvidencePacket = buildDocumentEvidencePacket({
+      documentType: input.documentTypeConfig?.documentType || "CUSTOM",
+      fullEvidenceLedger: evidenceLedger,
+    });
+    const filteredStudentFactsText = formatDocumentEvidencePacketText(documentEvidencePacket);
+    const filteredLedger = buildFilteredLedgerView(documentEvidencePacket);
 
     // Phase 24: Pre-Generation Mandatory Topic Evidence Gate
     // Check that every mandatory official topic has suitable approved evidence
@@ -803,8 +824,10 @@ export async function runApplicationPipeline(
     }
 
     // STAGE 1: PLANNER
+    // Planner receives the DOCUMENT-SPECIFIC filtered evidence packet, not
+    // the full canonical ledger. Full ledger is preserved for Fact Reviewer.
     const plannerPrompt = buildGenericPlannerPrompt(
-      studentFactsText, input.responseComponents, input.facultyAlignment, programFactsText,
+      filteredStudentFactsText, input.responseComponents, input.facultyAlignment, programFactsText,
       input.documentTypeConfig ? `DOCUMENT TYPE: ${input.documentTypeConfig.displayName}\nWRITING PERSPECTIVE: ${input.documentTypeConfig.writingPerspective}\nDEFAULT STRUCTURE: ${input.documentTypeConfig.defaultStructure}\n${input.documentTypeConfig.promptFirst ? "ANSWER THE SUPPLIED PROMPT DIRECTLY — do NOT default to SOP structure." : ""}${narrativeProfile ? `\n${buildNarrativePlannerGuidance(narrativeProfile)}` : ""}` : undefined
     );
     const plannerResult = await execStage(
@@ -824,7 +847,7 @@ export async function runApplicationPipeline(
     // facultyEvidenceIds — earlier code looked for primaryEvidenceIds /
     // secondaryEvidenceIds, which the prompt never defines, so the
     // planner's selection was always discarded.
-    const ledgerIds = new Set(evidenceLedger.allEntries.map(e => e.id));
+    const ledgerIds = new Set(filteredLedger.allEntries.map(e => e.id));
     const plannerSelection = (plan.componentPlans || plan.responses || []).map((p: any) => {
       const emitted = [
         ...(Array.isArray(p.studentEvidenceIds) ? p.studentEvidenceIds : []),
@@ -834,9 +857,9 @@ export async function runApplicationPipeline(
         ...(Array.isArray(p.primaryEvidenceIds) ? p.primaryEvidenceIds : []),
         ...(Array.isArray(p.secondaryEvidenceIds) ? p.secondaryEvidenceIds : []),
       ].filter((id: any) => typeof id === "string");
-      // Keep only IDs that actually exist in the ledger — hallucinated or
-      // descriptive strings are dropped, and an empty result falls back to
-      // the full-entry closed world (same as before).
+      // Keep only IDs that actually exist in the (filtered) ledger —
+      // hallucinated or descriptive strings are dropped, and an empty result
+      // falls back to the filtered-entry closed world (document-specific).
       const primaryIds = Array.from(new Set(emitted.filter(id => ledgerIds.has(id))));
       const secondaryIds: string[] = [];
       const looksLikeIds = primaryIds.length > 0;
@@ -847,13 +870,16 @@ export async function runApplicationPipeline(
       };
     });
     const evidencePackets = buildComponentEvidencePackets({
-      evidenceLedger,
+      evidenceLedger: filteredLedger,
       responseComponents: input.responseComponents,
       plannerEvidenceSelection: plannerSelection,
     });
 
+    // Writer receives the DOCUMENT-SPECIFIC filtered evidence packet text +
+    // packets built from the filtered ledger. Full studentFactsText remains
+    // available for the Final Fact Reviewer only.
     const writerPrompt = buildGenericWriterPrompt(
-      plan, studentFactsText, input.responseComponents, input.facultyAlignment, writingInstructions, evidencePackets
+      plan, filteredStudentFactsText, input.responseComponents, input.facultyAlignment, writingInstructions, evidencePackets
     );
     const writerResult = await execStage(
       "writer", writerPrompt.system, writerPrompt.user
@@ -903,9 +929,12 @@ export async function runApplicationPipeline(
         }),
       }));
 
-    // STAGE 3: QUALITY REVIEWER (receives the Evidence Ledger + evidence packets)
+    // STAGE 3: QUALITY REVIEWER (receives the filtered document-specific
+    // evidence packet ledger + evidence packets — same relevant scope as
+    // Writer, plus document requirements). The full canonical ledger remains
+    // available in pipeline results/checkpoints for audit.
     const qualityPrompt = buildGenericQualityReviewerPrompt(
-      writerOutput, input.responseComponents, input.facultyAlignment, evidenceLedger, evidencePackets, input.qualityRubricInstructions,
+      writerOutput, input.responseComponents, input.facultyAlignment, filteredLedger, evidencePackets, input.qualityRubricInstructions,
       input.pipelineWritingInstructions
     );
     const qualityResult = await execStage(
@@ -1075,11 +1104,21 @@ export async function runApplicationPipeline(
 
     let finalizerPrompt;
     try {
+      // Finalizer PROMPT receives only the document-specific filtered packet
+      // PLUS repair-authorized evidence IDs from the action plan. The full
+      // canonical ledger remains stored internally for audit/checkpoints/
+      // provenance and for the Final Fact Reviewer — but the Finalizer prompt
+      // must NOT receive an unrestricted full-ledger dump that could
+      // reintroduce details the Writer correctly omitted.
+      const repairAuthorizedIds = (actionPlan.plans || []).flatMap(p =>
+        (p.topicEvidence || []).flatMap((te: any) => te.allowedEvidenceIds || [])
+      );
+      const finalizerLedger = buildFinalizerLedgerView(documentEvidencePacket, repairAuthorizedIds);
       finalizerPrompt = buildBoundedFinalizerPrompt({
         calibratedOutput: { responses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })) },
         responseComponents: input.responseComponents,
         actionPlan,
-        evidenceLedger,
+        evidenceLedger: finalizerLedger,
         renderFeedback: preFinalFeedback,
         calibratedClaims: calibratedClaims.map(c => ({ claimId: c.claimId, componentId: c.componentId })),
         complianceConstraints: input.pipelineWritingInstructions,
@@ -1137,11 +1176,15 @@ export async function runApplicationPipeline(
             }))
             .filter(fc => fc.expectedClaimIds.length > 0);
           try {
+            const repairAuthorizedIds = (actionPlan.plans || []).flatMap(p =>
+              (p.topicEvidence || []).flatMap((te: any) => te.allowedEvidenceIds || [])
+            );
+            const finalizerLedger = buildFinalizerLedgerView(documentEvidencePacket, repairAuthorizedIds);
             finalizerPrompt = buildBoundedFinalizerPrompt({
               calibratedOutput: { responses: calibratedResponses.map(r => ({ componentId: r.componentId, text: r.text })) },
               responseComponents: input.responseComponents,
               actionPlan,
-              evidenceLedger,
+              evidenceLedger: finalizerLedger,
               renderFeedback: preFinalFeedback,
               calibratedClaims: calibratedClaims.map(c => ({ claimId: c.claimId, componentId: c.componentId })),
               retryCorrection: { failedComponents },

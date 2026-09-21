@@ -807,8 +807,11 @@ export default function ApplicationWorkspacePage() {
       )}
 
       {/* Documents */}
-      <div className="mb-4">
+      <div className="mb-4 flex items-center justify-between gap-4">
         <h2 className="text-section-title text-dvivid-text-primary">Documents</h2>
+        {intakeComplete && !showAddForm && (
+          <PrimaryButton onClick={() => setShowAddForm(true)}>+ Add Document</PrimaryButton>
+        )}
       </div>
 
       {documents.length === 0 ? (
