@@ -240,7 +240,7 @@ await check("P3: GOOD PDF parse — inspector never consulted, no OCR", async ()
 });
 
 await check("P4: no duplicate merge — OCR candidate competes, winner is single canonical", async () => {
-  const xmlCandidate = mkCandidate("DOCLING_MAPPER", emptyParsedCV(), "HEADER_TEXT_48_CHARS_______________xx");
+  const xmlCandidate = mkCandidate("DOCLING_MAPPER", emptyParsedCV(), "CONFIDENTIAL — Application copy — reference number MX-2024-77 header");
   const weakOcr = {
     ...emptyParsedCV(),
     rawTextLength: 300, parseWarnings: [],
@@ -327,7 +327,7 @@ await check("E: OCR text with zero structure → EXTRACTION_ONLY, not crash", as
 await check("F1: OCR engine failure → stable CV_OCR_EXTRACTION_FAILED", async () => {
   const badOcr: ResumeParserStrategy = {
     id: "OCR_TEXT_EXTRACTION", timeoutMs: 2000,
-    async parse() { const e: any = new Error("ocr dead"); e.code = "OCR_UNREADABLE"; throw e; },
+    async parse() { const e: any = new Error("ocr dead"); e.code = "OCR_SERVICE_ERROR"; throw e; },
   };
   await assert.rejects(
     importResume(Buffer.from("img"), "img.docx", DOCX_MIME,

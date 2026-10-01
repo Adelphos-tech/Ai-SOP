@@ -27,6 +27,10 @@ class StrategyTimeoutError extends Error {
   code = "STRATEGY_TIMEOUT";
 }
 
+// Minimum extracted text for a usable CV (matches cv-parser.ts).
+const MIN_RAW_TEXT_LENGTH = 50;
+const NEAR_EMPTY_TEXT_LENGTH = 10;
+
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     promise,
@@ -64,6 +68,7 @@ export async function importResume(
 ): Promise<ResumeImportResult> {
   const chain = strategies ?? strategiesFor(filename);
   const ocr = ocrStrategy === undefined ? ocrTextExtractionStrategy : ocrStrategy;
+  const isPdf = /\.pdf$/i.test(filename);
   const candidates: ResumeParseCandidate[] = [];
   const attempts: ResumeImportResult["attempts"] = [];
   let lastError: any = null;
@@ -162,16 +167,46 @@ export async function importResume(
   if (!best) {
     // Every strategy threw — surface the most actionable error we saw.
     // When OCR actually ran on image content and still got nothing, say so;
-    // when the file had no image content at all (corrupt), keep the
-    // original extraction error.
-    if (ocrError && ocrError?.code !== "OCR_NO_IMAGE_CONTENT") {
+    // when the file had no image content at all (corrupt) OR the OCR
+    // service itself was unreachable/timed out (OCR simply unavailable —
+    // same as pre-OCR behavior), keep the original extraction error.
+    const ocrUnavailable =
+      ocrError?.code === "OCR_NO_IMAGE_CONTENT" ||
+      ocrError?.code === "OCR_UNREACHABLE" ||
+      ocrError?.code === "OCR_UNREADABLE";
+    if (ocrError && !ocrUnavailable) {
       throw createCVParseFailure(
         ocrError?.code === "OCR_LIMIT_EXCEEDED" ? "CV_OCR_LIMIT_EXCEEDED" : "CV_OCR_EXTRACTION_FAILED",
         undefined,
         { strategiesTried: attempts.length },
       );
     }
+    // Legacy PDF contract (parseCVFile): unparseable structure →
+    // CORRUPT_OR_UNREADABLE_PDF; valid PDF with no text layer →
+    // IMAGE_ONLY_PDF. Keep those stable user-facing codes.
+    if (isPdf) {
+      if (lastError?.code === "CV_EXTRACTION_FAILED") {
+        throw createCVParseFailure("CORRUPT_OR_UNREADABLE_PDF", lastError?.message, {
+          strategiesTried: attempts.length,
+        });
+      }
+      if (lastError?.code === "CV_EXTRACTION_EMPTY") {
+        throw createCVParseFailure("IMAGE_ONLY_PDF", undefined, {
+          strategiesTried: attempts.length,
+        });
+      }
+    }
     throw lastError || createCVParseFailure("PARSE_FAILED");
+  }
+  // Legacy minimum-text contract: below 50 chars the file is not usable,
+  // even if a strategy produced a candidate (matches parseCVFile).
+  const bestRawLength = best.diagnostics?.rawTextLength ?? 0;
+  if (bestRawLength < MIN_RAW_TEXT_LENGTH) {
+    throw createCVParseFailure(
+      isPdf && bestRawLength <= NEAR_EMPTY_TEXT_LENGTH ? "IMAGE_ONLY_PDF" : "INSUFFICIENT_TEXT",
+      undefined,
+      { rawTextLength: bestRawLength, strategiesTried: attempts.length },
+    );
   }
   if (best.coverage.status === "UNREADABLE") {
     throw createCVParseFailure("CV_EXTRACTION_EMPTY", undefined, {
