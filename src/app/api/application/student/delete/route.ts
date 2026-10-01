@@ -8,6 +8,7 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
+import { emitEvent } from "@/lib/observability/events";
 import {
   getStudent,
   deleteStudentCascade,
@@ -42,19 +43,30 @@ export async function POST(request: NextRequest) {
     await authorizeStudentAccess(consultant, body.studentId);
 
     const deleted = await deleteStudentCascade(body.studentId);
-    if (!deleted) {
+    if (deleted === "NOT_FOUND") {
       return NextResponse.json({ error: "Student not found" }, { status: 404 });
     }
+    if (deleted === "GENERATING") {
+      return NextResponse.json(
+        {
+          error: "Cannot delete a student while generation is in progress. Cancel the generation first.",
+          code: "GENERATION_IN_PROGRESS",
+        },
+        { status: 409 },
+      );
+    }
 
-    console.warn(
-      `[student-delete] studentId=${body.studentId} name="${student.firstName} ${student.lastName}" email=${student.email} consultant=${consultant.id}`,
-    );
+    // Audit event — ids only, never name/email (PII).
+    emitEvent("student_deleted", {
+      studentId: body.studentId,
+      actorId: consultant.id,
+    }, "warn");
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json(
-      { error: error?.message || "Failed to delete student." },
+      { error: "Failed to delete student.", code: "STUDENT_DELETE_FAILED" },
       { status: 500 },
     );
   }

@@ -125,7 +125,11 @@ import {
   setStageResponseUsage,
   findReusableProviderResponse,
   GenerationCancelledError,
+  GenerationSupersededError,
 } from "../../application/generation-lifecycle";
+import { emitEvent } from "../../observability/events";
+import type { UsageRequestKind } from "../types";
+import { isRunDocumentOwner } from "../../application/application-repository";
 import {
   BACKGROUND_RESPONSES_ENABLED,
   getStageTransport,
@@ -147,6 +151,7 @@ import {
   StageExecution,
   StageExecutionResult,
   StageExecutionError,
+  RETRYABLE_CONTRACT_CODES,
 } from "./stage-execution";
 import { AttemptAccounting } from "../attempt-accounting";
 import { randomUUID } from "crypto";
@@ -164,6 +169,10 @@ export interface ApplicationPipelineExecution {
   generationRunId?: string;
   /** Document id — used to record provider stage responses for recovery. */
   documentId?: string;
+  /** Correlation keys — propagated into events and the usage ledger. */
+  attemptSeq?: number | null;
+  requestId?: string;
+  recoveryCount?: number;
 }
 
 export interface ApplicationPipelineInput {
@@ -204,6 +213,9 @@ export interface GenerationWarning {
 export interface ApplicationPipelineResult {
   status: "success" | "error" | "cancelled";
   error?: string;
+  /** Provider response may still be in flight — the run should surface
+   *  RECOVERING (auto-resume polls the same response) instead of FAILED. */
+  recoverable?: boolean;
   generationId?: string;
   /** Content/quality/compliance issues that did not prevent a usable draft. */
   warnings: GenerationWarning[];
@@ -342,18 +354,41 @@ async function callOpenAIForStage(
   const model = getModelForStage(stage);
   const start = Date.now();
 
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    max_completion_tokens: getMaxCompletionTokensForStage(stage),
-    response_format: { type: "json_object" },
-    // Providers with a thinking budget (Gemini 2.5, Groq gpt-oss) —
-    // unset/omit on real OpenAI where the param is unknown.
-    ...(process.env.PROVIDER_REASONING_EFFORT ? { reasoning_effort: process.env.PROVIDER_REASONING_EFFORT } : {}),
-  } as any, abortSignal ? { signal: abortSignal } : undefined);
+  let response;
+  try {
+    response = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_completion_tokens: getMaxCompletionTokensForStage(stage),
+      response_format: { type: "json_object" },
+      // Providers with a thinking budget (Gemini 2.5, Groq gpt-oss) —
+      // unset/omit on real OpenAI where the param is unknown.
+      ...(process.env.PROVIDER_REASONING_EFFORT ? { reasoning_effort: process.env.PROVIDER_REASONING_EFFORT } : {}),
+    } as any, abortSignal ? { signal: abortSignal } : undefined);
+  } catch (e: any) {
+    // Failed call before token usage — record evidence: stable code,
+    // honest cost semantics (unknown ≠ zero), null tokens.
+    const { code, charged } = providerCreateError(e);
+    await logUsage({
+      timestamp: new Date().toISOString(), model, pipelineStage: stage,
+      provider: "openai",
+      providerResponseId: e?.id ?? null,
+      requestKind: "NEW_PROVIDER_REQUEST",
+      errorCode: code,
+      usageStatus: charged ? "USAGE_UNKNOWN" : "NOT_CHARGED_CONFIRMED",
+      inputTokens: null, cachedInputTokens: null, outputTokens: null,
+      totalTokens: null, reasoningTokens: null, estimatedCostUsd: null,
+      duration: Date.now() - start, success: false,
+    } as UsageLogEntry);
+    emitEvent("provider_request_create_failed", {
+      stage, model, provider: "openai", errorCode: code,
+      detail: (e?.message || "").slice(0, 200),
+    }, "warn");
+    throw e;
+  }
 
   let content = response.choices[0]?.message?.content || "";
   // Some OpenAI-compatible providers (Gemini) wrap JSON in markdown fences
@@ -393,12 +428,104 @@ async function callOpenAIForStage(
   await logUsage({
     timestamp: new Date().toISOString(),
     model, pipelineStage: stage,
+    providerResponseId: responseId || null,
+    requestKind: "NEW_PROVIDER_REQUEST", usageStatus: "USAGE_KNOWN",
     inputTokens: promptTokens, cachedInputTokens: cachedTokens,
     outputTokens: completionTokens, totalTokens, reasoningTokens,
     estimatedCostUsd: cost.totalCostUsd, duration, success: true,
   } as UsageLogEntry);
 
   return { content, stageUsage };
+}
+
+// ============================================================
+// PROVIDER PERSISTENCE DEPS — injectable for deterministic tests.
+// Classification (src/lib/observability/events.ts PERSISTENCE_CLASS):
+//   setProviderState / recordStageResponse / terminal diagnostics  → CORE_STATE
+//   setProviderUsage / setStageResponseUsage                        → ACCOUNTING
+//   updateProviderCheck / updateStageResponseStatus (intermediate)  → TELEMETRY
+// CORE_STATE writes are never swallowed: one retry, then the call
+// halts recoverable with GENERATION_STATE_PERSISTENCE_FAILED and the
+// provider response id is preserved via event + durable fallback file.
+// ============================================================
+export interface ProviderPersistenceDeps {
+  getRun: typeof getRun;
+  setProviderState: typeof setProviderState;
+  recordStageResponse: typeof recordStageResponse;
+  updateProviderCheck: typeof updateProviderCheck;
+  updateStageResponseStatus: typeof updateStageResponseStatus;
+  setProviderUsage: typeof setProviderUsage;
+  setStageResponseUsage: typeof setStageResponseUsage;
+  findReusableProviderResponse: typeof findReusableProviderResponse;
+}
+const realProviderDeps: ProviderPersistenceDeps = {
+  getRun, setProviderState, recordStageResponse, updateProviderCheck,
+  updateStageResponseStatus, setProviderUsage, setStageResponseUsage,
+  findReusableProviderResponse,
+};
+let providerDeps: ProviderPersistenceDeps = realProviderDeps;
+/** Test hook — pass partial overrides; null restores production deps. */
+export function setProviderPersistenceDeps(overrides: Partial<ProviderPersistenceDeps> | null): void {
+  providerDeps = { ...realProviderDeps, ...(overrides || {}) };
+}
+
+async function retryOnce<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch { await new Promise(r => setTimeout(r, 400)); return await fn(); }
+}
+
+/** Stable internal code for a provider-create failure — never a raw
+ *  provider body. 400/invalid-request is provably uncharged; everything
+ *  else leaves cost uncertain (USAGE_UNKNOWN). */
+function providerCreateError(e: any): { code: string; charged: boolean } {
+  if (e?.name === "ProviderInvalidRequestError" || e?.name === "JsonInstructionMissingError" || e?.status === 400 || /invalid_request/i.test(e?.code || "")) {
+    return { code: "PROVIDER_INVALID_REQUEST", charged: false };
+  }
+  if (e?.status === 429 || e?.name === "RateLimitError") return { code: "PROVIDER_RATE_LIMIT", charged: false };
+  if (typeof e?.status === "number" && e.status >= 500) return { code: "PROVIDER_SERVER_ERROR", charged: false };
+  if (/quota|insufficient/i.test(e?.code || "")) return { code: "PROVIDER_QUOTA", charged: false };
+  // Network/connection failure — the request MAY have reached the
+  // provider. Never claim "not charged": cost is unknown.
+  return { code: "PROVIDER_NETWORK_ERROR", charged: true };
+}
+
+/** Durable last-resort evidence when CORE_STATE DB persistence fails —
+ *  keeps the "no duplicate paid request" invariant alive across process
+ *  restarts by recording the provider response id in the attempt dir. */
+const PROVIDER_FALLBACK_FILE = "provider-responses.jsonl";
+async function appendProviderResponseFallback(basePath: string | undefined, rec: Record<string, unknown>): Promise<void> {
+  if (!basePath) return;
+  try {
+    await fs.mkdir(basePath, { recursive: true });
+    await fs.appendFile(
+      path.join(basePath, PROVIDER_FALLBACK_FILE),
+      JSON.stringify({ ...rec, at: new Date().toISOString() }) + "\n",
+    );
+  } catch (e) {
+    emitEvent("provider_fallback_write_failed", {
+      errorCode: "PROVIDER_FALLBACK_WRITE_FAILED",
+      detail: (e as Error)?.message || String(e),
+    }, "error");
+  }
+}
+async function readProviderResponseFallback(
+  basePath: string | undefined, stage: string, fingerprint: string,
+): Promise<{ responseId: string; status: string } | null> {
+  if (!basePath) return null;
+  try {
+    const raw = await fs.readFile(path.join(basePath, PROVIDER_FALLBACK_FILE), "utf8");
+    const lines = raw.trim().split("\n").filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const rec = JSON.parse(lines[i]);
+        if (rec.stage === stage && rec.fingerprint === fingerprint
+          && ["queued", "in_progress", "completed"].includes(rec.status)
+          && typeof rec.responseId === "string") {
+          return { responseId: rec.responseId, status: rec.status };
+        }
+      } catch { /* skip malformed line */ }
+    }
+    return null;
+  } catch { return null; }
 }
 
 /**
@@ -419,6 +546,11 @@ export async function callOpenAIForStageBackground(
     hashes: CheckpointHashes;
     generationStartedAtMs: number;
     isCancelRequested: () => Promise<boolean>;
+    /** Correlation + recovery evidence (optional; null-safe). */
+    attemptSeq?: number | null;
+    requestId?: string | null;
+    /** Attempt dir — durable fallback for provider response identity. */
+    attemptBasePath?: string;
   },
 ): Promise<{ content: string; stageUsage: StageUsage }> {
   const transport = getStageTransport();
@@ -432,48 +564,164 @@ export async function callOpenAIForStageBackground(
     promptHash: ctx.hashes.promptVersionHash,
   });
 
+  const ledgerBase = {
+    generationId: ctx.generationRunId,
+    generationRunId: ctx.generationRunId,
+    attemptSeq: ctx.attemptSeq ?? null,
+    documentId: ctx.documentId || null,
+    provider: "openai",
+  };
+  const eventBase = {
+    generationRunId: ctx.generationRunId,
+    attemptSeq: ctx.attemptSeq ?? null,
+    documentId: ctx.documentId || null,
+    requestId: ctx.requestId ?? null,
+    stage,
+    model,
+    fingerprint,
+  };
+  const writeLedger = (row: Partial<UsageLogEntry>) =>
+    logUsage({
+      timestamp: new Date().toISOString(), model, pipelineStage: stage,
+      ...ledgerBase,
+      inputTokens: null, cachedInputTokens: null, outputTokens: null,
+      totalTokens: null, reasoningTokens: null, estimatedCostUsd: null,
+      duration: Date.now() - stageStartedAtMs,
+      success: false,
+      ...row,
+    } as UsageLogEntry);
+
+  const haltOnPersistenceFailure = async (operation: string, cause: unknown, responseIdForEvidence?: string | null): Promise<never> => {
+    if (responseIdForEvidence) {
+      await appendProviderResponseFallback(ctx.attemptBasePath, {
+        runId: ctx.generationRunId, documentId: ctx.documentId, stage,
+        fingerprint, responseId: responseIdForEvidence, status: "queued", model,
+      });
+    }
+    emitEvent("generation_state_persistence_failed", {
+      ...eventBase,
+      providerResponseId: responseIdForEvidence ?? null,
+      operation,
+      errorCode: "GENERATION_STATE_PERSISTENCE_FAILED",
+      detail: cause instanceof Error ? cause.message : String(cause),
+    }, "error");
+    throw new StageExecutionError(
+      "GENERATION_STATE_PERSISTENCE_FAILED",
+      `GENERATION_STATE_PERSISTENCE_FAILED (${operation})`,
+      true, // technical — resumable via TECHNICAL_STAGE_RETRY
+      true, // recoverable — run goes RECOVERING, never a blind new paid call
+    );
+  };
+
   // Repeated identical terminal failures → don't auto-resubmit.
   if (getFingerprintFailureCount(fingerprint) >= 2) {
     throw new StageExecutionError("REPEATED_STAGE_FAILURE", `${stage}: identical work failed repeatedly`, false);
   }
 
   // Reuse an in-flight/completed provider response for identical work
-  // (restart recovery + double-billing guard), preferring this run's
-  // own persisted state.
+  // (restart recovery + double-billing guard). The lookup chain is
+  // ordered by authority:
+  //   1. this run's persisted provider state
+  //   2. the stage+fingerprint dedup index (cross-run)
+  //   3. the attempt-dir fallback file (survives DB write loss)
+  // A FAILED lookup means state safety is unknown → halt recoverable;
+  // never create a provider request we cannot prove is new work.
   let responseId: string | null = null;
+  let requestKind: UsageRequestKind | null = null;
   if (ctx.generationRunId) {
+    let run;
     try {
-      const run = await getRun(ctx.generationRunId);
-      if (
-        run?.providerResponseId && run.providerStage === stage &&
-        run.stageFingerprint === fingerprint &&
-        ["queued", "in_progress", "completed"].includes(run.providerResponseStatus || "")
-      ) {
-        responseId = run.providerResponseId;
-      }
-    } catch { /* resume check is best-effort */ }
+      run = await retryOnce(() => providerDeps.getRun(ctx.generationRunId!));
+    } catch (e) {
+      await haltOnPersistenceFailure("provider_state_read", e);
+    }
+    if (
+      run?.providerResponseId && run.providerStage === stage &&
+      run.stageFingerprint === fingerprint &&
+      ["queued", "in_progress", "completed"].includes(run.providerResponseStatus || "")
+    ) {
+      responseId = run.providerResponseId;
+      requestKind = "REUSED_PROVIDER_RESPONSE";
+      emitEvent("generation_provider_response_reused", {
+        ...eventBase, providerResponseId: responseId,
+        reusedProviderResponse: true, detail: "run_state",
+      });
+    }
   }
   if (!responseId) {
+    let reusable: Awaited<ReturnType<typeof findReusableProviderResponse>> = null;
     try {
-      const reusable = await findReusableProviderResponse(stage, fingerprint);
-      if (reusable) {
-        responseId = reusable.responseId;
-        // Reflect the reused response on this run for visibility/recovery.
-        if (ctx.generationRunId) {
-          try {
-            await setProviderState(ctx.generationRunId, { stage, responseId, status: reusable.status, model, fingerprint });
-          } catch { /* best-effort */ }
+      reusable = await retryOnce(() => providerDeps.findReusableProviderResponse(stage, fingerprint));
+    } catch (e) {
+      await haltOnPersistenceFailure("dedup_lookup", e);
+    }
+    if (reusable) {
+      responseId = reusable.responseId;
+      requestKind = "REUSED_PROVIDER_RESPONSE";
+      emitEvent("generation_provider_response_reused", {
+        ...eventBase, providerResponseId: responseId,
+        reusedProviderResponse: true, detail: "fingerprint_dedup",
+      });
+      // Reflect the reused response on this run for visibility/recovery.
+      // CORE_STATE-class write: if it fails, recovery still finds the
+      // response via the dedup row (which exists — it just served us) —
+      // so this specific write downgrades to warn-and-continue.
+      if (ctx.generationRunId) {
+        try {
+          await retryOnce(() => providerDeps.setProviderState(ctx.generationRunId!, { stage, responseId: reusable.responseId, status: reusable.status, model, fingerprint }));
+        } catch (e) {
+          emitEvent("provider_state_persist_failed", {
+            ...eventBase, providerResponseId: responseId, operation: "reflect_reused_state",
+            detail: (e as Error)?.message || String(e),
+          }, "warn");
         }
       }
-    } catch { /* dedup is best-effort */ }
+    }
+  }
+  if (!responseId) {
+    const fb = await readProviderResponseFallback(ctx.attemptBasePath, stage, fingerprint);
+    if (fb) {
+      responseId = fb.responseId;
+      requestKind = "REUSED_PROVIDER_RESPONSE";
+      emitEvent("generation_provider_response_reused", {
+        ...eventBase, providerResponseId: responseId,
+        reusedProviderResponse: true, detail: "fallback_file",
+      });
+      if (ctx.generationRunId) {
+        try {
+          await retryOnce(() => providerDeps.setProviderState(ctx.generationRunId!, { stage, responseId: fb.responseId, status: fb.status, model, fingerprint }));
+        } catch (e) {
+          emitEvent("provider_state_persist_failed", {
+            ...eventBase, providerResponseId: responseId, operation: "reflect_fallback_state",
+            detail: (e as Error)?.message || String(e),
+          }, "warn");
+        }
+      }
+    }
   }
 
+  // CORE_STATE: provider response identity must be durable BEFORE
+  // polling starts. setProviderState is authoritative; a failed write
+  // after a provider response exists must halt the run recoverable —
+  // NEVER silently continue into a retry that could create a second
+  // paid response for the same work.
   const persistResponse = async (id: string, status: string) => {
     if (!ctx.generationRunId) return;
     try {
-      await setProviderState(ctx.generationRunId, { stage, responseId: id, status, model, fingerprint });
-      await recordStageResponse(ctx.generationRunId, ctx.documentId, { stage, fingerprint, responseId: id, status, model });
-    } catch { /* provider persistence is best-effort */ }
+      await retryOnce(() => providerDeps.setProviderState(ctx.generationRunId!, { stage, responseId: id, status, model, fingerprint }));
+    } catch (e) {
+      await haltOnPersistenceFailure("provider_response_id", e, id);
+    }
+    // Dedup index — same work, other runs. Secondary to the run row,
+    // but recorded as CORE_STATE evidence: warn loudly, do not halt.
+    try {
+      await retryOnce(() => providerDeps.recordStageResponse(ctx.generationRunId!, ctx.documentId, { stage, fingerprint, responseId: id, status, model }));
+    } catch (e) {
+      emitEvent("generation_stage_response_record_failed", {
+        ...eventBase, providerResponseId: id, operation: "stage_response_record",
+        detail: (e as Error)?.message || String(e),
+      }, "warn");
+    }
   };
 
   let lastError: any = null;
@@ -481,19 +729,41 @@ export async function callOpenAIForStageBackground(
     if (!responseId) {
       try {
         responseId = await transport.startBackgroundStage(stage, systemPrompt, userPrompt);
+        requestKind = attempt === 0 ? "NEW_PROVIDER_REQUEST" : "RETRY_NEW_PROVIDER_REQUEST";
       } catch (e: any) {
+        const { code, charged } = providerCreateError(e);
+        await writeLedger({
+          requestKind: attempt === 0 ? "NEW_PROVIDER_REQUEST" : "RETRY_NEW_PROVIDER_REQUEST",
+          errorCode: code,
+          usageStatus: charged ? "USAGE_UNKNOWN" : "NOT_CHARGED_CONFIRMED",
+        });
+        emitEvent("provider_request_create_failed", {
+          ...eventBase, errorCode: code,
+          detail: (e?.message || "").slice(0, 200),
+        }, "warn");
         // Malformed request / missing JSON instruction — zero retry.
-        if (e?.name === "ProviderInvalidRequestError" || e?.name === "JsonInstructionMissingError") {
+        if (code === "PROVIDER_INVALID_REQUEST") {
           if (ctx.generationRunId) {
+            // Terminal diagnostics = CORE_STATE evidence.
+            emitEvent("provider_terminal_state", {
+              ...eventBase, errorCode: "INVALID_REQUEST",
+              detail: (e?.message || "").slice(0, 200),
+            }, "warn");
             try {
-              await updateProviderCheck(ctx.generationRunId, "failed", {
+              await retryOnce(() => providerDeps.updateProviderCheck(ctx.generationRunId!, "failed", {
                 errorCode: "INVALID_REQUEST", errorMessage: e?.message,
-              });
-            } catch { /* best-effort */ }
+              }));
+            } catch (diagErr) {
+              await haltOnPersistenceFailure("provider_terminal_diagnostics", diagErr);
+            }
           }
           throw new StageExecutionError("PROVIDER_INVALID_REQUEST", "PROVIDER_INVALID_REQUEST", false);
         }
-        throw e;
+        // Transient create failure — surface a stable code, never the
+        // raw provider body. attempt 0 → one controlled retry of the
+        // CREATE (no response was accepted — no duplicate paid work).
+        if (attempt === 0) { await new Promise(r => setTimeout(r, 1000)); responseId = null; continue; }
+        throw new StageExecutionError(code, code, false);
       }
       await persistResponse(responseId, "queued");
     }
@@ -513,76 +783,169 @@ export async function callOpenAIForStageBackground(
           },
           onStatus: async (status) => {
             if (!ctx.generationRunId) return;
+            // TELEMETRY-class: a missed intermediate status write must
+            // not kill the generation — warn only, never silent.
             try {
-              await updateProviderCheck(ctx.generationRunId, status);
-              await updateStageResponseStatus(responseId!, status);
-            } catch { /* best-effort */ }
+              await providerDeps.updateProviderCheck(ctx.generationRunId!, status);
+            } catch (e) {
+              emitEvent("provider_status_persist_failed", {
+                ...eventBase, providerResponseId: responseId, status,
+                operation: "provider_check", detail: (e as Error)?.message || String(e),
+              }, "warn");
+            }
+            try {
+              await providerDeps.updateStageResponseStatus(responseId!, status);
+            } catch (e) {
+              emitEvent("provider_status_persist_failed", {
+                ...eventBase, providerResponseId: responseId, status,
+                operation: "stage_response_status", detail: (e as Error)?.message || String(e),
+              }, "warn");
+            }
           },
         },
       });
       const durationMs = Date.now() - stageStartedAtMs;
+      // ACCOUNTING: usage persistence failure must not fail generation —
+      // warn event + continue.
       if (ctx.generationRunId) {
         try {
-          await setProviderUsage(ctx.generationRunId, result.usage || null);
-          await setStageResponseUsage(responseId, result.usage || null);
-        } catch { /* best-effort */ }
+          await providerDeps.setProviderUsage(ctx.generationRunId, result.usage || null);
+          await providerDeps.setStageResponseUsage(responseId, result.usage || null);
+        } catch (e) {
+          emitEvent("provider_usage_persist_failed", {
+            ...eventBase, providerResponseId: responseId,
+            operation: "provider_usage", detail: (e as Error)?.message || String(e),
+          }, "warn");
+        }
       }
       const stageUsage = await stageUsageFromProvider({
         stage, responseId, usage: result.usage, durationMs,
         generationId: ctx.generationRunId,
+        requestKind: requestKind ?? "NEW_PROVIDER_REQUEST",
+        correlation: {
+          generationRunId: ctx.generationRunId,
+          attemptSeq: ctx.attemptSeq ?? null,
+          documentId: ctx.documentId || null,
+        },
       });
       return { content: result.outputText!, stageUsage };
     } catch (e: any) {
       lastError = e;
       // Cancellation must propagate as GenerationCancelledError so the
       // outer pipeline catch produces a "cancelled" result.
-      if (e instanceof GenerationCancelledError) throw e;
+      if (e instanceof GenerationCancelledError) {
+        await writeLedger({
+          requestKind: requestKind ?? "NEW_PROVIDER_REQUEST",
+          providerResponseId: responseId,
+          errorCode: "GENERATION_CANCELLED", usageStatus: "USAGE_UNKNOWN",
+        });
+        throw e;
+      }
       if (e instanceof StageTimeoutError || e instanceof GenerationTimeLimitError) {
-        throw new StageExecutionError(e instanceof StageTimeoutError ? "STAGE_TIMEOUT" : "GENERATION_TIME_LIMIT", e.message, false);
+        // Recoverable stage timeout: provider response still in flight —
+        // run goes RECOVERING (resume reuses it) instead of FAILED.
+        const code = e instanceof StageTimeoutError ? "STAGE_TIMEOUT" : "GENERATION_TIME_LIMIT";
+        await writeLedger({
+          requestKind: requestKind ?? "NEW_PROVIDER_REQUEST",
+          providerResponseId: responseId,
+          errorCode: code, usageStatus: "USAGE_UNKNOWN",
+        });
+        throw new StageExecutionError(
+          code, e.message, true,
+          e instanceof StageTimeoutError && e.recoverable,
+        );
       }
       if (e instanceof ProviderTerminalError) {
         recordFingerprintFailure(fingerprint);
+        const incompleteMatch = e.message.match(/^Provider incomplete: (.+)$/);
+        const terminalStatus = incompleteMatch ? "incomplete" : "failed";
+        const terminalCode = `PROVIDER_${e.code}`;
+        // Evidence FIRST (console cannot fail) — preserves the terminal
+        // classification even if every DB write below fails.
+        emitEvent("provider_terminal_state", {
+          ...eventBase, providerResponseId: responseId, status: terminalStatus,
+          errorCode: terminalCode,
+          reason: incompleteMatch?.[1] ?? null,
+        }, "warn");
+        await writeLedger({
+          requestKind: requestKind ?? "NEW_PROVIDER_REQUEST",
+          providerResponseId: responseId,
+          errorCode: terminalCode,
+          usageStatus: e.providerUsage ? "USAGE_KNOWN" : "USAGE_UNKNOWN",
+          inputTokens: e.providerUsage?.inputTokens ?? null,
+          cachedInputTokens: e.providerUsage?.cachedInputTokens ?? null,
+          outputTokens: e.providerUsage?.outputTokens ?? null,
+          totalTokens: e.providerUsage?.totalTokens ?? null,
+          reasoningTokens: e.providerUsage?.reasoningTokens ?? null,
+        });
         if (ctx.generationRunId) {
           recordProviderTerminalFailure(ctx.generationRunId, e.retryable);
           // Persist terminal classification (no applicant content).
+          // CORE_STATE evidence — retry once, then halt: silent loss here
+          // is exactly the provider_error_message incident class.
           try {
-            const incompleteMatch = e.message.match(/^Provider incomplete: (.+)$/);
-            const terminalStatus = incompleteMatch ? "incomplete" : "failed";
-            await updateProviderCheck(ctx.generationRunId, terminalStatus, {
+            await retryOnce(() => providerDeps.updateProviderCheck(ctx.generationRunId!, terminalStatus, {
               errorCode: e.code,
               incompleteReason: incompleteMatch?.[1],
-            });
-            await updateStageResponseStatus(responseId!, terminalStatus, {
+            }));
+            await retryOnce(() => providerDeps.updateStageResponseStatus(responseId!, terminalStatus, {
               errorCode: e.code,
               incompleteReason: incompleteMatch?.[1],
-            });
+            }));
             // Reconcile usage even on terminal failure when present.
             if (e.providerUsage) {
-              await setProviderUsage(ctx.generationRunId, e.providerUsage);
-              await setStageResponseUsage(responseId!, e.providerUsage);
+              await providerDeps.setProviderUsage(ctx.generationRunId, e.providerUsage);
+              await providerDeps.setStageResponseUsage(responseId!, e.providerUsage);
             }
-          } catch { /* best-effort */ }
+          } catch (diagErr) {
+            // The provider response is already terminal — nothing paid
+            // is in flight, so halt non-recoverable: run fails with a
+            // stable code; the event above preserved the real cause.
+            emitEvent("generation_state_persistence_failed", {
+              ...eventBase, providerResponseId: responseId,
+              operation: "provider_terminal_diagnostics",
+              errorCode: "GENERATION_STATE_PERSISTENCE_FAILED",
+              detail: (diagErr as Error)?.message || String(diagErr),
+            }, "error");
+            throw new StageExecutionError(
+              "GENERATION_STATE_PERSISTENCE_FAILED",
+              "GENERATION_STATE_PERSISTENCE_FAILED (provider_terminal_diagnostics)",
+              false, false,
+            );
+          }
         }
         if (e.code === "PROVIDER_CANCELLED") {
           throw new GenerationCancelledError(stage);
         }
         if (!e.retryable || attempt === 1) {
-          throw new StageExecutionError(`PROVIDER_${e.code}`, e.message, false);
+          throw new StageExecutionError(terminalCode, e.message, false);
         }
         // One controlled retry — create a fresh response for identical work.
         responseId = null;
         continue;
       }
       if (e?.name === "ProviderInvalidRequestError" || e?.name === "JsonInstructionMissingError") {
+        await writeLedger({
+          requestKind: requestKind ?? "NEW_PROVIDER_REQUEST",
+          providerResponseId: responseId,
+          errorCode: "PROVIDER_INVALID_REQUEST", usageStatus: "NOT_CHARGED_CONFIRMED",
+        });
         // Malformed request — zero retry, no circuit, safe code only.
         throw new StageExecutionError("PROVIDER_INVALID_REQUEST", "PROVIDER_INVALID_REQUEST", false);
       }
       // Unclassified retrieval failure — retryable once via the same response.
-      if (attempt === 1) throw new StageExecutionError("PROVIDER_POLL_FAILED", e?.message || "provider poll failed", false);
+      if (attempt === 1) {
+        await writeLedger({
+          requestKind: "POLL",
+          providerResponseId: responseId,
+          errorCode: "PROVIDER_POLL_FAILED", usageStatus: "USAGE_UNKNOWN",
+        });
+        throw new StageExecutionError("PROVIDER_POLL_FAILED", "PROVIDER_POLL_FAILED", false);
+      }
       await new Promise(r => setTimeout(r, 1000));
     }
   }
-  throw new StageExecutionError("PROVIDER_FAILED", lastError?.message || "provider failed", false);
+  throw new StageExecutionError("PROVIDER_FAILED", "PROVIDER_FAILED", false);
 }
 
 /**
@@ -657,6 +1020,29 @@ export async function runApplicationPipeline(
       hashes,
       exchangeRate: fxInfo.rate > 0 ? fxInfo.rate : 1,
       maxTechnicalRetries: 2,
+      // A completed provider response that produced contract-invalid
+      // content must never be replayed by fingerprint reuse — mark it
+      // content_invalid so the same-stage retry creates a fresh call.
+      onContentInvalid: async (responseId) => {
+        // TELEMETRY-class: a missed mark leaves a bad response reusable —
+        // warn loudly, never silent.
+        try {
+          await providerDeps.updateStageResponseStatus(responseId, "content_invalid");
+        } catch (e) {
+          emitEvent("provider_response_status_persist_failed", {
+            generationRunId: input.execution?.generationRunId ?? null,
+            documentId: input.execution?.documentId ?? null,
+            providerResponseId: responseId, operation: "mark_content_invalid",
+            detail: (e as Error)?.message || String(e),
+          }, "warn");
+        }
+      },
+      runContext: {
+        generationRunId: input.execution?.generationRunId ?? null,
+        documentId: input.execution?.documentId ?? null,
+        attemptSeq: input.execution?.attemptSeq ?? null,
+        requestId: input.execution?.requestId ?? null,
+      },
       call: async (stage, system, user, onUsage) => {
         try {
           // Provider-rate pacing — low-TPM tiers (e.g. free Groq) need calls
@@ -671,6 +1057,9 @@ export async function runApplicationPipeline(
                 documentId: input.execution?.documentId || "",
                 hashes,
                 generationStartedAtMs: pipelineStart,
+                attemptSeq: input.execution?.attemptSeq ?? null,
+                requestId: input.execution?.requestId ?? null,
+                attemptBasePath: basePath,
                 isCancelRequested: async () =>
                   abortController.signal.aborted ||
                   (generationRunId ? await isCancelRequested(generationRunId) : false),
@@ -711,6 +1100,22 @@ export async function runApplicationPipeline(
       abortController.abort();
       throw new GenerationCancelledError(stage);
     }
+    // Ownership boundary: if a newer run acquired the document lock
+    // (e.g. lock went stale during RECOVERING), this run must stop —
+    // never start another paid stage or touch document state.
+    const docId = input.execution?.documentId;
+    if (docId) {
+      try {
+        if (!(await isRunDocumentOwner(docId, generationRunId))) {
+          abortController.abort();
+          throw new GenerationSupersededError(stage);
+        }
+      } catch (e) {
+        if (e instanceof GenerationSupersededError) throw e;
+        // Ownership check failure is best-effort — DB hiccup must not
+        // kill a healthy run.
+      }
+    }
   }
 
   if (generationRunId) {
@@ -718,7 +1123,14 @@ export async function runApplicationPipeline(
       try {
         await heartbeatRun(generationRunId);
         if (await isCancelRequested(generationRunId)) abortController.abort();
-      } catch { /* heartbeat is best-effort */ }
+      } catch (e) {
+        // TELEMETRY: a missed heartbeat is tolerable (recovery claim
+        // tolerates stale heartbeats) — but never silently dropped.
+        emitEvent("generation_heartbeat_failed", {
+          generationRunId, documentId: input.execution?.documentId ?? null,
+          detail: (e as Error)?.message || String(e),
+        }, "warn");
+      }
     }, 8000);
     if (lifecycleInterval.unref) lifecycleInterval.unref();
   }
@@ -731,11 +1143,48 @@ export async function runApplicationPipeline(
   ): Promise<StageExecutionResult> {
     await throwIfCancelled(stage);
     if (generationRunId) {
-      try { await markStageStarted(generationRunId, stage); } catch { /* progress is best-effort */ }
+      // CORE_STATE-adjacent: current_stage feeds recovery resume. A
+      // failed write must be loud — but a stale stage pointer only
+      // costs a redundant stage re-entry, so warn-and-continue.
+      try {
+        await markStageStarted(generationRunId, stage);
+      } catch (e) {
+        emitEvent("generation_stage_mark_failed", {
+          generationRunId, documentId: input.execution?.documentId ?? null,
+          stage, detail: (e as Error)?.message || String(e),
+        }, "warn");
+      }
     }
-    const result = await stageExecution.execute(stage, system, user, context);
+    // Contract-format deviations (CONTENT_JSON_INVALID, schema violations)
+    // get ONE automatic same-stage retry — the bad provider response is
+    // marked content_invalid by execute(), so the retry is a fresh call.
+    // Earlier stages stay checkpointed; nothing else is re-executed.
+    let result: StageExecutionResult;
+    try {
+      result = await stageExecution.execute(stage, system, user, context);
+    } catch (first: any) {
+      // FINALIZER_METADATA_INCOMPLETE has its own corrective-feedback
+      // retry loop at the finalizer call site — excluded here.
+      const retryable = first instanceof StageExecutionError
+        && RETRYABLE_CONTRACT_CODES.has(first.code)
+        && first.code !== "FINALIZER_METADATA_INCOMPLETE";
+      if (!retryable) throw first;
+      console.warn(JSON.stringify({
+        event: "stage_contract_retry",
+        generationId, stage, code: first.code,
+      }));
+      result = await stageExecution.execute(stage, system, user, context);
+    }
     if (generationRunId) {
-      try { await markStageCompleted(generationRunId); } catch { /* best-effort */ }
+      try {
+        await markStageCompleted(generationRunId);
+      } catch (e) {
+        emitEvent("generation_stage_mark_failed", {
+          generationRunId, documentId: input.execution?.documentId ?? null,
+          stage, operation: "mark_stage_completed",
+          detail: (e as Error)?.message || String(e),
+        }, "warn");
+      }
     }
     await throwIfCancelled(stage);
     return result;
@@ -1190,7 +1639,12 @@ export async function runApplicationPipeline(
               retryCorrection: { failedComponents },
               complianceConstraints: input.pipelineWritingInstructions,
             });
-          } catch {
+          } catch (e) {
+            emitEvent("finalizer_retry_plan_invalid", {
+              generationRunId, documentId: input.execution?.documentId ?? null,
+              stage: "finalizer",
+              detail: (e as Error)?.message || String(e),
+            }, "warn");
             fallBackToCalibrated("BOUNDED_FINALIZER_BLOCKED", "Finalizer retry plan inconsistent; keeping the calibrated draft.");
             finalizerResult = undefined;
             break;
@@ -1335,7 +1789,12 @@ export async function runApplicationPipeline(
         );
         finalFeedback = reRender.feedback;
         renderLifecycle = reRender.lifecycle;
-      } catch { /* keep previous feedback */ }
+      } catch (e) {
+        emitEvent("final_rerender_failed", {
+          generationRunId, documentId: input.execution?.documentId ?? null,
+          detail: (e as Error)?.message || String(e),
+        }, "warn");
+      }
     }
 
     // STAGE 6: FINAL FACT REVIEWER — audits the ACTUAL final text
@@ -1517,9 +1976,35 @@ export async function runApplicationPipeline(
   } catch (error: any) {
     const duration = Date.now() - pipelineStart;
     const cost = stageUsages.length > 0 ? await buildCost(duration) : null;
-    try { await stageExecution.finish(false); } catch {}
-    try { await stageExecution.close(); } catch {}
+    try { await stageExecution.finish(false); } catch (e) {
+      emitEvent("attempt_finish_marker_failed", {
+        generationRunId, detail: (e as Error)?.message || String(e),
+      }, "warn");
+    }
+    try { await stageExecution.close(); } catch (e) {
+      emitEvent("attempt_close_failed", {
+        generationRunId, detail: (e as Error)?.message || String(e),
+      }, "warn");
+    }
     const accounting = (() => { try { return stageExecution.accounting(); } catch { return undefined; } })();
+
+    // Superseded is a first-class outcome — this run lost document
+    // ownership to a newer run; the service marks it FAILED and must
+    // not touch document state.
+    if (error instanceof GenerationSupersededError) {
+      return {
+        status: "error",
+        error: "RUN_SUPERSEDED",
+        generationId,
+        warnings: generationWarnings,
+        planner: null, writerOutput: null, qualityReview: null, factReview: null,
+        calibratedOutput: null, finalizedOutput: null,
+        compliance: null, responses: [], finalText: "",
+        renderLifecycle: null, preFinalRenderFeedback: null, finalRenderFeedback: null,
+        accounting,
+        metrics: { wordCount: 0, model: "", stages: stageUsages.length, duration, cost, renderChecks: renderCheckCount },
+      };
+    }
 
     // Cancellation is a first-class outcome, not an error.
     if (error instanceof GenerationCancelledError || abortController.signal.aborted) {
@@ -1540,6 +2025,7 @@ export async function runApplicationPipeline(
     return {
       status: "error",
       error: error?.message || "PIPELINE_ERROR",
+      recoverable: error instanceof StageExecutionError ? error.recoverable : false,
       generationId,
       warnings: generationWarnings,
       planner: null, writerOutput: null, qualityReview: null, factReview: null,

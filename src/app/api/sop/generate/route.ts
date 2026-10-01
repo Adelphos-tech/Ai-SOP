@@ -35,6 +35,7 @@ import {
 import { getDefaultTemplate } from "@/lib/application/default-templates";
 import { DocumentType, PromptSource } from "@/lib/application/application-types";
 import { generateApplicationDocument } from "@/lib/application/generation-service";
+import { classifyGenerationError } from "@/lib/application/generation-errors";
 import { randomUUID } from "crypto";
 import {
   requireConsultantSession,
@@ -310,15 +311,11 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     console.error("SOP generation bridge error:", error);
-    // Sanitize error — do not expose internal paths, ports, or stack traces
-    const safeMessage = (error?.message || "An unexpected error occurred during generation.")
-      .replace(/127\.0\.0\.1:\d+/g, "[internal]")
-      .replace(/localhost:\d+/g, "[internal]")
-      .replace(/\/opt\/[^\s'"]+/g, "[path]")
-      .replace(/ERR_SSL_\w+/g, "[ssl-error]")
-      .substring(0, 500);
+    // Stable code + friendly copy — raw messages (provider bodies, SQL,
+    // stack traces, Zod paths) stay in server logs only.
+    const normalized = classifyGenerationError(error?.message);
     return NextResponse.json(
-      { error: safeMessage },
+      { error: normalized.userMessage, code: normalized.code },
       { status: 500 },
     );
   }

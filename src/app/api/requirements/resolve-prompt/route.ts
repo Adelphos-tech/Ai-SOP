@@ -296,7 +296,7 @@ export async function POST(req: NextRequest) {
     if (error instanceof AuthError) return authErrorResponse(error);
     console.error("resolve-prompt error:", error?.message);
     return NextResponse.json(
-      { error: error?.message || "Failed to resolve prompt" },
+      { error: "Failed to resolve prompt", code: "REQUIREMENT_RESOLVE_FAILED" },
       { status: 500 },
     );
   }

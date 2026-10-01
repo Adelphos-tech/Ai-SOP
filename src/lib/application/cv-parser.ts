@@ -25,11 +25,19 @@ export type CVParseFailureCode =
   | "IMAGE_ONLY_PDF"
   | "CORRUPT_OR_UNREADABLE_PDF"
   | "INSUFFICIENT_TEXT"
+  | "CV_FILE_INVALID"
+  | "CV_EXTRACTION_EMPTY"
+  | "CV_EXTRACTION_FAILED"
+  | "CV_OCR_EXTRACTION_FAILED"
+  | "CV_OCR_LIMIT_EXCEEDED"
+  | "CV_PARSE_EMPTY_STRUCTURE"
   | "PARSE_FAILED";
 
 export interface CVParseFailure extends Error {
   code: CVParseFailureCode;
   userMessage: string;
+  /** Content-free diagnostics — never log resume text. */
+  diagnostics?: Record<string, string | number>;
 }
 
 const FAILURE_MESSAGES: Record<CVParseFailureCode, string> = {
@@ -39,15 +47,66 @@ const FAILURE_MESSAGES: Record<CVParseFailureCode, string> = {
     "We could read this file, but there isn't enough CV text to import reliably. Please upload a more complete PDF/DOCX or enter the details manually.",
   CORRUPT_OR_UNREADABLE_PDF:
     "This file could not be read as a valid PDF. It may be corrupted. Please try a different file.",
+  CV_FILE_INVALID:
+    "This file could not be read as a valid document. It may be corrupted or in an unsupported format. Please try a different PDF or DOCX.",
+  CV_EXTRACTION_EMPTY:
+    "This CV could be opened, but no readable text was found inside it. If it is a scan or image-based file, please upload a text-based PDF or DOCX.",
+  CV_EXTRACTION_FAILED:
+    "The document could not be extracted. Please try a different PDF or DOCX, or enter the details manually.",
+  CV_OCR_EXTRACTION_FAILED:
+    "This CV appears to contain only images or scans, and our text recovery could not read it. Please upload a clearer scanned copy, a text-based PDF/DOCX, or enter the details manually.",
+  CV_OCR_LIMIT_EXCEEDED:
+    "This file is too large or complex for text recovery from images. Please upload a smaller file or a text-based PDF/DOCX.",
+  CV_PARSE_EMPTY_STRUCTURE:
+    "We read the text in this CV but could not identify resume sections (education, experience, skills). Please upload a standard-layout PDF/DOCX or enter the details manually.",
   PARSE_FAILED:
     "We could not process this file. Please try a different PDF or DOCX, or enter the details manually.",
 };
 
-export function createCVParseFailure(code: CVParseFailureCode, detail?: string): CVParseFailure {
+export function createCVParseFailure(code: CVParseFailureCode, detail?: string, diagnostics?: Record<string, string | number>): CVParseFailure {
   const err = new Error(detail || FAILURE_MESSAGES[code]) as CVParseFailure;
   err.code = code;
   err.userMessage = FAILURE_MESSAGES[code];
+  err.diagnostics = diagnostics;
   return err;
+}
+
+/**
+ * Map internal parser/service error codes to stable user-facing codes.
+ * The sidecar cannot distinguish corrupt-input from empty-extraction
+ * beyond its 400/500 boundary: 400 = "no readable text" (empty),
+ * 5xx/unreachable/timeout = extraction failure. Documented limitation:
+ * a corrupt DOCX that parses to zero blocks still lands in
+ * CV_EXTRACTION_EMPTY, not CV_FILE_INVALID.
+ */
+export function normalizeCVErrorCode(code: string, message?: string): string {
+  switch (code) {
+    case "DOCLING_UNREADABLE":
+      return /no readable text/i.test(message || "") ? "CV_EXTRACTION_EMPTY" : "CV_EXTRACTION_FAILED";
+    case "DOCLING_TIMEOUT":
+    case "DOCLING_UNREACHABLE":
+    case "DOCLING_BAD_RESPONSE":
+    case "DOCLING_SERVICE_ERROR":
+      return "CV_EXTRACTION_FAILED";
+    case "OCR_TIMEOUT":
+    case "OCR_UNREACHABLE":
+    case "OCR_SERVICE_ERROR":
+    case "OCR_BAD_RESPONSE":
+    case "OCR_UNREADABLE":
+    case "OCR_NO_IMAGE_CONTENT":
+      return "CV_OCR_EXTRACTION_FAILED";
+    case "OCR_LIMIT_EXCEEDED":
+      return "CV_OCR_LIMIT_EXCEEDED";
+    case "CV_FILE_INVALID":
+    case "CV_EXTRACTION_EMPTY":
+    case "CV_EXTRACTION_FAILED":
+    case "CV_OCR_EXTRACTION_FAILED":
+    case "CV_OCR_LIMIT_EXCEEDED":
+    case "CV_PARSE_EMPTY_STRUCTURE":
+      return code;
+    default:
+      return code;
+  }
 }
 
 /** Minimum text length (chars) for reliable CV parsing */
@@ -87,7 +146,7 @@ export interface ParsedCV {
   /** Parser provenance — present on docling-path results. Never
    * persisted to canonical profile (cv-apply maps fields explicitly). */
   parserMeta?: {
-    engine: "legacy" | "docling";
+    engine: "legacy" | "docling" | "rapidocr";
     mapperVersion?: string;
     doclingVersion?: string;
     sourceHash?: string;

@@ -86,8 +86,10 @@ check("D: active generation rejected (GENERATING)", () => {
   const body = fn.substring(0, 5000);
   assert.ok(body.includes("GENERATING"),
     "must check generation_status === GENERATING");
-  assert.ok(body.includes("QUEUED") && body.includes("RUNNING") && body.includes("CANCEL_REQUESTED"),
-    "must check generation_runs for active status");
+  // Canonical active-status list — never a hand-maintained literal.
+  // (Verified DB-level in generation-state-ownership.test.ts.)
+  assert.ok(body.includes("ACTIVE_GENERATION_STATUSES"),
+    "must check generation_runs via canonical ACTIVE_GENERATION_STATUSES");
   assert.ok(body.includes('return "GENERATING"'),
     "must return GENERATING when active");
   // API route must return 409 for GENERATING

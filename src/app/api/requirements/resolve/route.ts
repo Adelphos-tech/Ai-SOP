@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
     if (error instanceof AuthError) return authErrorResponse(error);
     console.error("Requirements resolution error:", error?.message);
     return NextResponse.json(
-      { error: error?.message || "Requirements resolution failed" },
+      { error: "Requirements resolution failed", code: "REQUIREMENT_RESOLVE_FAILED" },
       { status: 500 }
     );
   }

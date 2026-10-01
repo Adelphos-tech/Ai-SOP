@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
     }
     console.error("Discovery error:", error?.message);
     return NextResponse.json(
-      { error: error?.message || "Discovery failed" },
+      { error: "Discovery failed", code: "DISCOVERY_FAILED" },
       { status: 500 }
     );
   }

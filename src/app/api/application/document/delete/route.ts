@@ -8,6 +8,7 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
+import { emitEvent } from "@/lib/observability/events";
 import {
   getDocument,
   getApplication,
@@ -94,15 +95,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.warn(
-      `[document-delete] documentId=${body.documentId} applicationId=${body.applicationId} studentId=${body.studentId} type="${document.documentType}" title="${document.documentTitle}" consultant=${consultant.id}`,
-    );
+    // Audit event — ids + type only; document title may embed the
+    // student's name (e.g. "Khushi SOP") — never log it.
+    emitEvent("document_deleted", {
+      documentId: body.documentId,
+      applicationId: body.applicationId,
+      studentId: body.studentId,
+      documentType: document.documentType,
+      actorId: consultant.id,
+    }, "warn");
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json(
-      { error: error?.message || "Failed to delete document.", code: "DELETE_FAILED" },
+      { error: "Failed to delete document.", code: "DELETE_FAILED" },
       { status: 500 },
     );
   }

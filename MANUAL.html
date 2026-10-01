@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>D-Vivid Application Writer — User Manual</title>
+<style>
+  @page { margin: 0; size: A4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #1a1a2e; line-height: 1.6; font-size: 14px;
+    background: #fff;
+  }
+  .page {
+    max-width: 900px; margin: 0 auto; padding: 60px 50px;
+    page-break-after: always;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* Cover page */
+  .cover {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 800px; text-align: center;
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    color: white; padding: 80px 50px;
+  }
+  .cover h1 { font-size: 42px; margin-bottom: 16px; font-weight: 700; }
+  .cover .subtitle { font-size: 20px; opacity: 0.9; margin-bottom: 40px; }
+  .cover .version { font-size: 14px; opacity: 0.7; margin-top: 60px; }
+
+  /* Typography */
+  h1 { font-size: 32px; color: #4f46e5; margin-bottom: 8px; page-break-after: avoid; }
+  h2 { font-size: 24px; color: #1a1a2e; margin-top: 36px; margin-bottom: 12px; page-break-after: avoid; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
+  h3 { font-size: 18px; color: #333; margin-top: 24px; margin-bottom: 8px; page-break-after: avoid; }
+  h4 { font-size: 16px; color: #4f46e5; margin-top: 18px; margin-bottom: 6px; page-break-after: avoid; }
+  p { margin-bottom: 12px; }
+  ul, ol { margin-left: 24px; margin-bottom: 12px; }
+  li { margin-bottom: 6px; }
+  strong { color: #1a1a2e; }
+  code { background: #f0f0f5; padding: 2px 6px; border-radius: 4px; font-size: 13px; color: #7c3aed; }
+
+  /* Screenshots */
+  .screenshot {
+    width: 100%; border: 1px solid #d0d0d8; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin: 16px 0;
+    page-break-inside: avoid;
+  }
+  .screenshot-container { page-break-inside: avoid; margin: 20px 0; }
+  .screenshot-label {
+    font-size: 13px; color: #666; font-style: italic;
+    margin-bottom: 6px; text-align: center;
+  }
+  .screenshot-wrap {
+    border: 2px solid #e0e0e8; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  }
+  .screenshot-wrap img { display: block; width: 100%; }
+
+  /* Callout boxes */
+  .callout {
+    background: #f0f4ff; border-left: 4px solid #4f46e5;
+    padding: 14px 18px; border-radius: 0 8px 8px 0;
+    margin: 16px 0; page-break-inside: avoid;
+  }
+  .callout-title { font-weight: 600; color: #4f46e5; margin-bottom: 4px; font-size: 14px; }
+  .callout p { margin-bottom: 0; font-size: 13px; }
+
+  .warning {
+    background: #fff8e1; border-left: 4px solid #f59e0b;
+    padding: 14px 18px; border-radius: 0 8px 8px 0;
+    margin: 16px 0; page-break-inside: avoid;
+  }
+  .warning-title { font-weight: 600; color: #b45309; margin-bottom: 4px; font-size: 14px; }
+
+  .tip {
+    background: #ecfdf5; border-left: 4px solid #10b981;
+    padding: 14px 18px; border-radius: 0 8px 8px 0;
+    margin: 16px 0; page-break-inside: avoid;
+  }
+  .tip-title { font-weight: 600; color: #047857; margin-bottom: 4px; font-size: 14px; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; page-break-inside: avoid; }
+  th { background: #4f46e5; color: white; padding: 10px 14px; text-align: left; font-size: 13px; }
+  td { padding: 10px 14px; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+  tr:nth-child(even) { background: #f9f9fc; }
+
+  /* Step indicator */
+  .step-badge {
+    display: inline-block; background: #4f46e5; color: white;
+    width: 32px; height: 32px; border-radius: 50%; text-align: center;
+    line-height: 32px; font-weight: 700; margin-right: 10px; font-size: 16px;
+  }
+  .step-header { display: flex; align-items: center; margin-bottom: 8px; }
+  .step-header h2 { border: none; margin: 0; padding: 0; }
+
+  /* Workflow tracker */
+  .workflow-tracker {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #f8f8fc; border: 1px solid #e0e0e8; border-radius: 10px;
+    padding: 20px 30px; margin: 20px 0;
+  }
+  .wf-step { text-align: center; flex: 1; }
+  .wf-circle {
+    width: 40px; height: 40px; border-radius: 50%; margin: 0 auto 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 16px;
+  }
+  .wf-circle.active { background: #4f46e5; color: white; }
+  .wf-circle.done { background: #10b981; color: white; }
+  .wf-circle.upcoming { background: #e0e0e8; color: #999; }
+  .wf-label { font-size: 13px; font-weight: 500; }
+  .wf-arrow { color: #ccc; font-size: 20px; padding: 0 8px; }
+
+  /* TOC */
+  .toc { list-style: none; margin-left: 0; }
+  .toc li { margin-bottom: 8px; font-size: 15px; }
+  .toc a { color: #4f46e5; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc-num { display: inline-block; width: 30px; color: #999; }
+
+  /* Highlight for important elements */
+  .highlight {
+    background: #fef3c7; padding: 2px 8px; border-radius: 4px;
+    font-weight: 600; color: #92400e;
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER PAGE -->
+<div class="page cover">
+  <h1>D-Vivid Application Writer</h1>
+  <div class="subtitle">Complete User Manual</div>
+  <p style="font-size: 16px; opacity: 0.85; max-width: 500px; margin: 20px auto;">
+    A consultant's guide to creating applicants, completing intake,<br>
+    generating documents with AI, and exporting final drafts.
+  </p>
+  <div class="version">Version 1.0 — September 2026<br>Production: sop.adelphostech.com</div>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="page">
+  <h1>Table of Contents</h1>
+  <ul class="toc">
+    <li><span class="toc-num">1.</span><a href="#quick-start">Quick Start (5-Minute Guide)</a></li>
+    <li><span class="toc-num">2.</span><a href="#workflow">The 4-Step Workflow</a></li>
+    <li><span class="toc-num">3.</span><a href="#step1">Step 1: Create an Applicant</a></li>
+    <li><span class="toc-num">4.</span><a href="#step2">Step 2: Complete the Application Intake</a></li>
+    <li><span class="toc-num">5.</span><a href="#cv-upload">Upload a CV (Optional Shortcut)</a></li>
+    <li><span class="toc-num">6.</span><a href="#step3">Step 3: Create Documents</a></li>
+    <li><span class="toc-num">7.</span><a href="#step3a">Step 3a: Generate a Document with AI</a></li>
+    <li><span class="toc-num">8.</span><a href="#step3b">Step 3b: Edit, Save Versions, and Approve</a></li>
+    <li><span class="toc-num">9.</span><a href="#step4">Step 4: Export the Final Document</a></li>
+    <li><span class="toc-num">10.</span><a href="#multiple-docs">Managing Multiple Documents</a></li>
+    <li><span class="toc-num">11.</span><a href="#deleting">Deleting Documents and Applications</a></li>
+    <li><span class="toc-num">12.</span><a href="#doc-types">Document Types Reference</a></li>
+    <li><span class="toc-num">13.</span><a href="#intake-sections">The 9 Intake Sections Reference</a></li>
+    <li><span class="toc-num">14.</span><a href="#ai-stages">The 6 AI Generation Stages</a></li>
+    <li><span class="toc-num">15.</span><a href="#troubleshooting">Troubleshooting</a></li>
+  </ul>
+</div>
+
+<!-- 1. QUICK START -->
+<div class="page" id="quick-start">
+  <h1>1. Quick Start (5-Minute Guide)</h1>
+  <p>When you open the portal, you'll land on the <strong>Students</strong> page. This is your starting point for everything.</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">The Students page — your starting point. Search by name or email, then click a student to open their workspace.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/01-students-list.png" alt="Students List" class="screenshot">
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">Getting Started in 5 Steps</div>
+    <p>
+    1. Click <strong>+ New Applicant</strong> (top right)<br>
+    2. Fill in student details + first university application<br>
+    3. Complete the intake (required sections only)<br>
+    4. Click <strong>+ Add Document</strong> → choose type → enter prompt<br>
+    5. Click <strong>Generate Document</strong> → wait → edit → approve → download
+    </p>
+  </div>
+</div>
+
+<!-- 2. WORKFLOW -->
+<div class="page" id="workflow">
+  <h1>2. The 4-Step Workflow</h1>
+  <p>Every page shows a progress tracker at the top. It tracks your journey through 4 steps:</p>
+
+  <div class="workflow-tracker">
+    <div class="wf-step">
+      <div class="wf-circle done">1</div>
+      <div class="wf-label">Applicant</div>
+    </div>
+    <div class="wf-arrow">→</div>
+    <div class="wf-step">
+      <div class="wf-circle active">2</div>
+      <div class="wf-label">Application</div>
+    </div>
+    <div class="wf-arrow">→</div>
+    <div class="wf-step">
+      <div class="wf-circle upcoming">3</div>
+      <div class="wf-label">Document</div>
+    </div>
+    <div class="wf-arrow">→</div>
+    <div class="wf-step">
+      <div class="wf-circle upcoming">4</div>
+      <div class="wf-label">Review</div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>Step</th><th>What you do</th><th>Where</th></tr>
+    <tr><td><strong>1. Applicant</strong></td><td>Create the student profile</td><td>Students → + New Applicant</td></tr>
+    <tr><td><strong>2. Application</strong></td><td>Complete intake info (education, motivation, career goals)</td><td>Application workspace → Intake</td></tr>
+    <tr><td><strong>3. Document</strong></td><td>Create a document (SOP, Essay, Visa SOP, etc.) and generate</td><td>Application workspace → + Add Document</td></tr>
+    <tr><td><strong>4. Review</strong></td><td>Edit, approve, and export the final document</td><td>Document workspace</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">Tip</div>
+    <p>The tracker is clickable — completed steps link back to their pages so you can navigate freely.</p>
+  </div>
+</div>
+
+<!-- 3. STEP 1: CREATE APPLICANT -->
+<div class="page" id="step1">
+  <div class="step-header">
+    <span class="step-badge">1</span>
+    <h2 style="border: none; margin: 0; padding: 0;">Create an Applicant</h2>
+  </div>
+  <p>Click <strong>+ New Applicant</strong> on the Students page. You'll see a form with two sections:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">New Applicant page — fill in student details and their first university application in one go.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/02-new-applicant.png" alt="New Applicant Form" class="screenshot">
+    </div>
+  </div>
+
+  <h3>Section 1: Student Details</h3>
+  <ul>
+    <li><strong>First Name</strong> and <strong>Last Name</strong> — required</li>
+    <li><strong>Email</strong> — required, used to identify the student</li>
+    <li><strong>Phone</strong> and <strong>Country</strong> — optional but recommended</li>
+  </ul>
+
+  <h3>Section 2: First Application</h3>
+  <ul>
+    <li><strong>University</strong> — type to search (required)</li>
+    <li><strong>Program</strong> — e.g. "MS Machine Learning" (required)</li>
+    <li><strong>Degree</strong> — MS, MEng, MA, MBA, PhD, Bachelor, or Other (required)</li>
+    <li><strong>Department</strong>, <strong>Country</strong>, <strong>Intake</strong>, <strong>Intake Year</strong> — optional</li>
+  </ul>
+
+  <div class="callout">
+    <div class="callout-title">What happens next</div>
+    <p>Click <strong>Create Applicant & Application →</strong>. You'll be automatically redirected to the Application Workspace where you complete the intake, create documents, and generate.</p>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">Tip</div>
+    <p>You can add more applications for the same student later from their student workspace page.</p>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Student Workspace — after creating an applicant, you'll see their profile card and all their applications.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/03-student-workspace.png" alt="Student Workspace" class="screenshot">
+    </div>
+  </div>
+</div>
+
+<!-- 4. STEP 2: COMPLETE INTAKE -->
+<div class="page" id="step2">
+  <div class="step-header">
+    <span class="step-badge">2</span>
+    <h2 style="border: none; margin: 0; padding: 0;">Complete the Application Intake</h2>
+  </div>
+  <p>After creating an applicant, you land on the <strong>Application Workspace</strong>. The status box shows what information is missing:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Application Workspace — the central hub. The status box shows missing required answers with a direct link to complete them. When ready, it shows "✓ Applicant information ready".</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04-application-workspace.png" alt="Application Workspace" class="screenshot">
+    </div>
+  </div>
+
+  <h3>The Intake Wizard</h3>
+  <p>Click <strong>Complete N Missing Answers →</strong> to start the wizard. It shows you one section at a time, only the required ones:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Student Details section. Fill in personal info and education history. The CV upload option is also available here.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04d-intake-student-details.png" alt="Intake Student Details" class="screenshot">
+    </div>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Master's Motivation. Why the student wants to pursue this master's degree.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04i-intake-masters-motivation.png" alt="Intake Masters Motivation" class="screenshot">
+    </div>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Work Experience. Jobs, internships, and research roles.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04j-intake-work-experience.png" alt="Intake Work Experience" class="screenshot">
+    </div>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Academics & Projects. Projects, subjects, and skills.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04k-intake-academics-projects.png" alt="Intake Academics" class="screenshot">
+    </div>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Country Questions. The questionnaire adapts to the selected destination country.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04g-intake-country-questions.png" alt="Intake Country Questions" class="screenshot">
+    </div>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Career Goals. Short-term and long-term career objectives.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04f-intake-career-goals.png" alt="Intake Career Goals" class="screenshot">
+    </div>
+  </div>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Intake — Program / University Info. Now only collects the official source URL. Document-specific requirements have moved to document creation.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04h-intake-program-info.png" alt="Intake Program Info" class="screenshot">
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">How the wizard works</div>
+    <p>Fill in each section and click <strong>Save & Next Missing Answer →</strong>. The wizard automatically takes you to the next missing section. When all required sections are done, you'll see "✓ All required information complete".</p>
+  </div>
+</div>
+
+<!-- 5. CV UPLOAD -->
+<div class="page" id="cv-upload">
+  <h1>Upload a CV (Optional Shortcut)</h1>
+  <p>Instead of filling in each section manually, you can upload the student's CV to auto-fill education, experience, projects, and skills:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">The "Upload CV to pre-fill instead" link on the Application Workspace. Click it to open the upload area.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04-application-workspace.png" alt="CV Upload Link" class="screenshot">
+    </div>
+  </div>
+
+  <div class="tip">
+    <div class="tip-title">How it works</div>
+    <p>1. Click "Upload CV to pre-fill instead" on the application workspace<br>
+    2. Choose a PDF, DOCX, or TXT file<br>
+    3. The system extracts education, experience, projects, and skills<br>
+    4. Review the extracted data before applying<br>
+    5. Click "Apply" to fill the intake automatically</p>
+  </div>
+
+  <div class="warning">
+    <div class="warning-title">Important</div>
+    <p>CV upload is a shortcut — you should still review the extracted data for accuracy. The AI uses this information to write documents, so incorrect data leads to incorrect documents.</p>
+  </div>
+</div>
+
+<!-- 6. STEP 3: CREATE DOCUMENTS -->
+<div class="page" id="step3">
+  <div class="step-header">
+    <span class="step-badge">3</span>
+    <h2 style="border: none; margin: 0; padding: 0;">Create Documents</h2>
+  </div>
+  <p>Once the intake is complete, the <strong>+ Add Document</strong> button appears at the bottom of the Documents section. Click it to open the creation form:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Add Document form — choose the document type, enter the prompt, and optionally add consultant instructions.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04b-add-document-form.png" alt="Add Document Form" class="screenshot">
+    </div>
+  </div>
+
+  <h3>Advanced Options</h3>
+  <p>Click <strong>Advanced options</strong> to set word limits, mandatory topics, additional questions, and formatting rules:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Advanced options expanded — set word/page limits, mandatory topics, additional questions, and formatting rules per document.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04c-advanced-options.png" alt="Advanced Options" class="screenshot">
+    </div>
+  </div>
+
+  <h3>What to fill in</h3>
+  <table>
+    <tr><th>Field</th><th>Required?</th><th>Description</th></tr>
+    <tr><td><strong>Document Type</strong></td><td>Yes</td><td>SOP, Essay, Visa SOP, LOR, etc.</td></tr>
+    <tr><td><strong>Prompt / Question</strong></td><td>Depends on type</td><td>Paste the university's writing requirement. Required for SOP/Essay/Custom. Optional for Visa SOP (uses D-Vivid default).</td></tr>
+    <tr><td><strong>Consultant Instruction</strong></td><td>No</td><td>Guidance for the AI writer (e.g. "Keep it concise, focus on ML experience")</td></tr>
+    <tr><td><strong>Word Min / Max</strong></td><td>No</td><td>Word count limits for this document</td></tr>
+    <tr><td><strong>Character / Page Limit</strong></td><td>No</td><td>Additional length constraints</td></tr>
+    <tr><td><strong>Mandatory Topics</strong></td><td>No</td><td>One per line — topics the document must cover</td></tr>
+    <tr><td><strong>Additional Questions</strong></td><td>No</td><td>One per line — specific questions to address</td></tr>
+    <tr><td><strong>Formatting Rules</strong></td><td>No</td><td>e.g. "12pt font, 1.5 line spacing"</td></tr>
+  </table>
+
+  <div class="callout">
+    <div class="callout-title">Key Point</div>
+    <p>Each document owns its own requirements. A Visa SOP will NOT inherit the SOP's prompt or word limits. Each document is completely independent — no cross-document bleed.</p>
+  </div>
+</div>
+
+<!-- 7. STEP 3a: GENERATE -->
+<div class="page" id="step3a">
+  <div class="step-header">
+    <span class="step-badge">3a</span>
+    <h2 style="border: none; margin: 0; padding: 0;">Generate a Document with AI</h2>
+  </div>
+  <p>After creating a document, you'll see the Document Workspace. Click <strong>Generate Document</strong> to start the AI pipeline:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Document Workspace — the generation hub. Click "Generate Document" to start the 6-stage AI pipeline.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/05-document-workspace.png" alt="Document Workspace" class="screenshot">
+    </div>
+  </div>
+
+  <h3>The 6 AI Stages</h3>
+  <p>The AI pipeline runs 6 stages automatically. You'll see live progress:</p>
+
+  <table>
+    <tr><th>#</th><th>Stage</th><th>What it does</th></tr>
+    <tr><td>1</td><td><strong>Prepare</strong> (Planner)</td><td>Plans the document structure and selects relevant evidence from the student's approved facts</td></tr>
+    <tr><td>2</td><td><strong>Write</strong> (Writer)</td><td>Writes the first draft using only approved student evidence — never invents facts</td></tr>
+    <tr><td>3</td><td><strong>Review</strong> (Quality Reviewer)</td><td>Checks the draft for coverage, accuracy, and requirement compliance</td></tr>
+    <tr><td>4</td><td><strong>Polish</strong> (Language Calibrator)</td><td>Refines language, tone, and readability</td></tr>
+    <tr><td>5</td><td><strong>Finalize</strong> (Bounded Finalizer)</td><td>Combines all stages into the final document, filtering to only relevant evidence</td></tr>
+    <tr><td>6</td><td><strong>Verify</strong> (Fact Reviewer)</td><td>Fact-checks every claim against the student's approved evidence ledger</td></tr>
+  </table>
+
+  <div class="callout">
+    <div class="callout-title">What to expect</div>
+    <p>The pipeline typically takes 1-3 minutes. You'll see a progress bar with the current stage. You can cancel at any time. When complete, you'll see the word count, fact-check results, model used, and cost.</p>
+  </div>
+
+  <div class="warning">
+    <div class="warning-title">Important</div>
+    <p>The AI only uses approved student facts from the intake. It will NOT invent information. If facts are missing, it will leave gaps or use safe fallbacks — never fabricate.</p>
+  </div>
+</div>
+
+<!-- 8. STEP 3b: EDIT AND APPROVE -->
+<div class="page" id="step3b">
+  <div class="step-header">
+    <span class="step-badge">3b</span>
+    <h2 style="border: none; margin: 0; padding: 0;">Edit, Save Versions, and Approve</h2>
+  </div>
+  <p>After generation, the document opens in a rich text editor:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Document Workspace — rich text editor with word count, prompt info panel, and export options on the right.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/05b-document-editor.png" alt="Document Editor" class="screenshot">
+    </div>
+  </div>
+
+  <h3>Editing</h3>
+  <ul>
+    <li>Click in the editor and make changes — it's a full rich text editor</li>
+    <li>The word count updates live at the bottom</li>
+    <li>Click <strong>Save Changes</strong> to update the current version, or <strong>Save as New Version</strong> to create a new one</li>
+  </ul>
+
+  <h3>Version History</h3>
+  <p>All versions are listed at the bottom. Each version shows who created it, the model used, cost, and word count:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Version History — all versions are preserved. View, edit from any version, or approve any version.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/05c-version-history.png" alt="Version History" class="screenshot">
+    </div>
+  </div>
+
+  <h3>Approving a Version</h3>
+  <ol>
+    <li>Select the version you want to approve in Version History</li>
+    <li>Click <strong>Approve</strong></li>
+    <li>A confirmation dialog appears — click <strong>Approve Document</strong></li>
+  </ol>
+
+  <div class="tip">
+    <div class="tip-title">Tip</div>
+    <p>You can approve even if word count warnings appear. The consultant is the final authority. You can also approve a different version later.</p>
+  </div>
+</div>
+
+<!-- 9. STEP 4: EXPORT -->
+<div class="page" id="step4">
+  <div class="step-header">
+    <span class="step-badge">4</span>
+    <h2 style="border: none; margin: 0; padding: 0;">Export the Final Document</h2>
+  </div>
+  <p>Once a version is approved, the Export panel on the right side of the document workspace changes to show download buttons:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Export panel — after approval, green "Download PDF" and "Download DOCX" buttons appear. Draft exports are also available for non-approved versions.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/05d-export-panel.png" alt="Export Panel" class="screenshot">
+    </div>
+  </div>
+
+  <table>
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td><strong>Download PDF</strong> (green)</td><td>Exports the approved version as PDF</td></tr>
+    <tr><td><strong>Download DOCX</strong> (green)</td><td>Exports the approved version as DOCX</td></tr>
+    <tr><td><strong>Draft PDF</strong></td><td>Exports the currently selected version (even if not approved)</td></tr>
+    <tr><td><strong>Draft DOCX</strong></td><td>Exports the currently selected version as DOCX</td></tr>
+  </table>
+
+  <div class="callout">
+    <div class="callout-title">File download</div>
+    <p>The file downloads to your computer automatically. The filename includes the document title and version number.</p>
+  </div>
+</div>
+
+<!-- 10. MULTIPLE DOCUMENTS -->
+<div class="page" id="multiple-docs">
+  <h1>Managing Multiple Documents</h1>
+  <p>One application can have many documents. Each is independent with its own prompt, word limits, topics, and formatting:</p>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Application Workspace with multiple documents — each card shows the title, type, prompt source, word limits, and status. The + Add Document button is always visible at the bottom.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/04-application-workspace.png" alt="Multiple Documents" class="screenshot">
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">Key Points</div>
+    <p>
+    • You can have <strong>multiple documents of the same type</strong> (e.g., two Essays, two LORs)<br>
+    • Each document has its <strong>own prompt, word limits, topics, and formatting</strong><br>
+    • A Visa SOP will <strong>NOT</strong> inherit the SOP's prompt — each document is isolated<br>
+    • The <strong>+ Add Document</strong> button is always visible at the bottom of the Documents section
+    </p>
+  </div>
+
+  <h3>Document Card Status Indicators</h3>
+  <table>
+    <tr><th>Status</th><th>Meaning</th><th>Action</th></tr>
+    <tr><td>NOT_STARTED</td><td>Document created, not yet generated</td><td>Generate →</td></tr>
+    <tr><td>GENERATING</td><td>AI pipeline in progress</td><td>Open to view progress</td></tr>
+    <tr><td>GENERATED</td><td>AI draft created, not yet reviewed</td><td>Review →</td></tr>
+    <tr><td>DRAFT</td><td>Saved but not approved</td><td>Review →</td></tr>
+    <tr><td>APPROVED</td><td>Final version approved</td><td>Export / Open →</td></tr>
+    <tr><td>FAILED</td><td>Generation failed</td><td>Retry →</td></tr>
+  </table>
+
+  <div class="screenshot-container">
+    <div class="screenshot-label">Visa SOP document — a second document type showing independent requirements. Uses the D-Vivid default template.</div>
+    <div class="screenshot-wrap">
+      <img src="manual-screenshots/05e-visa-sop-document.png" alt="Visa SOP Document" class="screenshot">
+    </div>
+  </div>
+</div>
+
+<!-- 11. DELETING -->
+<div class="page" id="deleting">
+  <h1>Deleting Documents and Applications</h1>
+
+  <h3>Delete a Single Document</h3>
+  <p>On each document card, click <strong>Delete</strong> (small red text, bottom right). A confirmation panel appears:</p>
+
+  <div class="callout">
+    <div class="callout-title">Delete confirmation</div>
+    <p>"Delete 'Visa SOP'? This will permanently delete this document, its generated versions, and its generation history. Other documents and the application will not be affected."</p>
+  </div>
+
+  <ul>
+    <li>Only the selected document is deleted — by document ID, never by type</li>
+    <li>Other documents are untouched</li>
+    <li>The application and student remain</li>
+    <li>You cannot delete a document while generation is in progress</li>
+  </ul>
+
+  <h3>Delete an Application</h3>
+  <p>On the application workspace, click <strong>Delete application</strong>. This deletes the application and ALL its documents, versions, and generation history. The student profile remains.</p>
+
+  <h3>Delete a Student</h3>
+  <p>On the Students list, click <strong>Delete</strong> on a student row. This deletes the student, their profile, and ALL applications with their documents and generation history. This cannot be undone.</p>
+
+  <div class="warning">
+    <div class="warning-title">Warning</div>
+    <p>Deletions are permanent. There is no undo for any delete operation. Always confirm the confirmation dialog before proceeding.</p>
+  </div>
+</div>
+
+<!-- 12. DOCUMENT TYPES -->
+<div class="page" id="doc-types">
+  <h1>Document Types Reference</h1>
+  <p>The portal supports 11 document types. Each has different prompt requirements:</p>
+
+  <table>
+    <tr><th>Type</th><th>Prompt Required?</th><th>Use Case</th></tr>
+    <tr><td><strong>Statement of Purpose</strong></td><td>Yes</td><td>Standard SOP for university applications</td></tr>
+    <tr><td><strong>Essay</strong></td><td>Yes</td><td>Application essays with specific questions</td></tr>
+    <tr><td><strong>Supplemental Question</strong></td><td>Yes</td><td>Short supplemental essay responses</td></tr>
+    <tr><td><strong>MOA</strong></td><td>Yes</td><td>Memorandum of Agreement</td></tr>
+    <tr><td><strong>Personal Statement</strong></td><td>Yes</td><td>Personal narrative statement</td></tr>
+    <tr><td><strong>Statement of Academic Purpose</strong></td><td>Yes</td><td>Academic-focused purpose statement</td></tr>
+    <tr><td><strong>Letter of Motivation</strong></td><td>Yes</td><td>Motivation letter for European universities</td></tr>
+    <tr><td><strong>Visa SOP</strong></td><td>No (uses D-Vivid default)</td><td>Student visa statement of purpose</td></tr>
+    <tr><td><strong>Cover Letter</strong></td><td>No (uses D-Vivid default)</td><td>Job/program cover letter</td></tr>
+    <tr><td><strong>Letter of Recommendation</strong></td><td>No (uses D-Vivid default)</td><td>LOR from faculty/recommender</td></tr>
+    <tr><td><strong>Custom Document</strong></td><td>Yes</td><td>Any other document type</td></tr>
+  </table>
+
+  <div class="tip">
+    <div class="tip-title">Visa SOP</div>
+    <p>If you leave the Visa SOP prompt blank, the system uses the D-Vivid default template. This template focuses on study purpose, career relevance, and post-study intentions — it does NOT force family/property/finance claims.</p>
+  </div>
+</div>
+
+<!-- 13. INTAKE SECTIONS -->
+<div class="page" id="intake-sections">
+  <h1>The 9 Intake Sections Reference</h1>
+  <p>The intake has 9 sections. Only 6 are required to unlock document generation:</p>
+
+  <table>
+    <tr><th>#</th><th>Section</th><th>Required?</th><th>What it collects</th></tr>
+    <tr><td>1</td><td><strong>Student Details</strong></td><td>Yes</td><td>Name, email, phone, nationality, country, education history</td></tr>
+    <tr><td>2</td><td><strong>Field Motivation</strong></td><td>No</td><td>Why the student chose this field</td></tr>
+    <tr><td>3</td><td><strong>Academics & Projects</strong></td><td>Yes</td><td>Projects, subjects, skills (technical, tools, programming, domain, soft)</td></tr>
+    <tr><td>4</td><td><strong>Work Experience</strong></td><td>Yes</td><td>Jobs, internships, research roles (or "no work experience" checkbox)</td></tr>
+    <tr><td>5</td><td><strong>Master's Motivation</strong></td><td>Yes</td><td>Why pursue a master's now, skill gaps, academic/professional motivation</td></tr>
+    <tr><td>6</td><td><strong>Country Questions</strong></td><td>Yes</td><td>Why this country, post-study plans (country-specific questionnaire)</td></tr>
+    <tr><td>7</td><td><strong>Subject Requirements</strong></td><td>No</td><td>Consultant-added notes about program prerequisites</td></tr>
+    <tr><td>8</td><td><strong>Program / University Info</strong></td><td>No</td><td>Official source URL for program context</td></tr>
+    <tr><td>9</td><td><strong>Career Goals</strong></td><td>Yes</td><td>Short-term role/industry + long-term vision/goals</td></tr>
+  </table>
+
+  <div class="callout">
+    <div class="callout-title">Required sections</div>
+    <p>Sections 1, 3, 4, 5, 6, and 9 must be complete to unlock document generation. Sections 2, 7, and 8 are optional and can be skipped.</p>
+  </div>
+</div>
+
+<!-- 14. AI STAGES -->
+<div class="page" id="ai-stages">
+  <h1>The 6 AI Generation Stages</h1>
+  <p>The AI pipeline runs 6 stages in sequence. Each stage has a specific role:</p>
+
+  <div class="workflow-tracker" style="flex-wrap: wrap; gap: 10px;">
+    <div class="wf-step" style="min-width: 120px;">
+      <div class="wf-circle done">1</div>
+      <div class="wf-label">Prepare</div>
+    </div>
+    <div class="wf-step" style="min-width: 120px;">
+      <div class="wf-circle done">2</div>
+      <div class="wf-label">Write</div>
+    </div>
+    <div class="wf-step" style="min-width: 120px;">
+      <div class="wf-circle active">3</div>
+      <div class="wf-label">Review</div>
+    </div>
+    <div class="wf-step" style="min-width: 120px;">
+      <div class="wf-circle upcoming">4</div>
+      <div class="wf-label">Polish</div>
+    </div>
+    <div class="wf-step" style="min-width: 120px;">
+      <div class="wf-circle upcoming">5</div>
+      <div class="wf-label">Finalize</div>
+    </div>
+    <div class="wf-step" style="min-width: 120px;">
+      <div class="wf-circle upcoming">6</div>
+      <div class="wf-label">Verify</div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>Stage</th><th>Name</th><th>What it does</th></tr>
+    <tr><td>1</td><td><strong>Prepare</strong> (Planner)</td><td>Plans the document structure and selects relevant evidence from the student's approved facts</td></tr>
+    <tr><td>2</td><td><strong>Write</strong> (Writer)</td><td>Writes the first draft using only approved student evidence — never invents facts</td></tr>
+    <tr><td>3</td><td><strong>Review</strong> (Quality Reviewer)</td><td>Checks the draft for coverage, accuracy, and requirement compliance</td></tr>
+    <tr><td>4</td><td><strong>Polish</strong> (Language Calibrator)</td><td>Refines language, tone, and readability</td></tr>
+    <tr><td>5</td><td><strong>Finalize</strong> (Bounded Finalizer)</td><td>Combines all stages into the final document, filtering to only relevant evidence</td></tr>
+    <tr><td>6</td><td><strong>Verify</strong> (Fact Reviewer)</td><td>Fact-checks every claim against the student's approved evidence ledger</td></tr>
+  </table>
+
+  <div class="callout">
+    <div class="callout-title">Evidence-constrained writing</div>
+    <p>The AI only uses facts that the consultant has approved in the intake. It will never fabricate education, experience, projects, or personal details. If information is missing, it leaves a gap rather than inventing.</p>
+  </div>
+</div>
+
+<!-- 15. TROUBLESHOOTING -->
+<div class="page" id="troubleshooting">
+  <h1>15. Troubleshooting</h1>
+
+  <h3>"I can't generate a document"</h3>
+  <p><strong>Cause:</strong> The intake is not complete.</p>
+  <p><strong>Fix:</strong> Go back to the application workspace and click <strong>Complete N Missing Answers →</strong>. Fill in all required sections (Student Details, Academics & Projects, Work Experience, Master's Motivation, Country Questions, Career Goals).</p>
+
+  <h3>"The generation is stuck"</h3>
+  <p><strong>Cause:</strong> The AI pipeline may have timed out or the server is processing.</p>
+  <p><strong>Fix:</strong> Wait 2-3 minutes. If the progress card shows "Generation appears interrupted", click <strong>Check Again</strong>. If it's still stuck, click <strong>Cancel Generation</strong> and try again.</p>
+
+  <h3>"The generated document has gaps or says information is missing"</h3>
+  <p><strong>Cause:</strong> The AI only uses approved student facts. If the intake is incomplete, it won't invent information.</p>
+  <p><strong>Fix:</strong> Go back to the intake and complete the missing sections. Then regenerate.</p>
+
+  <h3>"I see 'DOCUMENT_GENERATION_IN_PROGRESS' when trying to delete"</h3>
+  <p><strong>Cause:</strong> You can't delete a document while the AI is generating it.</p>
+  <p><strong>Fix:</strong> Wait for generation to complete or cancel it first, then delete.</p>
+
+  <h3>"The word count warning appears"</h3>
+  <p><strong>Cause:</strong> The document is outside the word limit range.</p>
+  <p><strong>Fix:</strong> This is an advisory warning only. You can still approve and export. Edit the document to adjust the word count if needed.</p>
+
+  <h3>"I want to create another document of the same type (e.g., a second Essay)"</h3>
+  <p><strong>Yes, this is supported.</strong> Click <strong>+ Add Document</strong>, select the same type, and give it a different title. Each document is independent with its own prompt and requirements.</p>
+
+  <div class="tip" style="margin-top: 30px;">
+    <div class="tip-title">Quick Reference</div>
+    <p>
+    1. Students → + New Applicant<br>
+    2. Complete intake (required sections only)<br>
+    3. + Add Document → choose type → enter prompt<br>
+    4. Generate Document → wait for 6 stages<br>
+    5. Edit in the rich text editor → Save as New Version<br>
+    6. Approve the final version<br>
+    7. Download PDF or DOCX
+    </p>
+  </div>
+</div>
+
+</body>
+</html>

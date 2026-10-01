@@ -160,6 +160,18 @@ export function GenerationProgressCard({ documentTitle, status, cancelling, onCa
             </div>
           ) : cancelRequested ? (
             <p className="text-base font-semibold text-dvivid-text-primary">Stopping generation...</p>
+          ) : status?.status === "RECOVERING" ? (
+            <div>
+              <p className="text-base font-semibold text-dvivid-text-primary">
+                Generation is taking longer than expected.
+              </p>
+              <p className="text-sm text-dvivid-text-secondary mt-0.5">
+                D-Vivid is recovering automatically — your completed steps are saved. You can leave this page.
+              </p>
+              <p className="text-xs text-dvivid-text-muted mt-2">
+                {status?.startedAt ? `${fmtElapsed(status.startedAt)} elapsed` : ""}
+              </p>
+            </div>
           ) : (
             <AnimatePresence mode="wait">
               <motion.div

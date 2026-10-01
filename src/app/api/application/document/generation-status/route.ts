@@ -24,6 +24,8 @@ import {
   ACTIVE_RUN_STATUSES,
 } from "@/lib/application/generation-lifecycle";
 import { maybeRecoverRun } from "@/lib/application/generation-recovery";
+import { isSchemaMigrationRequiredError } from "@/lib/application/generation-schema";
+import { classifyGenerationError } from "@/lib/application/generation-errors";
 
 export async function GET(req: NextRequest) {
   try {
@@ -87,9 +89,20 @@ export async function GET(req: NextRequest) {
       maybeRecoverRun(run);
     }
 
+    // Normalize internal failure strings — the UI must never see raw
+    // codes like "STAGE_TIMEOUT:factReviewer" or provider bodies.
+    const normalized = run.status === "FAILED" && run.failureMessage
+      ? classifyGenerationError(run.failureMessage)
+      : null;
+    const warnings = run.warnings || [];
+    const displayStatus =
+      run.status === "COMPLETED" && warnings.length > 0
+        ? "COMPLETED_WITH_WARNINGS"
+        : run.status;
+
     return NextResponse.json({
       generationId: run.id,
-      status: run.status,
+      status: displayStatus,
       currentStage: run.currentStage,
       completedStages: run.completedStages,
       totalStages: run.totalStages,
@@ -101,13 +114,24 @@ export async function GET(req: NextRequest) {
       completedAt: run.completedAt,
       failedAt: run.failedAt,
       cancelledAt: run.cancelledAt,
-      failureMessage: run.status === "FAILED" ? run.failureMessage : null,
+      // Normalized client contract — stable code + friendly copy only.
+      failureCode: normalized?.code ?? null,
+      failureMessage: normalized?.userMessage ?? null,
+      recoverable: normalized?.recoverable ?? false,
+      warnings: warnings.map(w => ({ code: w.code, message: w.message })),
       documentGenerationStatus: doc.generation_status,
       reviewStatus: doc.review_status,
       active: ACTIVE_RUN_STATUSES.includes(run.status),
     });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
+    if (isSchemaMigrationRequiredError(error)) {
+      console.error("generation-status blocked — schema migration required:", error.missing);
+      return NextResponse.json(
+        { error: "SCHEMA_MIGRATION_REQUIRED", message: "Generation is temporarily unavailable because the application database requires an update." },
+        { status: 503 },
+      );
+    }
     console.error("generation-status error:", error);
     return NextResponse.json({ error: "Failed to load generation status" }, { status: 500 });
   }

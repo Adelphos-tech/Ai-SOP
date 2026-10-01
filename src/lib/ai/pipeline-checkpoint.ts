@@ -295,3 +295,66 @@ export async function appendDurable(filePath: string, value: unknown): Promise<v
   }
   await syncDirectory(path.dirname(filePath));
 }
+
+// ============================================================
+// ATTEMPT ARTIFACT RETENTION (DEBUG ARTIFACTS)
+// ============================================================
+// logs/attempts/<generationId>/ holds full raw model output and
+// rendered drafts — DEBUG artifacts, not operational logs. They are
+// needed for recovery while a run is live and for post-incident
+// debugging, but must not be retained indefinitely.
+//
+// Policy: attempt directories older than ATTEMPT_ARTIFACT_TTL_DAYS
+// (default 14) are removed ONLY when no .execution.lock is present —
+// a locked attempt may be resumable by an in-flight or recovering
+// generation and is never touched. Correlation evidence survives in
+// generation_runs / generation_stage_responses / openai-usage.jsonl.
+// ============================================================
+
+const ATTEMPT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Remove expired attempt directories. Called explicitly (cron / startup
+ * maintenance hook) — never implicitly inside generation paths.
+ * Returns the list of removed generation ids for the caller to log.
+ */
+export async function cleanupAttemptArtifacts(opts?: {
+  attemptsRoot?: string;
+  ttlDays?: number;
+  now?: number;
+}): Promise<{ removed: string[]; skippedLocked: string[] }> {
+  const attemptsRoot = opts?.attemptsRoot || path.join(process.cwd(), "logs", "attempts");
+  const ttlDays = opts?.ttlDays ?? Number(process.env.ATTEMPT_ARTIFACT_TTL_DAYS || 14);
+  const ttlMs = Math.max(1, ttlDays) * 24 * 60 * 60 * 1000;
+  const now = opts?.now ?? Date.now();
+  const removed: string[] = [];
+  const skippedLocked: string[] = [];
+  let entries;
+  try {
+    entries = await fs.readdir(attemptsRoot, { withFileTypes: true });
+  } catch {
+    return { removed, skippedLocked };
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !ATTEMPT_UUID_RE.test(entry.name)) continue;
+    const dir = path.join(attemptsRoot, entry.name);
+    try {
+      const stat = await fs.stat(dir);
+      if (now - stat.mtimeMs <= ttlMs) continue;
+      // Never delete an attempt that still holds an execution lock —
+      // a live or recoverable generation may depend on it.
+      try {
+        await fs.access(path.join(dir, ".execution.lock"));
+        skippedLocked.push(entry.name);
+        continue;
+      } catch { /* no lock — safe to remove */ }
+      await fs.rm(dir, { recursive: true, force: true });
+      removed.push(entry.name);
+    } catch {
+      // Cleanup is telemetry-adjacent maintenance — a failed removal is
+      // skipped, not fatal, and reported via the returned list.
+    }
+  }
+  return { removed, skippedLocked };
+}

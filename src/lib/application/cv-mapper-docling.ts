@@ -15,6 +15,7 @@ import type { ParsedDocument, ResumeCandidate } from "./resume-candidate.schema"
 import type {
   ParsedCV, ParsedEducation, ParsedExperience, ParsedProject,
 } from "./cv-parser";
+import { createCVParseFailure } from "./cv-parser";
 import { sanitizeCandidate } from "./cv-sanity";
 
 /** Bump on any mapper logic change — invalidates cached dedup metas. */
@@ -160,9 +161,13 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
   // PERSONAL (pre-section) segment.
   let detectedName = "";
   {
+    // Page gate: PDF blocks carry page numbers (page 1 = name header).
+    // DOCX blocks have page=null — there is no pagination, so allow
+    // early-document blocks (reading-order proxy for "page 1").
     const nameLike = (b: (typeof blocks)[number]) =>
       (b.type === "section_header" || b.type === "title") &&
-      b.page === 1 && looksLikeName(b.text) && !sectionOf(b.text);
+      (b.page === 1 || (b.page == null && b.order < 15)) &&
+      looksLikeName(b.text) && !sectionOf(b.text);
     const allCaps = blocks.find(b => nameLike(b) && b.text.trim() === b.text.trim().toUpperCase() && /[A-Z]/.test(b.text));
     const personalPick = segments
       .filter(s => s.section === "PERSONAL" || s.section === "SUMMARY")
@@ -575,6 +580,35 @@ export function mapDoclingToParsedCV(doc: ParsedDocument): ParsedCV {
   if ((clean.skills.languages || []).length > 0) {
     // Surface languages as soft-skill evidence until canonical schema gains a slot
     mapped.parseWarnings.push(`Languages detected: ${clean.skills.languages!.join("; ")}`);
+  }
+
+  // ===== EMPTY-STRUCTURE GATE =====
+  // A substantial document that produced ZERO resume sections means the
+  // semantic mapping failed (e.g. table-layout DOCX emitting no
+  // section_header blocks). Returning success:true with empty arrays
+  // silently destroys applicant data — this must be a typed failure.
+  const EMPTY_STRUCTURE_MIN_RAW = 300;
+  const skillsTotal = Object.values(mapped.skills || {}).reduce((n: number, b: any) => n + (b?.length || 0), 0);
+  const sectionDataCount =
+    (mapped.education?.length || 0) +
+    (mapped.experience?.length || 0) +
+    (mapped.projects?.length || 0) +
+    skillsTotal +
+    (mapped.certifications?.length || 0) +
+    (mapped.achievements?.length || 0);
+  if (mapped.rawTextLength >= EMPTY_STRUCTURE_MIN_RAW && sectionDataCount === 0) {
+    throw createCVParseFailure("CV_PARSE_EMPTY_STRUCTURE", undefined, {
+      rawTextLength: mapped.rawTextLength,
+      blockCount: blocks.length,
+      engine: "docling",
+      mapperVersion: CV_MAPPER_VERSION,
+      education: mapped.education?.length || 0,
+      experience: mapped.experience?.length || 0,
+      projects: mapped.projects?.length || 0,
+      skills: skillsTotal,
+      certifications: mapped.certifications?.length || 0,
+      achievements: mapped.achievements?.length || 0,
+    });
   }
 
   return mapped;

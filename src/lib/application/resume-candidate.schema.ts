@@ -23,9 +23,10 @@ export const ParsedDocumentSchema = z.object({
   ocrUsed: z.boolean().optional(),
   durationMs: z.number().optional(),
   blocks: z.array(DoclingBlockSchema),
-  engine: z.literal("docling").optional(),
+  engine: z.enum(["docling", "rapidocr"]).optional(),
   doclingVersion: z.string().optional(),
   sourceHash: z.string().optional(),
+  imageCount: z.number().int().optional(),
 });
 export type ParsedDocument = z.infer<typeof ParsedDocumentSchema>;
 export type DoclingBlock = z.infer<typeof DoclingBlockSchema>;

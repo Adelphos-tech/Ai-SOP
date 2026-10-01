@@ -26,12 +26,28 @@
 import { loadDocumentGenerationContext, buildPipelineWritingInstructions, DocumentGenerationContext } from "@/lib/application/generation-context";
 import { adaptProfile } from "@/lib/application/profile-adapter";
 import { buildQualityRubricInstructions } from "@/lib/application/document-type-config";
-import { updateDocumentStatus, createDocumentVersion, acquireGenerationLock } from "@/lib/application/application-repository";
-import { createGenerationRun, cancelRun, completeRun, failRun } from "@/lib/application/generation-lifecycle";
+import {
+  createDocumentVersion,
+  acquireGenerationLock,
+  adoptRunOwnership,
+  isRunDocumentOwner,
+  releaseDocumentGeneration,
+  releaseOrphanedDocumentLock,
+} from "@/lib/application/application-repository";
+import {
+  createGenerationRun, cancelRun, completeRun, failRun, markRunRecovering,
+  claimRunForResume, getRun, getLatestRun, isActiveGenerationStatus, hasNewerGenerationRun,
+  GenerationSupersededError,
+  type GenerationRun,
+} from "@/lib/application/generation-lifecycle";
+import { isSchemaMigrationRequiredError } from "@/lib/application/generation-schema";
+import { classifyGenerationError } from "@/lib/application/generation-errors";
+import { emitEvent } from "@/lib/observability/events";
 import { runApplicationPipeline, ApplicationPipelineInput } from "@/lib/ai/pipeline/run-application-pipeline";
 import { isApiKeyConfigured } from "@/lib/ai/openai-client";
 import { isProviderCircuitOpen } from "@/lib/ai/openai-transport";
 import { markGenerationLive, unmarkGenerationLive } from "@/lib/application/generation-registry";
+import type { DocumentVersion } from "@/lib/application/application-types";
 import {
   ResponseComponent,
   PageLimitConstraint,
@@ -83,6 +99,23 @@ export async function generateApplicationDocument(
   markGenerationLive(documentId);
   try {
     return await generateApplicationDocumentInner(input, requestId, startTime, resumeRunId);
+  } catch (e) {
+    // Schema assertion failure — deployment hasn't run the ordering
+    // migration. Fail fast with a friendly 503; technical detail in logs.
+    if (isSchemaMigrationRequiredError(e)) {
+      emitEvent("generation_schema_migration_required", {
+        requestId, documentId, missing: e.missing,
+      }, "error");
+      return {
+        ok: false,
+        status: 503,
+        body: {
+          error: "SCHEMA_MIGRATION_REQUIRED",
+          message: "Generation is temporarily unavailable because the application database requires an update.",
+        },
+      };
+    }
+    throw e;
   } finally {
     unmarkGenerationLive(documentId);
   }
@@ -96,27 +129,26 @@ async function generateApplicationDocumentInner(
 ): Promise<GenerateDocumentResult> {
   const { studentId, applicationId, documentId } = input;
 
-  console.log(JSON.stringify({
-    event: resumeRunId ? "generation_service_resume" : "generation_service_start",
+  emitEvent(resumeRunId ? "generation_service_resume" : "generation_service_start", {
     requestId,
+    generationRunId: resumeRunId ?? undefined,
     studentId,
     applicationId,
     documentId,
     resumeRunId,
     buildId: BUILD_ID,
-  }));
+  });
 
   // ===== LOAD GENERATION CONTEXT =====
   const ctxResult = await loadDocumentGenerationContext(studentId, applicationId, documentId);
 
   if (!ctxResult.ok || !ctxResult.context) {
-    console.log(JSON.stringify({
-      event: "generation_context_failed",
+    emitEvent("generation_context_failed", {
       requestId,
       documentId,
-      error: ctxResult.error,
+      errorCode: ctxResult.error || "GENERATION_CONTEXT_FAILED",
       durationMs: Date.now() - startTime,
-    }));
+    });
     return {
       ok: false,
       status: ctxResult.statusCode || 500,
@@ -128,12 +160,11 @@ async function generateApplicationDocumentInner(
 
   // ===== CHECK API KEY =====
   if (!isApiKeyConfigured()) {
-    console.log(JSON.stringify({
-      event: "generation_api_key_missing",
+    emitEvent("generation_api_key_missing", {
       requestId,
       documentId,
       durationMs: Date.now() - startTime,
-    }));
+    });
     return {
       ok: false,
       status: 503,
@@ -143,13 +174,12 @@ async function generateApplicationDocumentInner(
 
   // ===== CHECK PRE-GENERATION BLOCKS =====
   if (ctx.blocked) {
-    console.log(JSON.stringify({
-      event: "generation_blocked",
+    emitEvent("generation_blocked", {
       requestId,
       documentId,
       blockReasons: ctx.blockReasons,
       durationMs: Date.now() - startTime,
-    }));
+    });
     return {
       ok: false,
       // 422 — business prerequisites incomplete, not an authorization failure.
@@ -168,12 +198,11 @@ async function generateApplicationDocumentInner(
   // failures → temporarily reject new generations. A slow document
   // never opens the circuit — only terminal provider errors do.
   if (!resumeRunId && isProviderCircuitOpen()) {
-    console.log(JSON.stringify({
-      event: "generation_circuit_open",
+    emitEvent("generation_circuit_open", {
       requestId,
       documentId,
       durationMs: Date.now() - startTime,
-    }));
+    });
     return {
       ok: false,
       status: 503,
@@ -181,21 +210,66 @@ async function generateApplicationDocumentInner(
     };
   }
 
-  // ===== ACQUIRE GENERATION LOCK (atomic) =====
-  // Resume path: the run already holds the lock — skip re-acquiring.
-  const acquired = resumeRunId ? true : await acquireGenerationLock(documentId);
-  if (!acquired) {
-    console.log(JSON.stringify({
-      event: "generation_lock_conflict",
-      requestId,
-      documentId,
-      durationMs: Date.now() - startTime,
-    }));
-    return {
-      ok: false,
-      status: 409,
-      body: { error: "GENERATION_ALREADY_IN_PROGRESS", message: "A generation is already running for this document." },
-    };
+  // Run id — generated BEFORE the lock so lock acquisition can
+  // atomically name this run the document's authoritative generation
+  // (application_documents.active_generation_run_id).
+  const generationId = resumeRunId || randomUUID();
+
+  // ===== ACQUIRE GENERATION LOCK / CLAIM RESUME (atomic) =====
+  // Fresh path: conditional UPDATE takes the document lock AND writes
+  // this run as the document's generation owner in one statement.
+  // Resume path: CAS-claim the run row, then CAS-adopt document
+  // ownership — a run superseded by a newer active run can never
+  // resume, never touch the document, and never re-bill provider work.
+  // Correlation keys for every downstream event + ledger row. The
+  // attempt_seq is the authoritative ordering key — always emitted.
+  let runMeta: { attemptSeq: number | null; recoveryCount: number } = {
+    attemptSeq: null, recoveryCount: 0,
+  };
+
+  if (resumeRunId) {
+    const claim = await claimResumeOwnership(documentId, generationId);
+    if (claim.outcome !== "ok") {
+      if (claim.outcome === "superseded") {
+        return supersedeRun(generationId, documentId, requestId, startTime);
+      }
+      emitEvent("generation_resume_rejected", {
+        requestId, generationId, generationRunId: generationId,
+        documentId, reason: claim.outcome,
+        durationMs: Date.now() - startTime,
+      });
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error: "GENERATION_NOT_RESUMABLE",
+          message: "This generation run is no longer active — it was cancelled, completed, or superseded.",
+        },
+      };
+    }
+    if (claim.run) {
+      runMeta = { attemptSeq: claim.run.attemptSeq, recoveryCount: claim.run.recoveryCount };
+      emitEvent("generation_recovery_claimed", {
+        requestId, generationId, generationRunId: generationId, documentId,
+        attemptSeq: runMeta.attemptSeq, recoveryCount: runMeta.recoveryCount,
+        stage: claim.run.currentStage,
+        providerResponseId: claim.run.providerResponseId,
+      });
+    }
+  } else {
+    const acquired = await acquireGenerationLock(documentId, generationId);
+    if (!acquired) {
+      emitEvent("generation_lock_conflict", {
+        requestId,
+        documentId,
+        durationMs: Date.now() - startTime,
+      });
+      return {
+        ok: false,
+        status: 409,
+        body: { error: "GENERATION_ALREADY_IN_PROGRESS", message: "A generation is already running for this document." },
+      };
+    }
   }
 
   // ===== BUILD PIPELINE INPUT =====
@@ -205,8 +279,6 @@ async function generateApplicationDocumentInner(
 
   const artifacts = buildGenerationArtifacts(ctx, profile);
   const { responseComponent, pageLimit, pipelineWritingInstructions, qualityRubricInstructions, programContextText, contract } = artifacts;
-
-  const generationId = resumeRunId || randomUUID();
 
   const pipelineInput: ApplicationPipelineInput = {
     profile,
@@ -223,6 +295,9 @@ async function generateApplicationDocumentInner(
       generationId,
       generationRunId: generationId,
       documentId,
+      attemptSeq: runMeta.attemptSeq,
+      requestId,
+      recoveryCount: runMeta.recoveryCount,
       // Resume MUST restore persisted checkpoints — CONTENT_REGENERATION
       // would re-pay for every completed stage.
       mode: resumeRunId ? "TECHNICAL_STAGE_RETRY" as const : "CONTENT_REGENERATION" as const,
@@ -239,11 +314,24 @@ async function generateApplicationDocumentInner(
         applicationId,
         studentId,
       });
+      // Fetch the DB-assigned attempt_seq — the authoritative ordering
+      // key every downstream event and ledger row must carry.
+      const created = await getRun(generationId);
+      if (created) {
+        runMeta = { attemptSeq: created.attemptSeq, recoveryCount: created.recoveryCount };
+        pipelineInput.execution!.attemptSeq = runMeta.attemptSeq;
+        pipelineInput.execution!.recoveryCount = runMeta.recoveryCount;
+      }
     }
   } catch (e) {
     // Lifecycle persistence must not block generation — the pipeline
-    // still enforces boundaries only when the row exists.
-    console.error(JSON.stringify({ event: "generation_run_create_failed", requestId, generationId, documentId }));
+    // still enforces boundaries only when the row exists. NEVER silent:
+    // losing the run row means recovery/cancellation evidence is gone.
+    emitEvent("generation_run_create_failed", {
+      requestId, generationId, generationRunId: generationId, documentId,
+      errorCode: "GENERATION_STATE_PERSISTENCE_FAILED",
+      detail: e instanceof Error ? e.message : String(e),
+    }, "error");
   }
 
   // ===== RUN SIX-STAGE PIPELINE =====
@@ -252,15 +340,17 @@ async function generateApplicationDocumentInner(
   // ===== CANCELLED — authoritative stop, release lock =====
   if (result.status === "cancelled") {
     await cancelRun(generationId);
-    // Release the document generation lock — back to pre-generation state.
-    await updateDocumentStatus(documentId, undefined, "NOT_STARTED");
-    console.log(JSON.stringify({
-      event: "generation_cancelled",
+    // Release the document generation lock — owner-guarded: if this
+    // run was superseded mid-flight, the newer run's state stands.
+    await releaseDocumentGeneration(documentId, generationId, "NOT_STARTED");
+    emitEvent("generation_cancelled", {
       requestId,
       generationId,
+      generationRunId: generationId,
+      attemptSeq: runMeta.attemptSeq,
       documentId,
       durationMs: Date.now() - startTime,
-    }));
+    });
     return {
       ok: true,
       status: 200,
@@ -269,21 +359,62 @@ async function generateApplicationDocumentInner(
   }
 
   if (result.status === "error") {
+    // Superseded mid-pipeline: a newer run owns this document — mark
+    // this run FAILED and leave the document/state to the new owner.
+    if (result.error === "RUN_SUPERSEDED") {
+      return supersedeRun(generationId, documentId, requestId, startTime);
+    }
+    // Recoverable failure (e.g. stage SLA fired while the provider
+    // response is still in flight): mark the run RECOVERING — the
+    // heartbeat goes stale and status-endpoint recovery resumes the SAME
+    // run, polling the SAME provider response. No duplicate paid call.
+    // Document stays GENERATING → generation lock held, UI shows the
+    // recovering state. If the recovery budget is exhausted, fail hard.
+    if (result.recoverable) {
+      const marked = await markRunRecovering(generationId, result.error || "RECOVERABLE");
+      if (marked) {
+        emitEvent("generation_run_recovering", {
+          requestId, generationId, generationRunId: generationId, documentId,
+          attemptSeq: runMeta.attemptSeq,
+          recoveryCount: runMeta.recoveryCount + 1,
+          errorCode: result.error || "RECOVERABLE",
+          durationMs: Date.now() - startTime,
+        });
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            status: "recovering",
+            code: "GENERATION_PROVIDER_DELAY",
+            generationId: result.generationId,
+            message: "Generation is taking longer than expected. D-Vivid is recovering automatically.",
+          },
+        };
+      }
+      // Recovery budget exhausted → fall through to normal FAILED path.
+    }
+    const normalized = classifyGenerationError(result.error);
     await failRun(generationId, result.error || "PIPELINE_ERROR");
-    await updateDocumentStatus(documentId, undefined, "FAILED");
-    console.log(JSON.stringify({
-      event: "generation_pipeline_error",
+    await releaseDocumentGeneration(documentId, generationId, "FAILED");
+    emitEvent("generation_pipeline_error", {
       requestId,
       generationId,
+      generationRunId: generationId,
+      attemptSeq: runMeta.attemptSeq,
       documentId,
-      error: result.error,
+      errorCode: normalized.code,
+      errorClass: normalized.class,
+      detail: (result.error || "").slice(0, 300),
       durationMs: Date.now() - startTime,
-    }));
+    }, "error");
     return {
       ok: false,
       status: 500,
       body: {
-        error: result.error || "PIPELINE_ERROR",
+        // Frontend contract: stable code + friendly message — never the
+        // raw stage/provider string.
+        error: normalized.userMessage,
+        code: normalized.code,
         generationId: result.generationId,
         stages: result.metrics.stages,
         partialCost: result.metrics.cost,
@@ -292,6 +423,13 @@ async function generateApplicationDocumentInner(
   }
 
   // ===== SAVE DOCUMENT VERSION =====
+  // Ownership re-check: a newer run may have acquired the document
+  // between the last stage boundary and finalization. A superseded
+  // run must not publish a version or flip document state.
+  if (!(await isRunDocumentOwner(documentId, generationId))) {
+    return supersedeRun(generationId, documentId, requestId, startTime);
+  }
+
   const costUsd = result.metrics.cost?.estimatedApiCostUSD || null;
   const costInr = result.metrics.cost?.estimatedApiCostINR || null;
   const model = result.metrics.model || "unknown";
@@ -306,35 +444,70 @@ async function generateApplicationDocumentInner(
     .digest("hex")
     .substring(0, 16);
 
-  const version = await createDocumentVersion({
-    documentId,
-    content: result.finalText,
-    contentFormat: "MARKDOWN",
-    createdByType: "AI_GENERATED",
-    model,
-    generationId,
-    studentFactsHash,
-    requirementsHash,
-    costUsd: costUsd || undefined,
-    costInr: costInr || undefined,
-  });
+  // Ownership is re-enforced ATOMICALLY inside the version transaction
+  // (document row FOR UPDATE + owner/newer-run check) — the soft check
+  // above plus this guard together close the TOCTOU window.
+  let version: DocumentVersion;
+  try {
+    version = await createDocumentVersion({
+      documentId,
+      content: result.finalText,
+      contentFormat: "MARKDOWN",
+      createdByType: "AI_GENERATED",
+      model,
+      generationId,
+      studentFactsHash,
+      requirementsHash,
+      costUsd: costUsd || undefined,
+      costInr: costInr || undefined,
+      expectedGenerationRunId: generationId,
+    });
+  } catch (e) {
+    if (e instanceof GenerationSupersededError) {
+      return supersedeRun(generationId, documentId, requestId, startTime);
+    }
+    throw e;
+  }
 
   // ===== UPDATE GENERATION STATUS =====
-  // completeRun is a CAS — if a cancel request raced the final stage
-  // boundary, the run stays CANCELLED/COMPLETED atomically; a CANCELLED
-  // state is never overwritten back to COMPLETED.
-  await completeRun(generationId);
-  await updateDocumentStatus(documentId, undefined, "GENERATED");
+  // completeRun is a CAS on (active status + document ownership) — a
+  // cancel racing completion, or a superseding run, produces exactly
+  // one winner; a CANCELLED/superseded state is never overwritten.
+  const completed = await completeRun(generationId, result.warnings || []);
+  if (!completed) {
+    // CAS lost — either a cancel raced completion (release the lock
+    // and report cancelled) or this run was superseded (yield).
+    const run = await getRun(generationId);
+    if (run?.status === "CANCEL_REQUESTED" || run?.status === "CANCELLED") {
+      await cancelRun(generationId);
+      await releaseDocumentGeneration(documentId, generationId, "NOT_STARTED");
+      return {
+        ok: true,
+        status: 200,
+        body: { status: "cancelled", generationId, documentId },
+      };
+    }
+    return supersedeRun(generationId, documentId, requestId, startTime);
+  }
+  await releaseDocumentGeneration(documentId, generationId, "GENERATED");
 
-  console.log(JSON.stringify({
-    event: "generation_service_success",
+  emitEvent("generation_service_success", {
     requestId,
     generationId,
+    generationRunId: generationId,
+    attemptSeq: runMeta.attemptSeq,
     documentId,
     versionId: version.id,
     versionNumber: version.versionNumber,
     durationMs: Date.now() - startTime,
-  }));
+  });
+  if (resumeRunId) {
+    emitEvent("generation_recovery_completed", {
+      requestId, generationId, generationRunId: generationId, documentId,
+      attemptSeq: runMeta.attemptSeq, recoveryCount: runMeta.recoveryCount,
+      durationMs: Date.now() - startTime,
+    });
+  }
 
   return {
     ok: true,
@@ -377,9 +550,94 @@ async function generateApplicationDocumentInner(
 }
 
 /**
- * Release the generation lock on failure (best-effort).
- * Called by route catch blocks when generateApplicationDocument throws.
+ * Claim + adopt ownership for a resume request. Returns:
+ *   "ok"          — run claimed and this run owns the document
+ *   "not_found"   — no such run / run belongs to a different document
+ *   "not_active"  — run is terminal, CANCEL_REQUESTED, or already
+ *                   claimed by another resumer
+ *   "superseded"  — a newer active run owns the document
+ * On "ok" the claimed run row is returned for event correlation
+ * (attemptSeq / recoveryCount / currentStage / providerResponseId).
  */
+async function claimResumeOwnership(
+  documentId: string,
+  runId: string,
+): Promise<{ outcome: "ok" | "not_found" | "not_active" | "superseded"; run: GenerationRun | null }> {
+  const run = await getRun(runId);
+  if (!run || run.documentId !== documentId) return { outcome: "not_found", run: null };
+  if (!isActiveGenerationStatus(run.status)) return { outcome: "not_active", run };
+  // Exactly-one-claimer CAS: RECOVERING/QUEUED flip to RUNNING; a
+  // RUNNING run is claimable only when its heartbeat is stale. The CAS
+  // also fails when a NEWER run exists for the document (any status —
+  // a later attempt supersedes regardless of how it ended).
+  if (!(await claimRunForResume(runId))) {
+    if (await hasNewerGenerationRun(documentId, runId)) return { outcome: "superseded", run };
+    return { outcome: "not_active", run };
+  }
+  if (!(await adoptRunOwnership(documentId, runId))) return { outcome: "superseded", run };
+  return { outcome: "ok", run };
+}
+
+/**
+ * A superseded run loses all document authority. Mark its run row
+ * FAILED (terminal — never resumes again), best-effort cancel its
+ * in-flight provider response if any, and DO NOT touch
+ * application_documents — the newer run owns it.
+ */
+async function supersedeRun(
+  runId: string,
+  documentId: string,
+  requestId: string,
+  startTime: number,
+): Promise<GenerateDocumentResult> {
+  try {
+    const run = await getRun(runId);
+    await failRun(runId, "SUPERSEDED_BY_NEWER_RUN");
+    if (
+      run?.providerResponseId &&
+      ["queued", "in_progress"].includes(run.providerResponseStatus || "")
+    ) {
+      try {
+        const { getStageTransport } = await import("@/lib/ai/openai-transport");
+        await getStageTransport().cancelBackgroundStage(run.providerResponseId);
+      } catch (e) {
+        emitEvent("provider_cancel_failed", {
+          requestId, generationId: runId, generationRunId: runId, documentId,
+          providerResponseId: run.providerResponseId,
+          detail: e instanceof Error ? e.message : String(e),
+        }, "warn");
+      }
+    }
+    // Supersession evidence must name BOTH attempts — oldAttemptSeq is
+    // this run's; newAttemptSeq is the latest run for the document
+    // (the superseding owner, strict attempt_seq ordering).
+    const newer = await getLatestRun(documentId).catch(() => null);
+    emitEvent("generation_superseded", {
+      requestId, generationId: runId, generationRunId: runId, documentId,
+      oldAttemptSeq: run?.attemptSeq ?? null,
+      newAttemptSeq: newer?.attemptSeq ?? null,
+      stage: run?.currentStage ?? null,
+      providerResponseId: run?.providerResponseId ?? null,
+      reason: "SUPERSEDED_BY_NEWER_RUN",
+      durationMs: Date.now() - startTime,
+    });
+  } catch (e) {
+    emitEvent("generation_supersede_error", {
+      requestId, generationId: runId, generationRunId: runId, documentId,
+      detail: e instanceof Error ? e.message : String(e),
+    }, "error");
+  }
+  return {
+    ok: false,
+    status: 409,
+    body: {
+      error: "GENERATION_SUPERSEDED",
+      message: "A newer generation run now owns this document.",
+      generationId: runId,
+    },
+  };
+}
+
 /**
  * Build every deterministic generation artifact from a loaded context.
  * Extracted so the zero-token preflight (scripts/generation-preflight.ts)
@@ -518,7 +776,9 @@ export function buildGenerationArtifacts(ctx: DocumentGenerationContext, profile
 
 export async function releaseGenerationLock(documentId: string): Promise<void> {
   try {
-    await updateDocumentStatus(documentId, undefined, "FAILED");
+    // Route-level catch-all: only release when no active run owns the
+    // document — a live run's recovery path stays authoritative.
+    await releaseOrphanedDocumentLock(documentId);
   } catch {
     // best-effort — ignore
   }

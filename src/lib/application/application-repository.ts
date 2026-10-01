@@ -8,6 +8,12 @@
 import { randomUUID } from "crypto";
 import { getDbPool } from "./db";
 import {
+  ACTIVE_GENERATION_STATUSES,
+  runStatusInSql,
+  ensureGenerationLifecycleSchema,
+  GenerationSupersededError,
+} from "./generation-lifecycle";
+import {
   Student,
   Application,
   ApplicationDocument,
@@ -270,9 +276,12 @@ export async function createApplication(input: CreateApplicationInput): Promise<
   const id = randomUUID();
   const pool = getDbPool();
 
+  // New applications are APP_SCOPED (version 2) from birth — they own
+  // their motivation/context fields and never inherit a previous
+  // application's shared profile_data values.
   await pool.execute(
-    `INSERT INTO applications (id, student_id, university_name, program_name, degree, department, country, intake, intake_year, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT')`,
+    `INSERT INTO applications (id, student_id, university_name, program_name, degree, department, country, intake, intake_year, application_context_version, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 'DRAFT')`,
     [
       id,
       input.studentId,
@@ -287,6 +296,24 @@ export async function createApplication(input: CreateApplicationInput): Promise<
   );
 
   return getApplication(id) as Promise<Application>;
+}
+
+/**
+ * Persist application-scoped intake context (applications.context_data)
+ * and mark the application APP_SCOPED. Called by the intake save path —
+ * never writes app-scope keys back to students.profile_data.
+ */
+export async function saveApplicationContext(
+  applicationId: string,
+  contextData: unknown,
+): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE applications
+       SET context_data = ?, application_context_version = 2
+     WHERE id = ?`,
+    [JSON.stringify(contextData), applicationId],
+  );
 }
 
 export async function getApplication(id: string): Promise<Application | null> {
@@ -317,8 +344,15 @@ export async function listStudentApplications(studentId: string, limit = 100, of
  * writing_requirements, requirement_sources, institutions, programs)
  * is NEVER touched — it is library data, not application-owned.
  * The student's profile_data is untouched by design.
+ *
+ * Returns:
+ *   "DELETED"     — application removed
+ *   "NOT_FOUND"   — application does not exist
+ *   "GENERATING"  — an active generation run exists inside this
+ *                   application (canonical ACTIVE_GENERATION_STATUSES);
+ *                   deletion would orphan provider work/checkpoints.
  */
-export async function deleteApplicationCascade(applicationId: string): Promise<boolean> {
+export async function deleteApplicationCascade(applicationId: string): Promise<"DELETED" | "NOT_FOUND" | "GENERATING"> {
   const pool = getDbPool();
   const conn = await pool.getConnection();
   try {
@@ -331,7 +365,31 @@ export async function deleteApplicationCascade(applicationId: string): Promise<b
     );
     if (!(appRows as any[])[0]) {
       await conn.rollback();
-      return false;
+      return "NOT_FOUND";
+    }
+
+    // TOCTOU safety: lock EVERY contained document row before checking.
+    // acquireGenerationLock mutates the same rows — a concurrent generation
+    // start either (a) already committed GENERATING → we see it below and
+    // reject, or (b) blocks on this lock until we commit, then affects 0
+    // rows on the deleted row and fails before any provider work.
+    const [docRows] = await conn.execute(
+      "SELECT id, generation_status FROM application_documents WHERE application_id = ? FOR UPDATE",
+      [applicationId],
+    );
+    if ((docRows as any[]).some((d: any) => d.generation_status === "GENERATING")) {
+      await conn.rollback();
+      return "GENERATING";
+    }
+
+    // Active generation safety — never delete underneath live work.
+    const [activeRuns] = await conn.execute(
+      `SELECT id FROM generation_runs WHERE application_id = ? AND status IN (${runStatusInSql(ACTIVE_GENERATION_STATUSES)}) LIMIT 1`,
+      [applicationId],
+    );
+    if ((activeRuns as any[])[0]) {
+      await conn.rollback();
+      return "GENERATING";
     }
 
     // 1. Stage responses — via runs and via documents (no FK on either)
@@ -364,7 +422,7 @@ export async function deleteApplicationCascade(applicationId: string): Promise<b
     await conn.execute("DELETE FROM applications WHERE id = ?", [applicationId]);
 
     await conn.commit();
-    return true;
+    return "DELETED";
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -386,8 +444,8 @@ export async function deleteApplicationCascade(applicationId: string): Promise<b
  *   "DELETED"      — document removed
  *   "NOT_FOUND"    — document does not exist
  *   "MISMATCH"     — document does not belong to the stated application
- *   "GENERATING"   — document has an active generation (RUNNING/QUEUED/
- *                    CANCEL_REQUESTED) — caller must cancel first
+ *   "GENERATING"   — document has an active generation (any of
+ *                    ACTIVE_GENERATION_STATUSES) — caller must cancel first
  */
 export async function deleteDocumentCascade(
   documentId: string,
@@ -414,16 +472,17 @@ export async function deleteDocumentCascade(
     }
 
     // Active generation safety: do NOT delete underneath an active worker.
-    // The document's generation_status is the authoritative flag; the
-    // generation_runs row may also be RUNNING/QUEUED/CANCEL_REQUESTED.
+    // The document's generation_status is the authoritative flag; an
+    // active generation_runs row is the definitive check (canonical
+    // ACTIVE_GENERATION_STATUSES — derived, never a hand-maintained list).
     if (doc.generation_status === "GENERATING") {
       await conn.rollback();
       return "GENERATING";
     }
-    // Also check generation_runs for an active run (defensive — covers
-    // cases where generation_status was not yet flipped).
+    // Defensive: covers cases where generation_status was not yet
+    // flipped (e.g. run row exists but doc flag drifted).
     const [runRows] = await conn.execute(
-      "SELECT id, status FROM generation_runs WHERE document_id = ? AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED') LIMIT 1",
+      `SELECT id, status FROM generation_runs WHERE document_id = ? AND status IN (${runStatusInSql(ACTIVE_GENERATION_STATUSES)}) LIMIT 1`,
       [documentId],
     );
     if ((runRows as any[])[0]) {
@@ -474,8 +533,14 @@ export async function deleteDocumentCascade(
  * Shared program-level data (application_requirement_sets,
  * writing_requirements, requirement_sources, institutions, programs)
  * is NEVER touched — it is library data, not student-owned.
+ *
+ * Returns:
+ *   "DELETED"     — student removed
+ *   "NOT_FOUND"   — student does not exist
+ *   "GENERATING"  — an active generation run exists for this student;
+ *                   deletion would orphan provider work/checkpoints.
  */
-export async function deleteStudentCascade(studentId: string): Promise<boolean> {
+export async function deleteStudentCascade(studentId: string): Promise<"DELETED" | "NOT_FOUND" | "GENERATING"> {
   const pool = getDbPool();
   const conn = await pool.getConnection();
   try {
@@ -487,7 +552,32 @@ export async function deleteStudentCascade(studentId: string): Promise<boolean> 
     );
     if (!(stuRows as any[])[0]) {
       await conn.rollback();
-      return false;
+      return "NOT_FOUND";
+    }
+
+    // TOCTOU safety: lock EVERY document row belonging to this student
+    // before checking — a concurrent acquireGenerationLock on any of them
+    // either already committed GENERATING (rejected below) or blocks on
+    // these row locks until we commit, then hits deleted rows.
+    const [stuDocRows] = await conn.execute(
+      `SELECT d.id, d.generation_status FROM application_documents d
+       JOIN applications a ON d.application_id = a.id
+       WHERE a.student_id = ? FOR UPDATE`,
+      [studentId],
+    );
+    if ((stuDocRows as any[]).some((d: any) => d.generation_status === "GENERATING")) {
+      await conn.rollback();
+      return "GENERATING";
+    }
+
+    // Active generation safety — never delete underneath live work.
+    const [activeRuns] = await conn.execute(
+      `SELECT id FROM generation_runs WHERE student_id = ? AND status IN (${runStatusInSql(ACTIVE_GENERATION_STATUSES)}) LIMIT 1`,
+      [studentId],
+    );
+    if ((activeRuns as any[])[0]) {
+      await conn.rollback();
+      return "GENERATING";
     }
 
     // 1. Stage responses — via runs (student_id) and via documents (no FKs)
@@ -526,7 +616,7 @@ export async function deleteStudentCascade(studentId: string): Promise<boolean> 
     await conn.execute("DELETE FROM students WHERE id = ?", [studentId]);
 
     await conn.commit();
-    return true;
+    return "DELETED";
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -576,6 +666,12 @@ function rowToApplication(row: any): Application {
     intake: row.intake,
     intakeYear: row.intake_year,
     applicationContextId: row.application_context_id || undefined,
+    // Column absent on an un-migrated schema → default LEGACY (1),
+    // which preserves pre-migration read behavior.
+    applicationContextVersion: row.application_context_version ?? 1,
+    contextData: row.context_data
+      ? (typeof row.context_data === "string" ? JSON.parse(row.context_data) : row.context_data)
+      : undefined,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -740,22 +836,158 @@ export async function updateDocumentStatus(
  * Returns true if this caller acquired the lock (affectedRows === 1).
  * Also handles stale generation recovery: if a generation has been
  * stuck in GENERATING for more than STALE_TIMEOUT_MS, it allows a new one.
+ *
+ * RUN OWNERSHIP: the lock write also sets active_generation_run_id —
+ * this run becomes the document's sole authoritative generation.
+ * A superseded run (owner id differs) must never mutate document
+ * state or finish a run; enforcement is via isRunDocumentOwner /
+ * adoptRunOwnership / releaseDocumentGeneration / completeRun CAS.
  */
 const STALE_GENERATION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
-export async function acquireGenerationLock(documentId: string): Promise<boolean> {
+// Ownership column ensure is owned by generation-lifecycle
+// (ensureGenerationLifecycleSchema — idempotent, ER_DUP_FIELDNAME-safe).
+async function ensureActiveRunColumn(): Promise<void> {
+  await ensureGenerationLifecycleSchema();
+}
+
+export async function acquireGenerationLock(documentId: string, runId: string): Promise<boolean> {
+  await ensureActiveRunColumn();
   const pool = getDbPool();
   // Try atomic conditional update: only set GENERATING if not already GENERATING
   const [result] = await pool.execute(
     `UPDATE application_documents
-     SET generation_status = 'GENERATING', generation_started_at = NOW()
+     SET generation_status = 'GENERATING', generation_started_at = NOW(), active_generation_run_id = ?
      WHERE id = ?
        AND (generation_status != 'GENERATING'
             OR generation_started_at IS NULL
             OR generation_started_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE))`,
-    [documentId],
+    [runId, documentId],
   );
   return (result as any).affectedRows === 1;
+}
+
+/**
+ * Is `runId` currently the document's authoritative generation run?
+ * True when the owner column names this run, or (legacy rows) when the
+ * column is NULL and this run is the document's latest active run.
+ */
+export async function isRunDocumentOwner(documentId: string, runId: string): Promise<boolean> {
+  await ensureActiveRunColumn();
+  const pool = getDbPool();
+  const [rows] = await pool.execute(
+    "SELECT active_generation_run_id FROM application_documents WHERE id = ?",
+    [documentId],
+  );
+  const row = (rows as any[])[0];
+  if (!row) return false;
+  if (row.active_generation_run_id === runId) return true;
+  if (row.active_generation_run_id) return false;
+  // NULL owner (pre-migration row or released lock): this run is
+  // authoritative iff it is the document's LATEST run of any status —
+  // a newer terminal run (COMPLETED/FAILED/CANCELLED) still proves a
+  // newer attempt exists and supersedes this one. Ordering is
+  // attempt_seq — strict total order, no ties.
+  const [latest] = await pool.execute(
+    `SELECT id FROM generation_runs WHERE document_id = ?
+     ORDER BY attempt_seq DESC LIMIT 1`,
+    [documentId],
+  );
+  return (latest as any[])[0]?.id === runId;
+}
+
+/**
+ * CAS adoption of document ownership by a resuming run. Succeeds only
+ * when the document is still GENERATING, ownership is unclaimed or
+ * already this run's, AND no newer run exists for the document — ANY
+ * run with a higher attempt_seq (including terminal
+ * COMPLETED/FAILED/CANCELLED) proves a later attempt was started and
+ * supersedes this run. attempt_seq ordering is a strict total order —
+ * no tie ambiguity.
+ */
+export async function adoptRunOwnership(documentId: string, runId: string): Promise<boolean> {
+  await ensureActiveRunColumn();
+  const pool = getDbPool();
+  const [result] = await pool.execute(
+    `UPDATE application_documents d
+       SET d.active_generation_run_id = ?
+     WHERE d.id = ?
+       AND d.generation_status = 'GENERATING'
+       AND (d.active_generation_run_id IS NULL OR d.active_generation_run_id = ?)
+       AND NOT EXISTS (
+         SELECT 1 FROM generation_runs gr
+          WHERE gr.document_id = ?
+            AND gr.attempt_seq > (SELECT attempt_seq FROM generation_runs WHERE id = ?)
+       )`,
+    [runId, documentId, runId, documentId, runId],
+  );
+  return (result as any).affectedRows === 1;
+}
+
+/**
+ * Owner-guarded release of the document generation lock. Sets the
+ * document-level generation status and clears ownership — but ONLY if
+ * `runId` still owns the document (or ownership is unclaimed legacy
+ * NULL). A superseded run's release attempt is a no-op: it must never
+ * change the document state a newer run owns.
+ *
+ * Pass runId = null ONLY where the caller has already established no
+ * run owns the document (stale-lock cleanup paths).
+ */
+export async function releaseDocumentGeneration(
+  documentId: string,
+  runId: string | null,
+  generationStatus: string,
+): Promise<boolean> {
+  await ensureActiveRunColumn();
+  const pool = getDbPool();
+  if (runId === null) {
+    const [result] = await pool.execute(
+      `UPDATE application_documents
+         SET generation_status = ?, active_generation_run_id = NULL
+       WHERE id = ?`,
+      [generationStatus, documentId],
+    );
+    return (result as any).affectedRows === 1;
+  }
+  // NULL-owner tolerated for legacy rows only when no newer run exists —
+  // otherwise this stale run could clobber a newer run's released status
+  // (e.g. GENERATED → FAILED after the newer run already completed).
+  const [result] = await pool.execute(
+    `UPDATE application_documents
+       SET generation_status = ?, active_generation_run_id = NULL
+     WHERE id = ?
+       AND (active_generation_run_id IS NULL OR active_generation_run_id = ?)
+       AND NOT EXISTS (
+         SELECT 1 FROM generation_runs gr
+          WHERE gr.document_id = ?
+            AND gr.attempt_seq > (SELECT attempt_seq FROM generation_runs WHERE id = ?)
+       )`,
+    [generationStatus, documentId, runId, documentId, runId],
+  );
+  return (result as any).affectedRows === 1;
+}
+
+/**
+ * Route-level catch-all release: flip GENERATING → FAILED only when
+ * NO active run row exists. If a run row is still active, the run
+ * (and its recovery path) owns the document — a thrown exception in
+ * the request layer must never clobber it.
+ */
+export async function releaseOrphanedDocumentLock(documentId: string): Promise<void> {
+  await ensureActiveRunColumn();
+  const pool = getDbPool();
+  await pool.execute(
+    `UPDATE application_documents
+       SET generation_status = 'FAILED', active_generation_run_id = NULL
+     WHERE id = ? AND generation_status = 'GENERATING'
+       AND NOT EXISTS (
+         SELECT 1 FROM generation_runs gr
+          WHERE gr.document_id = ?
+            AND gr.status IN (${runStatusInSql(ACTIVE_GENERATION_STATUSES)})
+       )`,
+    [documentId, documentId],
+  );
 }
 
 function rowToDocument(row: any): ApplicationDocument {
@@ -791,6 +1023,7 @@ function rowToDocument(row: any): ApplicationDocument {
 // ============================================================
 
 export async function createDocumentVersion(input: CreateDocumentVersionInput): Promise<DocumentVersion> {
+  await ensureActiveRunColumn(); // SELECT below reads active_generation_run_id
   // Validate document exists
   const doc = await getDocument(input.documentId);
   if (!doc) {
@@ -803,10 +1036,37 @@ export async function createDocumentVersion(input: CreateDocumentVersionInput): 
     await conn.beginTransaction();
 
     // Lock the document row to serialize concurrent version creation
-    await conn.execute(
-      "SELECT id FROM application_documents WHERE id = ? FOR UPDATE",
+    const [docRows] = await conn.execute(
+      "SELECT active_generation_run_id FROM application_documents WHERE id = ? FOR UPDATE",
       [input.documentId],
     );
+    const docRow = (docRows as any[])[0];
+
+    // GEN-004: when a generation run creates the version, enforce
+    // ownership ATOMICALLY while the document row lock is held —
+    // a superseded run must never insert a version (TOCTOU-proof:
+    // the earlier service-level isRunDocumentOwner check alone could
+    // pass and still lose the race here).
+    if (input.expectedGenerationRunId) {
+      const owner = docRow?.active_generation_run_id ?? null;
+      let owns = owner === input.expectedGenerationRunId;
+      if (!owns && owner === null) {
+        // Legacy/unclaimed ownership: allowed only when no newer run
+        // exists for this document (any status — a newer attempt
+        // supersedes regardless of how it ended). attempt_seq ordering.
+        const [newer] = await conn.execute(
+          `SELECT 1 FROM generation_runs gr
+            WHERE gr.document_id = ?
+              AND gr.attempt_seq > (SELECT attempt_seq FROM generation_runs WHERE id = ?)
+            LIMIT 1`,
+          [input.documentId, input.expectedGenerationRunId],
+        );
+        owns = (newer as any[]).length === 0;
+      }
+      if (!owns) {
+        throw new GenerationSupersededError("document_version");
+      }
+    }
 
     // Get next version number within the transaction
     const [countResult] = await conn.execute(

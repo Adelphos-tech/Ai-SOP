@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { runApplicationPipeline, ApplicationPipelineInput } from "@/lib/ai/pipeline/run-application-pipeline";
+import { classifyGenerationError } from "@/lib/application/generation-errors";
 import { isApiKeyConfigured } from "@/lib/ai/openai-client";
 import { buildGenerationContract, validateContractForWriting } from "@/lib/requirements/generation-contract";
 import {
@@ -135,7 +136,19 @@ export async function POST(req: NextRequest) {
     const result = await runApplicationPipeline(pipelineInput);
 
     if (result.status === "error") {
-      return NextResponse.json({ error: result.error || "PIPELINE_ERROR", generationId: result.generationId, stages: result.metrics.stages, partialCost: result.metrics.cost }, { status: 500 });
+      // Stable code + consultant-safe copy only — never raw stage names,
+      // provider messages, or model-output prefixes.
+      const normalized = classifyGenerationError(result.error);
+      return NextResponse.json(
+        {
+          error: normalized.userMessage,
+          code: normalized.code,
+          generationId: result.generationId,
+          stages: result.metrics.stages,
+          partialCost: result.metrics.cost,
+        },
+        { status: 500 },
+      );
     }
 
     return NextResponse.json({

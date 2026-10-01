@@ -19,7 +19,8 @@ import {
   saveStudentProfileConditional,
 } from "@/lib/application/application-repository";
 import { randomUUID } from "crypto";
-import { mergePersonalData } from "@/lib/application/cv-merge";
+import { mergePersonalData, mergeCvSkills, removeCvDerivedSkills } from "@/lib/application/cv-merge";
+import { emitEvent } from "@/lib/observability/events";
 import { classifyIdentityMatch } from "@/lib/application/identity-check";
 import { getProfileReadiness } from "@/lib/application/intake-completion";
 import {
@@ -76,10 +77,13 @@ export async function POST(request: NextRequest) {
           { status: 409 },
         );
       }
-      // Explicit consultant override — audit metadata only, no content.
-      console.warn(
-        `[cv-apply] IDENTITY_CONFLICT_OVERRIDE studentId=${body.studentId} student="${identity.studentIdentity.name}" cv="${identity.cvIdentity.name}/${identity.cvIdentity.email}" consultant=${consultant.id}`,
-      );
+      // Explicit consultant override — audit metadata only: ids and
+      // counts, never names/emails (PII).
+      emitEvent("cv_identity_conflict_override", {
+        studentId: body.studentId,
+        actorId: consultant.id,
+        status: identity.status,
+      }, "warn");
     }
 
     // ===== OPTIMISTIC CONCURRENCY CHECK =====
@@ -108,6 +112,10 @@ export async function POST(request: NextRequest) {
 
     // ===== MERGE =====
     const existingProfile = await getStudentProfile(body.studentId) || {};
+    // Stable identity for THIS apply — any skills it writes carry this
+    // importId in skillProvenance so a later replaceCvDerived can
+    // remove exactly them without touching manual entries.
+    const cvImportId = `cv-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const parsed = body.parsedCV;
     const overwrite = body.overwrite === true;
 
@@ -118,8 +126,8 @@ export async function POST(request: NextRequest) {
     // BEFORE merging the new CV. Manual and unknown-provenance entries
     // are always preserved — this mode repairs a corrupted profile
     // (e.g. a wrong-person CV applied earlier) without destroying
-    // consultant-entered data. Skills arrays have no per-item
-    // provenance so they are left untouched.
+    // consultant-entered data. Skills are removed via skillProvenance
+    // (cv-* importId), so prior-CV skills do not linger.
     if (body.replaceCvDerived === true) {
       for (const key of ["education", "experience", "projects", "achievements"] as const) {
         if (Array.isArray(merged[key])) {
@@ -128,14 +136,18 @@ export async function POST(request: NextRequest) {
           );
         }
       }
-      console.warn(
-        `[cv-apply] REPLACE_CV_DERIVED studentId=${body.studentId} consultant=${consultant.id} removedCvItems=${
+      // Skills: drop only entries whose provenance importId is cv-*.
+      // Skills with no provenance record are treated as manual and kept.
+      merged.skills = removeCvDerivedSkills(merged.skills, existingProfile.skillProvenance as any);
+      emitEvent("cv_replace_derived", {
+        studentId: body.studentId,
+        actorId: consultant.id,
+        removedCvItems:
           (existingProfile.education || []).length - merged.education.length +
           (existingProfile.experience || []).length - merged.experience.length +
           (existingProfile.projects || []).length - merged.projects.length +
-          (existingProfile.achievements || []).length - merged.achievements.length
-        }`,
-      );
+          (existingProfile.achievements || []).length - merged.achievements.length,
+      }, "warn");
     }
 
     // ===== Personal Data =====
@@ -270,16 +282,17 @@ export async function POST(request: NextRequest) {
     }
 
     // ===== Skills =====
+    // Canonical shape stays string[]. Provenance lives beside it:
+    //   profile.skillProvenance[category][normalizedSkill] = importId
+    // importId is "cv-..." for CV-applied entries; absence = manual.
+    // Dedupe normalizes case/trim/whitespace only — "C"/"C++"/".NET"
+    // remain distinct.
     if (parsed.skills) {
-      const existingSkills = merged.skills || {};
-      merged.skills = {
-        technical: mergeArrays(existingSkills.technical, parsed.skills.technical, overwrite),
-        programming: mergeArrays(existingSkills.programming, parsed.skills.programming, overwrite),
-        tools: mergeArrays(existingSkills.tools, parsed.skills.tools, overwrite),
-        domain: mergeArrays(existingSkills.domain, parsed.skills.domain, overwrite),
-        soft: mergeArrays(existingSkills.soft, parsed.skills.soft, overwrite),
-        software: mergeArrays(existingSkills.software, parsed.skills.software, overwrite),
-      };
+      const sm = mergeCvSkills(merged.skills, existingProfile.skillProvenance as any, parsed.skills, {
+        overwrite, importId: cvImportId,
+      });
+      merged.skills = sm.skills;
+      merged.skillProvenance = sm.skillProvenance;
     }
 
     // ===== Achievements + Certifications → canonical achievements[] =====
@@ -298,7 +311,7 @@ export async function POST(request: NextRequest) {
       for (const pa of parsedAchievements) {
         const key = pa.title.trim().toLowerCase();
         if (!existingTitles.has(key)) {
-          existingAch.push({ id: randomUUID(), type: pa.type, title: pa.title.trim(), description: "", year: "" });
+          existingAch.push({ id: `cv-${randomUUID()}`, type: pa.type, title: pa.title.trim(), description: "", year: "" });
           existingTitles.add(key);
         }
       }
@@ -345,8 +358,9 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     console.error("CV apply error:", error);
+    // Stable code + safe copy — raw DB/Zod detail stays in server logs.
     return NextResponse.json(
-      { error: error?.message || "Failed to apply CV data." },
+      { error: "Failed to apply CV data.", code: "CV_APPLY_FAILED" },
       { status: 500 },
     );
   }
@@ -364,8 +378,5 @@ function mapDegreeToLevel(degree: string): string {
   return "";
 }
 
-function mergeArrays(existing: string[] | undefined, parsed: string[] | undefined, overwrite: boolean): string[] {
-  if (!parsed || parsed.length === 0) return existing || [];
-  if (overwrite || !existing || existing.length === 0) return Array.from(new Set(parsed));
-  return Array.from(new Set([...existing, ...parsed]));
-}
+// Skills merge/provenance helpers live in @/lib/application/cv-merge
+// (mergeCvSkills, removeCvDerivedSkills, normSkill).

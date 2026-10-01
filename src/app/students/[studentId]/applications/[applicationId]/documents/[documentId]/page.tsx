@@ -139,33 +139,6 @@ function humanizeBlockReason(reason: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** Map internal generation failure codes to consultant-facing copy. */
-function humanizeGenerationFailure(message?: string | null): string {
-  const m = message || "";
-  if (/STAGE_TIMEOUT|GENERATION_TIME_LIMIT/.test(m)) {
-    return "Generation stopped — a stage took longer than the allowed generation window.";
-  }
-  if (/AI_SERVICE_TEMPORARILY_UNAVAILABLE|PROVIDER_(FAILED|429|502|503|RATE)/i.test(m)) {
-    return "Generation stopped — the AI service is temporarily unavailable.";
-  }
-  if (/REPEATED_STAGE_FAILURE/.test(m)) {
-    return "Generation stopped — the same step failed repeatedly. Review the applicant information and try again.";
-  }
-  if (/PROVIDER_MAX_OUTPUT_TOKENS|MAX_OUTPUT_TOKENS/.test(m)) {
-    return "Generation stopped — the AI response exceeded its size limit. Try again; if it repeats, contact support.";
-  }
-  if (/PROVIDER_CONTENT_FILTER|CONTENT_FILTER/.test(m)) {
-    return "Generation stopped — the content was blocked by the AI provider's safety filter. Review the applicant information.";
-  }
-  if (/PROVIDER_MAX_MESSAGES|MAX_MESSAGES/.test(m)) {
-    return "Generation stopped — the AI conversation exceeded its length limit. Try again.";
-  }
-  if (/PROVIDER_INCOMPLETE|incomplete/i.test(m)) {
-    return "Generation stopped — the AI response ended early. Try again.";
-  }
-  return "Generation stopped because of an error.";
-}
-
 export default function DocumentWorkspacePage() {
   const params = useParams();
   const router = useRouter();
@@ -254,7 +227,7 @@ export default function DocumentWorkspacePage() {
           setStudent(studentData.student);
         }
         // Fetch profile for pre-generation readiness display
-        const profileRes = await fetch(`/api/application/profile?studentId=${studentId}`);
+        const profileRes = await fetch(`/api/application/profile?studentId=${studentId}&applicationId=${applicationId}`);
         if (profileRes.ok) {
           const profileData = await profileRes.json();
           setProfile(profileData.profile);
@@ -309,7 +282,7 @@ export default function DocumentWorkspacePage() {
         // Ignore terminal statuses from a run that predates the current
         // submit — the new run row may not exist yet; flipping
         // generating=false here would resurrect the stale FAILED card.
-        const isTerminal = data.status === "COMPLETED" || data.status === "FAILED" || data.status === "CANCELLED";
+        const isTerminal = data.status === "COMPLETED" || data.status === "COMPLETED_WITH_WARNINGS" || data.status === "FAILED" || data.status === "CANCELLED";
         const staleTerminal =
           isTerminal && generating &&
           data.startedAt && new Date(data.startedAt).getTime() < lastSubmitAtRef.current - 2000;
@@ -317,7 +290,7 @@ export default function DocumentWorkspacePage() {
         setLiveStatus(data);
         if (isTerminal) {
           setGenerating(false);
-          if (data.status === "COMPLETED") {
+          if (data.status === "COMPLETED" || data.status === "COMPLETED_WITH_WARNINGS") {
             await loadDocument();
           }
         }
@@ -351,6 +324,12 @@ export default function DocumentWorkspacePage() {
       const res = await submitGenerate({ studentId, applicationId, documentId });
       const data = res.data;
       if (data.status === "cancelled") {
+        await loadDocument();
+        return;
+      }
+      if (data.status === "recovering") {
+        // Provider work still in flight — the run is RECOVERING and the
+        // status poll auto-resumes it. Reload keeps generationActive on.
         await loadDocument();
         return;
       }
@@ -715,12 +694,20 @@ export default function DocumentWorkspacePage() {
         </div>
       )}
 
-      {/* Failed — single terminal card with clear reason + Try Again */}
+      {/* Failed — single terminal card with clear reason + Try Again.
+          The endpoint returns normalized friendly copy — never raw
+          stage/provider error strings. Retry resumes from the last
+          saved checkpoint; completed paid steps are never re-billed. */}
       {!generationActive && liveStatus?.status === "FAILED" && document?.generationStatus !== "GENERATED" && (
         <div className="mb-8 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
           <p className="text-sm font-medium text-dvivid-error mb-1">
-            {humanizeGenerationFailure(liveStatus.failureMessage)}
+            {liveStatus.failureMessage || "Generation couldn't finish."}
           </p>
+          {typeof liveStatus.completedStages === "number" && liveStatus.completedStages > 0 && (
+            <p className="text-sm text-dvivid-text-secondary mb-1">
+              {liveStatus.completedStages} of {liveStatus.totalStages || 6} steps completed — your work has been saved.
+            </p>
+          )}
           {versions.length > 0 && (
             <p className="text-sm text-dvivid-text-secondary mb-1">An existing draft is available below.</p>
           )}
@@ -731,14 +718,8 @@ export default function DocumentWorkspacePage() {
                 disabled={generating}
                 className="px-4 py-1.5 text-sm font-medium text-white bg-dvivid-error rounded-input hover:opacity-90 disabled:opacity-50"
               >
-                Try Again
+                {liveStatus.recoverable ? "Retry Generation" : "Try Again"}
               </button>
-            )}
-            {liveStatus.failureMessage && (
-              <details className="text-xs text-dvivid-text-muted">
-                <summary className="cursor-pointer">View details</summary>
-                <p className="mt-1 font-mono break-all">{liveStatus.failureMessage}</p>
-              </details>
             )}
           </div>
         </div>
@@ -772,13 +753,13 @@ export default function DocumentWorkspacePage() {
               </div>
             ) : (
               <div className="mb-4 p-4 bg-dvivid-warning-light border border-dvivid-warning/20 rounded-input">
-                <p className="text-sm font-medium text-dvivid-warning mb-2">Before you can generate:</p>
+                <p className="text-sm font-medium text-dvivid-warning mb-2">For the strongest result, complete:</p>
                 <ul className="space-y-1.5">
                   {readiness.sections
                     .filter(s => !s.optional && s.status !== "complete")
                     .map(s => (
                       <li key={s.slug} className="flex items-center justify-between gap-3 text-sm">
-                        <span className="text-dvivid-text-primary">! {s.label} required</span>
+                        <span className="text-dvivid-text-primary">! {s.label} incomplete</span>
                         <Link
                           href={`/students/${studentId}/applications/${applicationId}/intake/missing`}
                           className="text-xs text-dvivid-primary hover:underline whitespace-nowrap"
@@ -794,14 +775,15 @@ export default function DocumentWorkspacePage() {
 
           <PrimaryButton
             onClick={handleGenerate}
-            disabled={!canGenerate || readinessBlocked}
+            disabled={!canGenerate}
             className="w-full"
           >
             Generate Document
           </PrimaryButton>
           {readinessBlocked && (
             <p className="mt-2 text-xs text-dvivid-text-muted text-center">
-              Complete the required intake sections above to enable generation.
+              Incomplete intake sections are advisory — generation will still run; only truly
+              missing required information is flagged by the server.
             </p>
           )}
           {generationError && (

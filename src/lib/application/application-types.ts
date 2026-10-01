@@ -197,6 +197,10 @@ export interface Application {
   intake: string;
   intakeYear: string;
   applicationContextId?: string;
+  /** Application-scoped intake context (applications.context_data).
+   *  version 1 = LEGACY shared-profile fallback; 2 = APP_SCOPED. */
+  applicationContextVersion?: number;
+  contextData?: unknown;
   status: ApplicationStatus;
   createdAt: string;
   updatedAt: string;
@@ -218,7 +222,10 @@ export interface ApplicationDocument {
   formattingInstructions?: string;
   mandatoryTopics?: string;
   additionalQuestions?: string;
-  useLegacyRequirements?: boolean;
+  /** Required — legacy docs inherit profile.universityRequirements;
+   *  new docs are document-scoped. Never leave implicit: repository
+   *  always materializes this via !!row.use_legacy_requirements. */
+  useLegacyRequirements: boolean;
   requirementsStatus: RequirementsStatus;
   generationStatus: GenerationStatus;
   reviewStatus: ReviewStatus;
@@ -299,6 +306,10 @@ export interface CreateDocumentVersionInput {
   costUsd?: number;
   costInr?: number;
   parentVersionId?: string;
+  // Generation-ownership guard: when set, the insert is atomic with a check
+  // that this run still owns the document (or is the latest run if ownership
+  // is unset). Prevents a superseded run from creating a version.
+  expectedGenerationRunId?: string;
 }
 
 // Phase SOP-AI-34: Consultant-edited version input

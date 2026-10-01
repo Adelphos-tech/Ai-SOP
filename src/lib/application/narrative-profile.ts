@@ -309,7 +309,7 @@ export function detectReturnHomeEvidence(profile: any): boolean {
   if (hasValue(cgLong.returnPlan)) return true;
 
   // Explicit return-home statements inside free-text career fields
-  const returnIntent = /return\s+(to|home)|go\s+back|back\s+to\s+(india|my home|home country)|home.?country (career|plan|goal|ties)|plans?.{0,30}home country/i;
+  const returnIntent = /return\s+(to|home)|go\s+back|back\s+to\s+(my home|my country|my home country|home country|country of residence)|home.?country (career|plan|goal|ties)|plans?.{0,30}home country|post.?study\s+(plan|plans|career|goal)/i;
   for (const field of [cgLong.vision, cgLong.goals, cg.longTermGoals, cq.returnHomePlans, cq.homeCountryTies, cq.postStudyPlans]) {
     if (typeof field === "string" && returnIntent.test(field)) return true;
   }

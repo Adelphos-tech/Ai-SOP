@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start -p 5010 -H 127.0.0.1",
     "lint": "next lint",
-    "generation:preflight": "tsx scripts/generation-preflight.ts"
+    "generation:preflight": "tsx scripts/generation-preflight.ts",
+    "migrate:generation-ordering": "tsx scripts/migrate-generation-ordering.ts",
+    "generation:migration-precheck": "tsx scripts/generation-migration-precheck.ts",
+    "cleanup:attempt-artifacts": "tsx scripts/cleanup-attempt-artifacts.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
@@ -15,6 +18,7 @@
     "@tiptap/react": "^2.27.3",
     "@tiptap/starter-kit": "^2.27.3",
     "docx": "^9.5.1",
+    "jszip": "^3.10.2",
     "mammoth": "^1.12.3",
     "motion": "^13.4.0",
     "mysql2": "^3.24.4",

@@ -260,6 +260,11 @@ export function planComponentActions(args: {
         block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} has no explicitly authorized evidence.`);
       } else if (new Set(legacyIds).size !== legacyIds.length || legacyIds.some(id => !isLedgerEvidenceId(id, args.evidenceLedger))) {
         block("FINALIZER_EVIDENCE_VIOLATION", `Missing topic ${topic} references duplicate, unknown or empty ledger evidence.`);
+        // If NO authorized ID is usable, the consultant-facing condition is
+        // missing student information — not merely an integrity violation.
+        if (!legacyIds.some(id => isLedgerEvidenceId(id, args.evidenceLedger))) {
+          block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} has no usable authorized ledger evidence.`);
+        }
       } else if (hard && !hasRequiredStudentEvidence(rc.requiredTopics.find(required => required.topic === topic), legacyIds, args.evidenceLedger)) {
         block("MISSING_REQUIRED_STUDENT_INFORMATION", `Missing topic ${topic} requires student-specific evidence; program or faculty context alone is insufficient.`);
       } else {

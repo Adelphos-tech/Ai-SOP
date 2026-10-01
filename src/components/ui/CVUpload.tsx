@@ -60,12 +60,15 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState("");
   const [parsedCV, setParsedCV] = useState<ParsedCV | null>(null);
+  const [parseState, setParseState] = useState<string | null>(null);
+  const [extractedText, setExtractedText] = useState<string | null>(null);
   const [filename, setFilename] = useState("");
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [parseRevision, setParseRevision] = useState<number | null>(null);
   const [staleProfile, setStaleProfile] = useState(false);
+  const [ocrNotice, setOcrNotice] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [identityConflict, setIdentityConflict] = useState<IdentityConflict | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
@@ -78,6 +81,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
     setShowReview(false);
     setApplied(false);
     setIdentityConflict(null);
+    setOcrNotice(null);
 
     // Validate file type
     const ext = "." + file.name.toLowerCase().split(".").pop();
@@ -115,6 +119,9 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
       const data = await res.json();
       setFilename(data.filename || file.name);
       setParsedCV(data.parsed);
+      setParseState(data.parseState || null);
+      setExtractedText(data.extractedText || null);
+      setOcrNotice(data.ocrNotice || null);
       setShowReview(true);
       setParseRevision(typeof data.profileRevision === "number" ? data.profileRevision : null);
       setStaleProfile(false);
@@ -197,6 +204,8 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
 
   function handleReset() {
     setParsedCV(null);
+    setParseState(null);
+    setExtractedText(null);
     setShowReview(false);
     setApplied(false);
     setError("");
@@ -298,15 +307,55 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
       {/* Parsed result */}
       {parsedCV && showReview && !applied && (
         <div className="mt-4 space-y-4">
-          {/* Success banner */}
-          <div className="flex items-center gap-2 p-3 bg-dvivid-success-light border border-dvivid-success/20 rounded-input">
-            <svg className="w-5 h-5 text-dvivid-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-            <span className="text-sm font-medium text-dvivid-success">
-              CV imported: {filename}
-            </span>
-          </div>
+          {/* OCR provenance — text recovered from scanned/image content;
+              informational, not an error. Apply still requires review. */}
+          {ocrNotice && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-input">
+              <p className="text-sm text-blue-800">{ocrNotice}</p>
+            </div>
+          )}
+          {/* State-aware banner — PARSED / PARTIAL_PARSE / EXTRACTION_ONLY */}
+          {parseState === "EXTRACTION_ONLY" ? (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-input space-y-1">
+              <p className="text-sm font-medium text-amber-800">
+                Resume content was extracted, but we could not fully structure this format: {filename}
+              </p>
+              <p className="text-sm text-amber-700">
+                Review the extracted text below and complete the profile fields manually — nothing is applied automatically.
+              </p>
+            </div>
+          ) : parseState === "PARTIAL_PARSE" || parseState === "PARSED_WITH_WARNINGS" ? (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-input">
+              <p className="text-sm font-medium text-amber-800">
+                Resume imported with some items needing review: {filename}
+              </p>
+              <p className="text-xs text-amber-700">
+                Check the detected sections below — unmarked sections were not found in the document.
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 p-3 bg-dvivid-success-light border border-dvivid-success/20 rounded-input">
+              <svg className="w-5 h-5 text-dvivid-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="text-sm font-medium text-dvivid-success">
+                CV imported: {filename}
+              </span>
+            </div>
+          )}
+
+          {/* Extracted raw text — reference for review when structure is
+              weak (PARTIAL_PARSE) or absent (EXTRACTION_ONLY) */}
+          {extractedText && (
+            <details className="border border-amber-200 bg-amber-50/50 rounded-input p-3">
+              <summary className="text-sm font-medium text-amber-800 cursor-pointer">
+                Extracted resume content ({extractedText.length.toLocaleString()} characters)
+              </summary>
+              <pre className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs text-dvivid-text-secondary bg-white border border-dvivid-border rounded p-2">
+                {extractedText}
+              </pre>
+            </details>
+          )}
 
           {/* Identity comparison — always visible before Apply */}
           {(parsedCV.personalData.firstName || parsedCV.personalData.email) && (
@@ -477,9 +526,14 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
             </div>
           )}
 
-          {/* Actions */}
+          {/* Actions — EXTRACTION_ONLY has no structured data to apply;
+              consultant reviews the text above and fills the profile
+              manually. Apply stays available for PARTIAL_PARSE only after
+              explicit review. */}
           <div className="flex gap-3 flex-wrap">
-            {identityConflict ? (
+            {parseState === "EXTRACTION_ONLY" ? (
+              <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
+            ) : identityConflict ? (
               <>
                 <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
                 <button

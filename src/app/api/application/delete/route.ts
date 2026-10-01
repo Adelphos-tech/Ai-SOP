@@ -8,6 +8,7 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
+import { emitEvent } from "@/lib/observability/events";
 import {
   getApplication,
   deleteApplicationCascade,
@@ -53,19 +54,32 @@ export async function POST(request: NextRequest) {
     await authorizeStudentAccess(consultant, body.studentId);
 
     const deleted = await deleteApplicationCascade(body.applicationId);
-    if (!deleted) {
+    if (deleted === "NOT_FOUND") {
       return NextResponse.json({ error: "Application not found" }, { status: 404 });
     }
+    if (deleted === "GENERATING") {
+      return NextResponse.json(
+        {
+          error: "Cannot delete an application while generation is in progress. Cancel the generation first.",
+          code: "GENERATION_IN_PROGRESS",
+        },
+        { status: 409 },
+      );
+    }
 
-    console.warn(
-      `[application-delete] applicationId=${body.applicationId} studentId=${body.studentId} university="${application.universityName}" consultant=${consultant.id}`,
-    );
+    // Audit event — ids only; university name is org data, not PII.
+    emitEvent("application_deleted", {
+      applicationId: body.applicationId,
+      studentId: body.studentId,
+      university: application.universityName,
+      actorId: consultant.id,
+    }, "warn");
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json(
-      { error: error?.message || "Failed to delete application." },
+      { error: "Failed to delete application.", code: "APPLICATION_DELETE_FAILED" },
       { status: 500 },
     );
   }

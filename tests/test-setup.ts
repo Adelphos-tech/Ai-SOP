@@ -53,6 +53,28 @@ export async function assertTestDatabase(): Promise<void> {
       `Tests must NEVER run against the production database. Aborting immediately.`
     );
   }
+  // Explicit migration application for test DBs (spec §3: test setup
+  // applies migrations — request-path code never does). allowActiveRuns
+  // is a TEST-ONLY flag: fixtures intentionally leave active runs.
+  await applyTestMigrations();
+}
+
+let migrationsApplied: Promise<void> | null = null;
+/** Apply all generation schema migrations to the test database.
+ *  Memoized per test process. */
+export function applyTestMigrations(): Promise<void> {
+  if (!migrationsApplied) {
+    migrationsApplied = (async () => {
+      const { runGenerationOrderingMigrations } =
+        await import("../src/lib/application/generation-schema");
+      await runGenerationOrderingMigrations({ allowActiveRuns: true });
+      const { resetSchemaAssertionCache } =
+        await import("../src/lib/application/generation-schema");
+      resetSchemaAssertionCache();
+    })();
+    migrationsApplied.catch(() => { migrationsApplied = null; });
+  }
+  return migrationsApplied;
 }
 
 /**

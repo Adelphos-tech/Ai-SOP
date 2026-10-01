@@ -25,7 +25,9 @@ import {
   cancelRun,
   isHeartbeatStale,
 } from "@/lib/application/generation-lifecycle";
-import { updateDocumentStatus } from "@/lib/application/application-repository";
+import { releaseDocumentGeneration } from "@/lib/application/application-repository";
+import { isSchemaMigrationRequiredError } from "@/lib/application/generation-schema";
+import { emitEvent } from "@/lib/observability/events";
 
 export async function POST(req: NextRequest) {
   try {
@@ -48,6 +50,13 @@ export async function POST(req: NextRequest) {
     await authorizeStudentAccess(consultant, studentId);
 
     const cancel = await requestCancelGeneration(documentId);
+    emitEvent("generation_cancel_requested", {
+      generationRunId: cancel.run?.id ?? null,
+      attemptSeq: cancel.run?.attemptSeq ?? null,
+      documentId,
+      status: cancel.run?.status ?? cancel.result,
+      actorId: consultant.id,
+    });
 
     if (cancel.result === "NOT_FOUND") {
       // No run row — possibly a generation started before run tracking,
@@ -63,7 +72,8 @@ export async function POST(req: NextRequest) {
         const stale = !doc.generation_started_at ||
           Date.now() - new Date(doc.generation_started_at).getTime() > 10 * 60 * 1000;
         if (stale) {
-          await updateDocumentStatus(documentId, undefined, "NOT_STARTED");
+          // No run row exists (verified above) — unconditional release.
+          await releaseDocumentGeneration(documentId, null, "NOT_STARTED");
           return NextResponse.json({ status: "CANCELLED", message: "Stale generation cleared." });
         }
         return NextResponse.json(
@@ -94,19 +104,48 @@ export async function POST(req: NextRequest) {
       try {
         const { getStageTransport } = await import("@/lib/ai/openai-transport");
         await getStageTransport().cancelBackgroundStage(cancel.run.providerResponseId);
-      } catch { /* provider cancel is best-effort */ }
+        emitEvent("generation_provider_cancel_issued", {
+          generationRunId: cancel.run.id,
+          attemptSeq: cancel.run.attemptSeq,
+          documentId,
+          providerResponseId: cancel.run.providerResponseId,
+        });
+      } catch (e) {
+        emitEvent("provider_cancel_failed", {
+          generationRunId: cancel.run.id,
+          attemptSeq: cancel.run.attemptSeq,
+          documentId,
+          providerResponseId: cancel.run.providerResponseId,
+          detail: e instanceof Error ? e.message : String(e),
+        }, "warn");
+      }
     }
 
     // Heartbeat already stale → the process is gone; finalize now.
+    // Owner-guarded release — a superseded run must not clear the
+    // document state a newer run owns.
     if (cancel.run && isHeartbeatStale(cancel.run)) {
       await cancelRun(cancel.run.id);
-      await updateDocumentStatus(documentId, undefined, "NOT_STARTED");
+      await releaseDocumentGeneration(documentId, cancel.run.id, "NOT_STARTED");
+      emitEvent("generation_cancelled", {
+        generationRunId: cancel.run.id,
+        attemptSeq: cancel.run.attemptSeq,
+        documentId,
+        reason: "stale_heartbeat_finalize",
+      });
       return NextResponse.json({ status: "CANCELLED", message: "Generation was interrupted and has been cancelled." });
     }
 
     return NextResponse.json({ status: "CANCEL_REQUESTED" });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
+    if (isSchemaMigrationRequiredError(error)) {
+      console.error("generation cancel blocked — schema migration required:", error.missing);
+      return NextResponse.json(
+        { error: "SCHEMA_MIGRATION_REQUIRED", message: "Generation is temporarily unavailable because the application database requires an update." },
+        { status: 503 },
+      );
+    }
     console.error("generation cancel error:", error);
     return NextResponse.json({ error: "Failed to cancel generation" }, { status: 500 });
   }

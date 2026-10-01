@@ -24,6 +24,11 @@ import {
   getDocument,
 } from "./application-repository";
 import {
+  resolveApplicationContext,
+  ApplicationContextSource,
+  ContextFieldSource,
+} from "./application-context";
+import {
   getWritingRequirement,
   getRequirementSet,
   getApplicationRequirementSet,
@@ -79,9 +84,19 @@ export interface MergedPrompt {
 
 export interface DocumentGenerationContext {
   student: any;
+  /** EFFECTIVE intake profile: student-scope facts + the CURRENT
+   *  application's context fields. For legacy applications this is the
+   *  shared student profile (explicit LEGACY fallback). */
   profile: StudentProfileData | null;
   application: any;
   document: any;
+  /** Application context provenance for observability/preflight. */
+  applicationContextId?: string;
+  applicationContextSource?: ApplicationContextSource;
+  /** True only for LEGACY (v1) applications that still read shared
+   *  student-scope storage for app-scope fields. */
+  crossApplicationFallbackUsed?: boolean;
+  applicationContextProvenance?: Record<string, ContextFieldSource>;
   documentTypeConfig: DocumentTypeConfig;
   mergedPrompt: MergedPrompt;
   /** Whether fact sheet is approved */
@@ -137,8 +152,15 @@ export async function loadDocumentGenerationContext(
     return { ok: false, error: "Document does not belong to this application", statusCode: 403 };
   }
 
-  // ===== LOAD STUDENT PROFILE =====
-  const profile = await getStudentProfile(studentId);
+  // ===== LOAD STUDENT PROFILE + RESOLVE APPLICATION CONTEXT =====
+  // student.profile_data holds STUDENT-scope facts (and, for LEGACY
+  // applications, the shared fallback for app-scope fields).
+  // APP_SCOPED applications resolve app-scope keys exclusively from
+  // applications.context_data — a different application's intake save
+  // can never bleed into this context.
+  const sharedProfile = await getStudentProfile(studentId);
+  const ctxResolution = resolveApplicationContext(application, sharedProfile);
+  const profile = ctxResolution.profile as StudentProfileData | null;
 
   // ===== LOAD WRITING REQUIREMENT (if linked) =====
   let writingRequirement: any = null;
@@ -245,6 +267,10 @@ export async function loadDocumentGenerationContext(
       profile,
       application,
       document,
+      applicationContextId: application.id,
+      applicationContextSource: ctxResolution.applicationContextSource,
+      crossApplicationFallbackUsed: ctxResolution.crossApplicationFallbackUsed,
+      applicationContextProvenance: ctxResolution.provenance,
       documentTypeConfig,
       mergedPrompt,
       factSheetApproved,
@@ -281,8 +307,29 @@ function uniReqLines(v: any): string[] {
     .filter(s => s.length > 0);
 }
 
+/**
+ * Resolver input contract — useLegacyRequirements is REQUIRED so every
+ * caller makes an intentional inheritance decision. `undefined` is not
+ * a valid value at this boundary.
+ */
+export interface ResolverDocumentInput {
+  documentType: DocumentType | string;
+  promptSource?: string;
+  promptText?: string | null;
+  wordMin?: number;
+  wordMax?: number;
+  characterLimit?: number;
+  pageLimit?: number;
+  specialInstructions?: string;
+  facultyInstructions?: string;
+  formattingInstructions?: string;
+  mandatoryTopics?: string;
+  additionalQuestions?: string;
+  useLegacyRequirements: boolean;
+}
+
 export function resolveAndMergePrompt(
-  document: any,
+  document: ResolverDocumentInput,
   writingRequirement: any,
   universityRequirements: any = null,
 ): MergedPrompt {
@@ -297,7 +344,7 @@ export function resolveAndMergePrompt(
   // document fields → writing requirement → default template only.
   // This prevents a generic application-level SOP prompt from bleeding
   // into an unrelated new Visa SOP or Essay.
-  const useLegacy = document.useLegacyRequirements === true;
+  const useLegacy = document.useLegacyRequirements;
   const uni = useLegacy ? (universityRequirements || {}) : {};
 
   // Document-scoped requirement fields (NEW documents own these directly).
@@ -490,8 +537,8 @@ export function resolveAndMergePrompt(
   const pg = pick([document.pageLimit, "DOCUMENT"], [uniPageLimit, "UNIVERSITY_REQUIREMENTS"]);
   const fmt = pick([document.formattingInstructions, "DOCUMENT"], [uniFormatting, "UNIVERSITY_REQUIREMENTS"]);
   return {
-    promptText: document.promptText,
-    promptSource: document.promptSource,
+    promptText: document.promptText ?? "",
+    promptSource: document.promptSource as PromptSource,
     wordMin: wMin.v,
     wordMax: wMax.v,
     characterLimit: ch.v,
@@ -525,7 +572,12 @@ export async function loadDocumentRequirementsForDisplay(
   const document = await getDocument(documentId);
   if (!document) return null;
   const application = await getApplication(document.applicationId);
-  const profile = application ? await getStudentProfile(application.studentId) : null;
+  const sharedProfile = application ? await getStudentProfile(application.studentId) : null;
+  // Legacy documents may inherit universityRequirements — resolve them
+  // from THIS application's context, not the shared blob.
+  const profile = application
+    ? resolveApplicationContext(application, sharedProfile).profile
+    : sharedProfile;
 
   let writingRequirement: any = null;
   const pool = (await import("./db")).getDbPool();

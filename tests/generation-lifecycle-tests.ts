@@ -38,7 +38,10 @@ import {
   TERMINAL_RUN_STATUSES,
   GenerationCancelledError,
 } from "../src/lib/application/generation-lifecycle";
-import { updateDocumentStatus, acquireGenerationLock } from "../src/lib/application/application-repository";
+import {
+  acquireGenerationLock,
+  releaseDocumentGeneration,
+} from "../src/lib/application/application-repository";
 import { randomUUID } from "crypto";
 
 let passed = 0;
@@ -219,14 +222,15 @@ async function main() {
   {
     const { studentId, applicationId, documentId } = await seedFixture();
     const runId = randomUUID();
-    const acquired = await acquireGenerationLock(documentId);
+    const acquired = await acquireGenerationLock(documentId, runId);
     check("G: generation lock acquired", acquired === true);
     await createGenerationRun({ id: runId, documentId, applicationId, studentId });
     await requestCancelGeneration(documentId);
     await cancelRun(runId);
-    // Service releases the doc lock on cancel.
-    await updateDocumentStatus(documentId, undefined, "NOT_STARTED");
-    const reacquired = await acquireGenerationLock(documentId);
+    // Service releases the doc lock on cancel (owner-guarded).
+    await releaseDocumentGeneration(documentId, runId, "NOT_STARTED");
+    const nextRunId = randomUUID();
+    const reacquired = await acquireGenerationLock(documentId, nextRunId);
     check("G: lock released — new generation can start", reacquired === true);
   }
 
@@ -234,15 +238,15 @@ async function main() {
   {
     const { studentId, applicationId, documentId } = await seedFixture();
     const runId = randomUUID();
-    await acquireGenerationLock(documentId);
+    await acquireGenerationLock(documentId, runId);
     await createGenerationRun({ id: runId, documentId, applicationId, studentId });
     await failRun(runId, "simulated stage failure");
-    await updateDocumentStatus(documentId, undefined, "FAILED");
+    await releaseDocumentGeneration(documentId, runId, "FAILED");
     const run = await getRun(runId);
     check("H: status FAILED", run?.status === "FAILED");
     check("H: failureMessage stored", run?.failureMessage === "simulated stage failure");
     // Lock is FAILED, not GENERATING → a new attempt may re-acquire.
-    const reacquired = await acquireGenerationLock(documentId);
+    const reacquired = await acquireGenerationLock(documentId, randomUUID());
     check("H: lock re-acquirable after failure", reacquired === true);
   }
 

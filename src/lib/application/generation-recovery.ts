@@ -18,6 +18,7 @@
 import { getActiveRuns, GenerationRun } from "./generation-lifecycle";
 import { isGenerationLive } from "./generation-registry";
 import { generateApplicationDocument } from "./generation-service";
+import { emitEvent } from "../observability/events";
 
 const ORPHAN_GRACE_MS = 15_000;
 
@@ -32,20 +33,49 @@ export function isOrphanedRun(run: GenerationRun): boolean {
   return heartbeatAgeMs(run) > ORPHAN_GRACE_MS;
 }
 
-function resumeRun(run: GenerationRun): void {
+function resumeRun(run: GenerationRun, via: "startup_scan" | "status_endpoint"): void {
+  emitEvent("generation_recovery_entered", {
+    generationId: run.id,
+    generationRunId: run.id,
+    documentId: run.documentId,
+    attemptSeq: run.attemptSeq,
+    recoveryCount: run.recoveryCount,
+    stage: run.currentStage,
+    providerResponseId: run.providerResponseId,
+    status: run.status,
+    via,
+  });
   generateApplicationDocument({
     studentId: run.studentId,
     applicationId: run.applicationId,
     documentId: run.documentId,
     resumeRunId: run.id,
     requestId: `recovery-${run.id.slice(0, 8)}`,
+  }).then((result) => {
+    // Recovery is only "completed" when the service actually
+    // regenerated — rejected/superseded claims are evidence too.
+    if (!result.ok && result.status !== 409) {
+      emitEvent("generation_recovery_failed", {
+        generationId: run.id,
+        generationRunId: run.id,
+        documentId: run.documentId,
+        attemptSeq: run.attemptSeq,
+        recoveryCount: run.recoveryCount,
+        status: result.status,
+        detail: typeof result.body?.error === "string" ? result.body.error : "recovery request failed",
+        via,
+      }, "error");
+    }
   }).catch((e) => {
-    console.error(JSON.stringify({
-      event: "generation_recovery_failed",
-      runId: run.id,
+    emitEvent("generation_recovery_failed", {
+      generationId: run.id,
+      generationRunId: run.id,
       documentId: run.documentId,
-      error: e instanceof Error ? e.message : String(e),
-    }));
+      attemptSeq: run.attemptSeq,
+      recoveryCount: run.recoveryCount,
+      detail: e instanceof Error ? e.message : String(e),
+      via,
+    }, "error");
   });
 }
 
@@ -55,29 +85,18 @@ export async function recoverInterruptedGenerations(): Promise<void> {
     const runs = await getActiveRuns();
     for (const run of runs) {
       if (isOrphanedRun(run)) {
-        console.log(JSON.stringify({
-          event: "generation_recovery_start",
-          runId: run.id,
-          documentId: run.documentId,
-          stage: run.currentStage,
-        }));
-        resumeRun(run);
+        resumeRun(run, "startup_scan");
       }
     }
   } catch (e) {
-    console.error("generation recovery scan failed:", e);
+    emitEvent("generation_recovery_scan_failed", {
+      detail: e instanceof Error ? e.message : String(e),
+    }, "error");
   }
 }
 
 /** Endpoint-driven recovery — resume one orphaned run if needed. */
 export function maybeRecoverRun(run: GenerationRun): void {
   if (!isOrphanedRun(run)) return;
-  console.log(JSON.stringify({
-    event: "generation_recovery_start",
-    runId: run.id,
-    documentId: run.documentId,
-    stage: run.currentStage,
-    via: "status_endpoint",
-  }));
-  resumeRun(run);
+  resumeRun(run, "status_endpoint");
 }

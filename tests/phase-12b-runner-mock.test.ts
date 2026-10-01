@@ -20,24 +20,8 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "path";
 import { randomUUID } from "node:crypto";
-import { registerHooks } from "node:module";
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    try {
-      return nextResolve(specifier, context);
-    } catch (error) {
-      if (specifier.startsWith(".") && !specifier.endsWith(".ts") && error.code === "ERR_MODULE_NOT_FOUND") {
-        return nextResolve(`${specifier}.ts`, context);
-      }
-      throw error;
-    }
-  },
-});
-
-const { createStageExecution, EXECUTION_STAGES, StageExecutionError } =
-  await import("../src/lib/ai/pipeline/stage-execution.ts");
-const { computeHash } = await import("../src/lib/ai/pipeline-checkpoint.ts");
+import { createStageExecution, EXECUTION_STAGES, StageExecutionError } from "../src/lib/ai/pipeline/stage-execution";
 
 const hashes = {
   generationContractHash: "a".repeat(64),
@@ -70,11 +54,18 @@ function mockContent(stage: string) {
   if (stage === "planner") return JSON.stringify({ componentPlans: [{ componentId: "A" }] });
   if (stage === "writer") return JSON.stringify({ responses: [{ componentId: "A", text: "Draft text." }] });
   if (stage === "qualityReviewer") return JSON.stringify({
-    componentScores: [{ componentId: "A", score: 8, topicCoverage: [], feedback: "" }],
+    componentScores: [{
+      componentId: "A", score: 8, feedback: "",
+      topicCoverage: [], factualRiskClaims: [],
+      wordCompliance: "PASS", characterCompliance: "PASS",
+    }],
+    overall_score: 8,
     requirementCompliance: { requiredTopics: "PASS" },
   });
   if (stage === "languageCalibrator") return JSON.stringify({ responses: [{ componentId: "A", text: "Calibrated text." }] });
-  if (stage === "finalizer") return JSON.stringify({ responses: [{ componentId: "A", text: "Final text." }] });
+  if (stage === "finalizer") return JSON.stringify({
+    responses: [{ componentId: "A", text: "Final text.", retainedClaimIds: [], removedClaimIds: [], repairClaims: [] }],
+  });
   if (stage === "factReviewer") return JSON.stringify({
     components: [{ componentId: "A", pass: true, claims: [], inventedCount: 0, alteredCount: 0, elaborationCount: 0, ambiguousCount: 0 }],
     totalInventedFacts: 0, totalAlteredFacts: 0, totalInterpretiveElaborations: 0, totalAmbiguousClaims: 0, overallPass: true,

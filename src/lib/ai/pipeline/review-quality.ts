@@ -43,18 +43,24 @@ export async function reviewQuality(draft: string): Promise<{ result: QualityRev
 
     await logUsage({
       timestamp: new Date().toISOString(), model, pipelineStage: "qualityReviewer",
+      providerResponseId: responseId || null,
+      requestKind: "NEW_PROVIDER_REQUEST", usageStatus: "USAGE_KNOWN",
       inputTokens: promptTokens, cachedInputTokens: cachedTokens,
       outputTokens: completionTokens, totalTokens, reasoningTokens,
       estimatedCostUsd: cost.totalCostUsd, duration, success: true,
     } as UsageLogEntry);
 
     return { result, usage, stageUsage };
-  } catch (error) {
+  } catch (error: any) {
     const duration = Date.now() - start;
     await logUsage({
       timestamp: new Date().toISOString(), model, pipelineStage: "qualityReviewer",
-      inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0,
-      reasoningTokens: 0, estimatedCostUsd: 0, duration, success: false,
+      providerResponseId: error?.id ?? null,
+      requestKind: "NEW_PROVIDER_REQUEST",
+      errorCode: "PROVIDER_REQUEST_FAILED", usageStatus: "USAGE_UNKNOWN",
+      inputTokens: null, cachedInputTokens: null, outputTokens: null,
+      totalTokens: null, reasoningTokens: null, estimatedCostUsd: null,
+      duration, success: false,
     } as UsageLogEntry);
     throw error;
   }

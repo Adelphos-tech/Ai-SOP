@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     console.error("Benchmark run error:", error?.message);
-    return NextResponse.json({ error: error?.message || "Benchmark run failed" }, { status: 500 });
+    return NextResponse.json({ error: "Benchmark run failed", code: "BENCHMARK_FAILED" }, { status: 500 });
   }
 }
 

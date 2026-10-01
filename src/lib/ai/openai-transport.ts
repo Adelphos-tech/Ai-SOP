@@ -26,7 +26,8 @@ import { getModelForStage, getMaxCompletionTokensForStage, StageName } from "./c
 import type { StageUsage } from "./types";
 import { calculateStageCost, getPricingForModel } from "./pricing";
 import { logUsage } from "./usage-logger";
-import type { UsageLogEntry } from "./types";
+import type { UsageLogEntry, UsageRequestKind } from "./types";
+import { emitEvent } from "../observability/events";
 
 // ---------- configuration ----------
 
@@ -60,6 +61,19 @@ export function getStageSlaMs(stage: StageName): number {
 export function getMaxGenerationDurationMs(): number {
   const env = parseInt(process.env.MAX_GENERATION_DURATION_MS || "", 10);
   return Number.isFinite(env) && env > 0 ? env : 1_200_000; // 20 min
+}
+
+/**
+ * Stage-SLA recovery extension. When a stage exceeds its SLA but the
+ * provider response is still healthy (queued/in_progress), keep polling
+ * the SAME response for this extra window instead of cancelling it.
+ * Past the window the stage fails RECOVERABLE — the response stays
+ * alive so a later retry resumes it instead of paying for a new call.
+ * Env override: OPENAI_STAGE_RECOVERY_MS (default 4 min).
+ */
+export function getStageRecoveryMs(_stage?: StageName): number {
+  const env = parseInt(process.env.OPENAI_STAGE_RECOVERY_MS || "", 10);
+  return Number.isFinite(env) && env >= 0 ? env : 240_000;
 }
 
 // ---------- types ----------
@@ -96,7 +110,12 @@ export interface WaitHooks {
 }
 
 export class StageTimeoutError extends Error {
-  constructor(public stage: string, public slaMs: number) {
+  /**
+   * @param recoverable the provider response was still in_progress at the
+   *   SLA boundary and was intentionally NOT cancelled — a retry may
+   *   resume polling the same responseId (no duplicate paid call).
+   */
+  constructor(public stage: string, public slaMs: number, public recoverable = false) {
     super(`STAGE_TIMEOUT:${stage}`);
     this.name = "StageTimeoutError";
   }
@@ -295,7 +314,10 @@ export class OpenAIResponsesTransport implements StageTransport {
     try {
       await client.responses.cancel(responseId, { timeout: PROVIDER_HTTP_TIMEOUT_MS, maxRetries: 0 });
     } catch (e) {
-      console.error(JSON.stringify({ event: "provider_cancel_failed", responseId, error: (e as any)?.message }));
+      emitEvent("provider_cancel_failed", {
+        providerResponseId: responseId,
+        detail: ((e as any)?.message || String(e)).slice(0, 200),
+      }, "warn");
     }
   }
 }
@@ -410,7 +432,10 @@ export async function waitForBackgroundStage(opts: {
 }): Promise<ProviderPollResult> {
   const { transport, responseId, stage } = opts;
   const slaMs = getStageSlaMs(stage);
+  const recoveryMs = getStageRecoveryMs(stage);
   const pollMs = opts.pollMs ?? PROVIDER_POLL_MS;
+  /** Last observed provider status — drives SLA-boundary recovery. */
+  let lastStatus: ProviderStatus | undefined;
 
   while (true) {
     const elapsed = Date.now() - opts.stageStartedAtMs;
@@ -421,13 +446,28 @@ export async function waitForBackgroundStage(opts: {
       throw new GenerationTimeLimitError();
     }
     if (elapsed > slaMs) {
-      await transport.cancelBackgroundStage(responseId);
-      throw new StageTimeoutError(stage, slaMs);
+      const inFlight =
+        lastStatus === "in_progress" || lastStatus === "queued" || lastStatus === undefined;
+      if (inFlight && elapsed <= slaMs + recoveryMs) {
+        // SLA breached but provider work is still healthy — keep polling
+        // the SAME response within the recovery window; no cancel.
+      } else if (inFlight) {
+        // Recovery window exhausted: leave the provider response ALIVE.
+        // The run becomes RECOVERING and a retry resumes polling this
+        // response — never a duplicate paid call.
+        throw new StageTimeoutError(stage, slaMs + recoveryMs, true);
+      } else {
+        // Response already terminal — cancel is a no-op-safe cleanup,
+        // then fail normally.
+        await transport.cancelBackgroundStage(responseId);
+        throw new StageTimeoutError(stage, slaMs + recoveryMs);
+      }
     }
 
     await opts.hooks?.onTick?.(elapsed);
 
     const result = await transport.getBackgroundStage(responseId);
+    lastStatus = result.status;
     await opts.hooks?.onStatus?.(result.status, responseId);
 
     if (result.status === "completed") {
@@ -503,14 +543,12 @@ export function logUtilizationWarning(opts: {
   const event = utilizationRatio >= 0.9
     ? "CRITICAL_OUTPUT_BUDGET_UTILIZATION"
     : "HIGH_OUTPUT_BUDGET_UTILIZATION";
-  console.warn(JSON.stringify({
-    event,
+  emitEvent(event, {
     generationId: opts.generationId || null,
     stage: opts.stage,
-    totalOutputTokens: opts.totalOutputTokens,
-    maxOutputTokens: opts.maxOutputTokens,
-    utilization: Number(utilizationRatio.toFixed(4)),
-  }));
+    outputTokens: opts.totalOutputTokens,
+    detail: `utilization=${Number(utilizationRatio.toFixed(4))} budget=${opts.maxOutputTokens}`,
+  }, "warn");
 }
 
 /** Internal verbosity regression warnings — non-blocking, based on
@@ -527,15 +565,35 @@ export async function stageUsageFromProvider(opts: {
   usage?: ProviderPollResult["usage"];
   durationMs: number;
   generationId?: string | null;
+  /** How the response was obtained — NEW vs REUSED vs RETRY vs POLL. */
+  requestKind?: UsageRequestKind;
+  /** Run/document correlation for the usage ledger row. */
+  correlation?: {
+    generationRunId?: string | null;
+    attemptSeq?: number | null;
+    documentId?: string | null;
+  };
 }): Promise<StageUsage> {
   const model = getModelForStage(opts.stage);
   const u = opts.usage;
+  const correlation = {
+    generationId: opts.generationId ?? opts.correlation?.generationRunId ?? null,
+    generationRunId: opts.correlation?.generationRunId ?? null,
+    attemptSeq: opts.correlation?.attemptSeq ?? null,
+    documentId: opts.correlation?.documentId ?? null,
+    provider: "openai",
+    providerResponseId: opts.responseId,
+    requestKind: opts.requestKind ?? "NEW_PROVIDER_REQUEST",
+  };
   if (!u) {
+    // Provider gave no usage — tokens/cost are UNKNOWN, not zero.
     await logUsage({
       timestamp: new Date().toISOString(), model, pipelineStage: opts.stage,
-      inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0,
-      reasoningTokens: 0, estimatedCostUsd: 0, duration: opts.durationMs,
-      success: false, note: "USAGE_UNKNOWN",
+      ...correlation,
+      inputTokens: null, cachedInputTokens: null, outputTokens: null,
+      totalTokens: null, reasoningTokens: null, estimatedCostUsd: null,
+      duration: opts.durationMs, success: false,
+      usageStatus: "USAGE_UNKNOWN", errorCode: "USAGE_UNKNOWN",
     } as UsageLogEntry);
     return {
       stage: opts.stage, model, responseId: opts.responseId, durationMs: opts.durationMs,
@@ -547,11 +605,11 @@ export async function stageUsageFromProvider(opts: {
   const util = computeOutputUtilization(opts.stage, u);
   const vWarn = VERBOSITY_WARN_TOKENS[opts.stage];
   if (vWarn && u.outputTokens > vWarn.limit) {
-    console.warn(JSON.stringify({
-      event: vWarn.event, generationId: opts.generationId || null,
-      stage: opts.stage, totalOutputTokens: u.outputTokens,
-      compactTarget: vWarn.limit,
-    }));
+    emitEvent(vWarn.event, {
+      generationId: opts.generationId || null,
+      stage: opts.stage, outputTokens: u.outputTokens,
+      detail: `compactTarget=${vWarn.limit}`,
+    }, "warn");
   }
   logUtilizationWarning({
     stage: opts.stage, generationId: opts.generationId,
@@ -560,10 +618,12 @@ export async function stageUsageFromProvider(opts: {
   });
   await logUsage({
     timestamp: new Date().toISOString(), model, pipelineStage: opts.stage,
+    ...correlation,
     inputTokens: u.inputTokens, cachedInputTokens: u.cachedInputTokens,
     outputTokens: u.outputTokens, totalTokens: u.totalTokens,
     reasoningTokens: u.reasoningTokens, estimatedCostUsd: cost.totalCostUsd,
     duration: opts.durationMs, success: true,
+    usageStatus: "USAGE_KNOWN",
     maxOutputTokens: util.maxOutputTokens,
     visibleOutputTokens: util.visibleOutputTokens,
     utilizationRatio: Number(util.utilizationRatio.toFixed(4)),

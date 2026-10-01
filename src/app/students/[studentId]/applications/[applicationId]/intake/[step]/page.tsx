@@ -117,7 +117,7 @@ export default function IntakePage() {
     setError("");
     try {
       const [profileRes, appRes] = await Promise.all([
-        fetch(`/api/application/profile?studentId=${studentId}`, { cache: "no-store" }),
+        fetch(`/api/application/profile?studentId=${studentId}&applicationId=${applicationId}`, { cache: "no-store" }),
         fetch(`/api/application/list?studentId=${studentId}`, { cache: "no-store" }),
       ]);
 
@@ -177,7 +177,7 @@ export default function IntakePage() {
         headers: { "Content-Type": "application/json" },
         // Conditional write — never clobber a newer profile (e.g. a CV
         // apply that landed after this page loaded).
-        body: JSON.stringify({ studentId, profileData: values, expectedRevision: profileRevision }),
+        body: JSON.stringify({ studentId, applicationId, profileData: values, expectedRevision: profileRevision }),
       });
       if (res.ok) {
         const data = await res.json().catch(() => null);
@@ -212,7 +212,7 @@ export default function IntakePage() {
     } finally {
       setSaving(false);
     }
-  }, [studentId, profileRevision, reset]);
+  }, [studentId, applicationId, profileRevision, reset]);
 
   // Save & Continue — validates, saves, blocks navigation on failure.
   // Wizard mode stays on /intake/missing and reloads so the next

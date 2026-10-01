@@ -4,6 +4,10 @@ import type { ComponentEvidencePacket } from "../../component-evidence-packet";
 import { withSafetyBlock } from "../prompt-safety-block";
 import { formatComponentRequirements } from "./component-requirements";
 import { resolveLengthContext, describeLengthContext, wordsOf } from "../../length-context";
+import {
+  COMPLIANCE_STATUSES, PAGE_COMPLIANCE_STATUSES,
+  CLAIM_RISK_STATUSES, EVIDENCE_SUITABILITIES,
+} from "../../schemas/quality-reviewer.schema";
 
 /**
  * Phase 38 changes:
@@ -50,6 +54,13 @@ export function buildGenericQualityReviewerPrompt(
 Official prompt: "${rc.exactPrompt}"
 ${topics}${wordConstraint}${charConstraint}${pageConstraint}`;
   }).join("\n\n---\n\n");
+
+  // Enum vocabulary rendered from the SAME constants the Zod schema
+  // validates against — prompt and contract can never drift apart.
+  const CS = COMPLIANCE_STATUSES.join('" | "');
+  const PCS = PAGE_COMPLIANCE_STATUSES.join('" | "');
+  const SUIT = EVIDENCE_SUITABILITIES.join('" | "');
+  const RISK = CLAIM_RISK_STATUSES.filter(s => s !== "SUPPORTED").join('" | "');
 
   const system = `You are a quality reviewer for an application document. Review EACH response component separately and the overall document.
 
@@ -127,7 +138,7 @@ Return ONLY valid JSON:
           "candidateEvidence": [
             {
               "evidenceId": "<ledger id>",
-              "suitability": "SUITABLE" | "INSUFFICIENT" | "AMBIGUOUS",
+              "suitability": "${SUIT}",
               "supportedContext": "<context the evidence establishes, <=10 words>"
             }
           ]
@@ -137,7 +148,7 @@ Return ONLY valid JSON:
         {
           "claimId": "<claim id from writer — non-SUPPORTED only>",
           "claim": "<the factual assertion>",
-          "status": "POTENTIALLY_UNSUPPORTED" | "SEMANTIC_EXPANSION" | "AMBIGUOUS",
+          "status": "${RISK}",
           "supportingEvidenceIds": [],
           "reason": "<why, <=15 words>",
           "unsupportedMotivation": true/false,
@@ -146,9 +157,9 @@ Return ONLY valid JSON:
         }
       ],
       "verifiedClaimIds": ["<claimId verified SUPPORTED>"],
-      "wordCompliance": "PASS" | "FAIL" | "N/A",
-      "characterCompliance": "PASS" | "FAIL" | "N/A",
-      "pageCompliance": "RENDER_VALIDATION_REQUIRED" | "N/A"
+      "wordCompliance": "${CS}",
+      "characterCompliance": "${CS}",
+      "pageCompliance": "${PCS}"
     }
   ],
   "overall_score": 1-10,

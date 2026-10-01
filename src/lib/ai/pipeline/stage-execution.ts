@@ -10,6 +10,7 @@ import {
   appendDurable, atomicWriteDurable, computeHash,
   getCheckpointPath, syncDirectory, validateCheckpoint,
 } from "../pipeline-checkpoint";
+import { emitEvent } from "../../observability/events";
 import type { StageUsage } from "../types";
 
 export const EXECUTION_STAGES = [
@@ -35,6 +36,18 @@ export interface StageExecutionOptions {
     onUsage: (usage: StageUsage) => Promise<void>,
   ) => Promise<{ content: string; stageUsage: StageUsage }>;
   maxTechnicalRetries?: number;
+  /** Called when a completed provider response produced contract-invalid
+   *  content — marks it non-reusable so a same-stage retry creates a
+   *  fresh provider call instead of replaying the bad output. */
+  onContentInvalid?: (responseId: string) => Promise<void>;
+  /** Correlation context for observability events (ids only — never
+   *  content). Optional so deterministic tests stay dependency-free. */
+  runContext?: {
+    generationRunId?: string | null;
+    attemptSeq?: number | null;
+    documentId?: string | null;
+    requestId?: string | null;
+  };
 }
 export interface StageExecution {
   generationId: string;
@@ -52,14 +65,32 @@ export interface StageExecution {
 export class StageExecutionError extends Error {
   readonly code: string;
   readonly technical: boolean;
-  constructor(code: string, message = code, technical = false) {
+  /** When true, a provider background response may still be in flight —
+   *  the run should go RECOVERING (resume polls the same response)
+   *  rather than FAILED. */
+  readonly recoverable: boolean;
+  constructor(code: string, message = code, technical = false, recoverable = false) {
     super(message);
     this.code = code;
     this.technical = technical;
+    this.recoverable = recoverable;
     this.name = "StageExecutionError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Contract/format deviations that are plausibly transient model behavior —
+ * the same stage may retry in-run (bounded) and a failed run stays
+ * resumable. The provider response that produced the invalid content is
+ * marked content_invalid so the retry cannot replay it.
+ */
+export const RETRYABLE_CONTRACT_CODES = new Set([
+  "CONTENT_JSON_INVALID",
+  "CONTENT_SCHEMA_INVALID",
+  "AI_STAGE_SCHEMA_INVALID",
+  "FINALIZER_METADATA_INCOMPLETE",
+]);
 
 type FailureKind = "TECHNICAL" | "CONTENT";
 interface CallRecord {
@@ -167,14 +198,17 @@ export function parseStage(stage: ExecutionStage, content: string, context?: { f
     // extract the outermost JSON object by brace matching and retry.
     const extracted = extractJsonObject(content);
     if (!extracted) {
+      // Never embed model output in the error — it lands in
+      // generation_runs.failure_message and logs (content leak).
       throw new StageExecutionError(
         "CONTENT_JSON_INVALID",
-        `CONTENT_JSON_INVALID: ${stage} output not parseable (starts: ${content.trim().slice(0, 80)})`,
+        `CONTENT_JSON_INVALID: ${stage} output not parseable (outputChars=${content.trim().length})`,
+        true, // technical — model-format deviation, stage-level retryable
       );
     }
-    try { parsed = JSON.parse(extracted); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID"); }
+    try { parsed = JSON.parse(extracted); } catch { throw new StageExecutionError("CONTENT_JSON_INVALID", "CONTENT_JSON_INVALID", true); }
   }
-  if (!object(parsed)) throw new StageExecutionError("CONTENT_SCHEMA_INVALID");
+  if (!object(parsed)) throw new StageExecutionError("CONTENT_SCHEMA_INVALID", "CONTENT_SCHEMA_INVALID", true);
   // Normalize harmless representation differences BEFORE strict checks —
   // e.g. factReviewer claims using `text` instead of `claim`, or an
   // omitted blockingReason.
@@ -187,12 +221,13 @@ export function parseStage(stage: ExecutionStage, content: string, context?: { f
     const issues = result.error.issues.slice(0, 5).map(i => `${i.path.join(".") || "(root)"}:${i.code}`).join("; ");
     // Preserve legacy semantics: missing/invalid finalizer claim-metadata
     // fields were technical-retryable (model can correct on retry).
-    const isFinalizerMetadata = stage === "finalizer" && result.error.issues.some(i =>
-      ["retainedClaimIds", "removedClaimIds", "repairClaims"].includes(String(i.path[i.path.length - 1])));
+    // Schema deviations are technical-retryable across the board — a model
+    // format deviation is plausibly transient and bounded retries stay
+    // inside the current stage (earlier checkpoints untouched).
     throw new StageExecutionError(
       "AI_STAGE_SCHEMA_INVALID",
       `${stage}: structural contract violation (${STAGE_CONTRACT_VERSIONS[stage]}) — ${issues}`,
-      isFinalizerMetadata,
+      true,
     );
   }
   const output = result.data as Record<string, any>;
@@ -357,7 +392,26 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
       await atomicWriteDurable(statePath, JSON.stringify({ state, stateHash, journalHash: hash }, null, 2));
       await atomicWriteDurable(path.join(basePath, "accounting.json"), JSON.stringify(accounting(), null, 2));
       await atomicWriteDurable(path.join(basePath, "runs.json"), JSON.stringify(state.runs, null, 2));
-    } catch (error) { poisoned = true; throw error; }
+    } catch (error) {
+      // CORE_STATE: journal/state write failure must NEVER be swallowed —
+      // the executor is poisoned and the caller gets a typed code so the
+      // run halts recoverable instead of silently advancing stages.
+      poisoned = true;
+      if (error instanceof StageExecutionError) throw error;
+      emitEvent("generation_checkpoint_persistence_failed", {
+        generationRunId: options.runContext?.generationRunId ?? null,
+        attemptSeq: options.runContext?.attemptSeq ?? null,
+        documentId: options.runContext?.documentId ?? null,
+        operation: `journal:${type}`,
+        errorCode: "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+        detail: (error as Error)?.message || String(error),
+      }, "error");
+      throw new StageExecutionError(
+        "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+        `GENERATION_CHECKPOINT_PERSISTENCE_FAILED (${type})`,
+        true, true,
+      );
+    }
   };
   try {
     if (options.mode === "CONTENT_REGENERATION") {
@@ -436,7 +490,11 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
     };
     const assertOpen = () => {
       if (closed) throw new StageExecutionError("EXECUTION_CLOSED");
-      if (poisoned) throw new StageExecutionError("PERSISTENCE_FAILED_LOCK_RETAINED");
+      if (poisoned) throw new StageExecutionError(
+        "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+        "GENERATION_CHECKPOINT_PERSISTENCE_FAILED: earlier durable write failed; execution halted, attempt lock retained for diagnosis",
+        true, true,
+      );
       if (busy) throw new StageExecutionError("STAGE_EXECUTION_IN_PROGRESS");
     };
     const manager: StageExecution = {
@@ -459,6 +517,12 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
           if (restored) {
             if (restored.inputHash !== inputHash) throw new StageExecutionError("STALE_CHECKPOINT_REJECTED");
             cursor++;
+            emitEvent("generation_checkpoint_reused", {
+              generationRunId: options.runContext?.generationRunId ?? options.generationId,
+              attemptSeq: options.runContext?.attemptSeq ?? null,
+              documentId: options.runContext?.documentId ?? null,
+              stage, stageIndex, reusedCheckpoint: true,
+            });
             return { content: restored.rawOutput!, output: restored.output, stageUsage: { ...restored.usage, stage, success: true } };
           }
           const prior = state.calls.filter(call => call.stageIndex === stageIndex);
@@ -526,7 +590,25 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
             await atomicWriteDurable(path.join(basePath, `raw-${prefix}.txt`), result.content);
             await atomicWriteDurable(path.join(basePath, `artifact-${prefix}.json`), JSON.stringify(output, null, 2));
             await atomicWriteDurable(getCheckpointPath({ basePath, generationId: options.generationId }, stageIndex, stage), JSON.stringify(checkpoint, null, 2));
-          } catch (error) { poisoned = true; throw error; }
+          } catch (error) {
+            // CORE_STATE: model output was produced but not durably
+            // persisted — halt (cursor does not advance) rather than
+            // pay for the next stage with an unrecoverable result.
+            poisoned = true;
+            emitEvent("generation_checkpoint_persistence_failed", {
+              generationRunId: options.runContext?.generationRunId ?? options.generationId,
+              attemptSeq: options.runContext?.attemptSeq ?? null,
+              documentId: options.runContext?.documentId ?? null,
+              stage, stageIndex, operation: "artifacts",
+              errorCode: "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+              detail: (error as Error)?.message || String(error),
+            }, "error");
+            throw new StageExecutionError(
+              "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+              `GENERATION_CHECKPOINT_PERSISTENCE_FAILED (artifacts:${stage})`,
+              true, true,
+            );
+          }
           activeCall.status = "SUCCESS";
           activeCall.completedAt = checkpoint.completedAt;
           checkpoints.push(checkpoint);
@@ -545,12 +627,47 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
               callRecord.reason = reason;
               callRecord.completedAt = new Date().toISOString();
             }
-            // Phase 34C: For FINALIZER_METADATA_INCOMPLETE, don't fail the run.
-            // The pipeline will catch this and retry with corrective feedback.
-            // The run stays RUNNING so execute() can be called again.
-            const isMetadataIncomplete = error instanceof StageExecutionError && error.code === "FINALIZER_METADATA_INCOMPLETE";
-            if (isMetadataIncomplete) {
-              await persist("CALL_FAILED", { callId: callRecord?.id, kind, reason });
+            // Retryable contract errors (metadata-incomplete, JSON/schema
+            // deviations, empty content): don't fail the run while an
+            // in-run retry budget remains — the caller re-invokes this
+            // stage only. Provider response that produced bad content is
+            // marked content_invalid so the retry never replays it.
+            // Budget exhausted → fail TECHNICAL: the run stays resumable
+            // from this stage's checkpoint boundary.
+            const isRetryableContract = error instanceof StageExecutionError
+              && RETRYABLE_CONTRACT_CODES.has(error.code);
+            if (isRetryableContract && callRecord) {
+              const stageCalls = state.calls.filter(c => c.stageIndex === stageIndex).length;
+              const responseId = callRecord.usages[0]?.responseId;
+              if (responseId && options.onContentInvalid) {
+                try {
+                  await options.onContentInvalid(responseId);
+                } catch (e) {
+                  // TELEMETRY-class write — non-fatal, but never silent:
+                  // a failed content_invalid mark leaves a bad response
+                  // reusable (dedup could replay it).
+                  emitEvent("provider_response_status_persist_failed", {
+                    generationRunId: options.runContext?.generationRunId ?? null,
+                    documentId: options.runContext?.documentId ?? null,
+                    stage, providerResponseId: responseId,
+                    operation: "mark_content_invalid",
+                    detail: (e as Error)?.message || String(e),
+                  }, "warn");
+                }
+              }
+              // FINALIZER_METADATA_INCOMPLETE keeps the run RUNNING
+              // unconditionally — the pipeline's corrective-feedback loop
+              // owns its bound and falls back to calibrated text.
+              // Other contract errors: keep RUNNING strictly below the
+              // retry limit so a failed run stays resumable
+              // (failedStageCalls > maxTechnicalRetries rejects resume).
+              const keepRunning = error.code === "FINALIZER_METADATA_INCOMPLETE"
+                || stageCalls < state.maxTechnicalRetries;
+              if (keepRunning) {
+                await persist("CALL_FAILED", { callId: callRecord.id, kind, reason });
+              } else {
+                await fail("TECHNICAL", stageIndex, reason);
+              }
             } else {
               await fail(kind, stageIndex, reason);
             }
@@ -569,6 +686,12 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
           const restored = checkpoints[cursor];
           if (restored) {
             cursor++;
+            emitEvent("generation_checkpoint_reused", {
+              generationRunId: options.runContext?.generationRunId ?? options.generationId,
+              attemptSeq: options.runContext?.attemptSeq ?? null,
+              documentId: options.runContext?.documentId ?? null,
+              stage, stageIndex, reusedCheckpoint: true,
+            });
             return { content: restored.rawOutput!, output: restored.output, stageUsage: { ...restored.usage, stage, success: true } };
           }
           const raw = JSON.stringify(output);
@@ -601,7 +724,22 @@ export async function createStageExecution(options: StageExecutionOptions): Prom
             await atomicWriteDurable(path.join(basePath, `raw-${prefix}.txt`), raw);
             await atomicWriteDurable(path.join(basePath, `artifact-${prefix}.json`), JSON.stringify(parsed, null, 2));
             await atomicWriteDurable(getCheckpointPath({ basePath, generationId: options.generationId }, stageIndex, stage), JSON.stringify(checkpoint, null, 2));
-          } catch (error) { poisoned = true; throw error; }
+          } catch (error) {
+            poisoned = true;
+            emitEvent("generation_checkpoint_persistence_failed", {
+              generationRunId: options.runContext?.generationRunId ?? options.generationId,
+              attemptSeq: options.runContext?.attemptSeq ?? null,
+              documentId: options.runContext?.documentId ?? null,
+              stage, stageIndex, operation: "artifacts:skip",
+              errorCode: "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+              detail: (error as Error)?.message || String(error),
+            }, "error");
+            throw new StageExecutionError(
+              "GENERATION_CHECKPOINT_PERSISTENCE_FAILED",
+              `GENERATION_CHECKPOINT_PERSISTENCE_FAILED (artifacts:${stage}:skip)`,
+              true, true,
+            );
+          }
           checkpoints.push(checkpoint);
           state.checkpoints.push(computeHash(checkpoint));
           delete state.failure;

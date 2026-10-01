@@ -64,6 +64,24 @@ async function main() {
   check("Context compilation", !ctx.blocked, ctx.blocked ? ctx.blockReasons.join(" | ") : "loaded");
   check("Completeness issues", ctx.completenessIssues.length === 0, ctx.completenessIssues.join(" | ") || "none");
 
+  // ===== CONTEXT PROVENANCE =====
+  // Where each scope's data came from. For migrated/new applications
+  // (application_context_version=2) CROSS_APPLICATION_FALLBACK_USED must
+  // be NO — a YES on a scoped application means shared student storage
+  // leaked into this application's context (a bug).
+  const ctxAny = ctx as any;
+  const appCtxSource = ctxAny.applicationContextSource || "LEGACY_SHARED_PROFILE";
+  const appCtxVersion = ctxAny.application?.applicationContextVersion ?? 1;
+  const crossFallback = ctxAny.crossApplicationFallbackUsed === true;
+  check("STUDENT_CONTEXT_SOURCE", true, ctx.profile ? "STUDENT_PROFILE" : "NONE");
+  check("APPLICATION_CONTEXT_SOURCE", true, `${appCtxSource} (version=${appCtxVersion})`);
+  check("DOCUMENT_REQUIREMENT_SOURCE", true,
+    `prompt=${ctx.mergedPrompt.promptSource} resolution=${ctx.mergedPrompt.resolutionPath}`);
+  check("APPLICATION_CONTEXT_ID", !!ctxAny.applicationContextId, ctxAny.applicationContextId || ctx.application?.id || "none");
+  check("CROSS_APPLICATION_FALLBACK_USED",
+    appCtxVersion >= 2 ? !crossFallback : true,
+    crossFallback ? "YES (LEGACY — shared profile fallback; first scoped save migrates)" : "NO");
+
   const merged = ctx.mergedPrompt;
   check("Resolved prompt", !!merged.promptText && merged.promptText.length > 10, `source=${merged.promptSource} path=${merged.resolutionPath} len=${merged.promptText?.length || 0}`);
 
@@ -200,7 +218,7 @@ async function main() {
   // For NEW documents (use_legacy_requirements=false), the prompt/limits/
   // topics/questions/formatting must come from the document or default
   // template — NOT from legacy application-level universityRequirements.
-  const doc: any = document;
+  const doc: any = ctx.document;
   const useLegacy = doc?.useLegacyRequirements === true;
   const promptOwner = merged.fieldSources?.promptText || "UNKNOWN";
   const lengthOwner = merged.fieldSources?.wordMax || "UNKNOWN";

@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     console.error("Gate check error:", error?.message);
-    return NextResponse.json({ error: error?.message || "Gate check failed" }, { status: 500 });
+    return NextResponse.json({ error: "Gate check failed", code: "GATE_CHECK_FAILED" }, { status: 500 });
   }
 }
 

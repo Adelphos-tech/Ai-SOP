@@ -144,7 +144,7 @@ export default function ApplicationWorkspacePage() {
       const [res, studentRes, profileRes] = await Promise.all([
         fetch(`/api/application/list?applicationId=${applicationId}&studentId=${studentId}`, { cache: "no-store" }),
         fetch(`/api/application/student?id=${studentId}`, { cache: "no-store" }),
-        fetch(`/api/application/profile?studentId=${studentId}`, { cache: "no-store" }),
+        fetch(`/api/application/profile?studentId=${studentId}&applicationId=${applicationId}`, { cache: "no-store" }),
       ]);
       if (stale()) return;
 
@@ -870,7 +870,7 @@ export default function ApplicationWorkspacePage() {
       {/* Documents */}
       <div className="mb-4 flex items-center justify-between gap-4">
         <h2 className="text-section-title text-dvivid-text-primary">Documents</h2>
-        {intakeComplete && !showAddForm && (
+        {!showAddForm && (
           <PrimaryButton onClick={() => setShowAddForm(true)}>+ Add Document</PrimaryButton>
         )}
       </div>
@@ -878,15 +878,9 @@ export default function ApplicationWorkspacePage() {
       {documents.length === 0 ? (
         <EmptyState
           title="No Documents Yet"
-          description={intakeComplete ? "Add an SOP, essay, personal statement or other writing task." : "Complete the intake first, then add a document."}
+          description="Add an SOP, essay, personal statement or other writing task."
           action={
-            intakeComplete ? (
-              <PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>
-            ) : (
-              <Link href={intakeHref}>
-                <SecondaryButton>Complete Intake First →</SecondaryButton>
-              </Link>
-            )
+            <PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>
           }
         />
       ) : (

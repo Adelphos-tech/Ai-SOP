@@ -14,6 +14,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { generateApplicationDocument, releaseGenerationLock } from "@/lib/application/generation-service";
+import { classifyGenerationError } from "@/lib/application/generation-errors";
 import { randomUUID } from "crypto";
 import {
   requireConsultantSession,
@@ -26,20 +27,10 @@ import { ResourceBusyError } from "@/lib/concurrency/resource-limiter";
 export const maxDuration = 300;
 
 /**
- * Sanitize error messages to prevent leaking internal infrastructure details
- * (IP addresses, ports, file paths, stack traces) to clients.
+ * Route boundary: the client receives a stable code + consultant-safe
+ * copy only. Raw technical detail (provider bodies, SQL, stack traces,
+ * Zod paths) stays in server logs.
  */
-function sanitizeErrorMessage(msg: string | undefined): string {
-  if (!msg) return "An unexpected error occurred during generation.";
-  // Strip common internal patterns
-  return msg
-    .replace(/127\.0\.0\.1:\d+/g, "[internal]")
-    .replace(/localhost:\d+/g, "[internal]")
-    .replace(/\/opt\/[^\s'"]+/g, "[path]")
-    .replace(/\/home\/[^\s'"]+/g, "[path]")
-    .replace(/ERR_SSL_\w+/g, "[ssl-error]")
-    .substring(0, 500); // prevent overly long error messages
-}
 
 export async function POST(req: NextRequest) {
   let documentId: string | undefined;
@@ -92,10 +83,9 @@ export async function POST(req: NextRequest) {
     if (documentId) {
       await releaseGenerationLock(documentId);
     }
-    // Sanitize error — do not expose internal paths, ports, or stack traces
-    const safeMessage = sanitizeErrorMessage(error?.message);
+    const normalized = classifyGenerationError(error?.message);
     return NextResponse.json(
-      { error: safeMessage },
+      { error: normalized.userMessage, code: normalized.code },
       { status: 500 },
     );
   }

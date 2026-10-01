@@ -125,16 +125,40 @@ export interface TokenUsage {
   responseId: string;
 }
 
+/** How the provider response powering this row was obtained. */
+export type UsageRequestKind =
+  | "NEW_PROVIDER_REQUEST"        // freshly created paid provider response
+  | "REUSED_PROVIDER_RESPONSE"    // existing response polled to completion — no new charge
+  | "POLL"                        // retrieval-only operation — never a charge
+  | "RETRY_NEW_PROVIDER_REQUEST"; // bounded retry created a new response after a retryable terminal failure
+
+/** Cost certainty — "tokens unavailable" is NOT "zero cost". */
+export type UsageCertainty =
+  | "USAGE_KNOWN"              // provider returned usage for this response
+  | "USAGE_UNKNOWN"            // tokens/cost could not be determined — cost may be non-zero
+  | "NOT_CHARGED_CONFIRMED";   // request provably never reached the provider (preflight/400)
+
 export interface UsageLogEntry {
   timestamp: string;
   model: string;
   pipelineStage: string;
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  reasoningTokens: number;
-  estimatedCostUsd: number;
+  // --- correlation (null when unavailable — never invented) ---
+  generationId?: string | null;
+  generationRunId?: string | null;
+  attemptSeq?: number | null;
+  documentId?: string | null;
+  provider?: string | null;
+  providerResponseId?: string | null;
+  requestKind?: UsageRequestKind | null;
+  errorCode?: string | null;
+  usageStatus?: UsageCertainty | null;
+  // --- usage (null = unknown, NOT zero-cost) ---
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  reasoningTokens: number | null;
+  estimatedCostUsd: number | null;
   duration: number;
   success: boolean;
   /** Token-budget telemetry (Responses API: reasoning + visible share

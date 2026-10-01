@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS applications (
   intake VARCHAR(100) NOT NULL,
   intake_year VARCHAR(10) NOT NULL,
   application_context_id VARCHAR(255) DEFAULT NULL,
+  context_data JSON DEFAULT NULL,
+  application_context_version INT NOT NULL DEFAULT 1,
   requirement_set_id VARCHAR(36) DEFAULT NULL,
   status VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -103,6 +105,7 @@ CREATE TABLE IF NOT EXISTS application_documents (
   requirements_status VARCHAR(50) NOT NULL DEFAULT 'NOT_STARTED',
   generation_status VARCHAR(50) NOT NULL DEFAULT 'NOT_STARTED',
   generation_started_at TIMESTAMP NULL DEFAULT NULL,
+  active_generation_run_id VARCHAR(36) DEFAULT NULL,
   review_status VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
   current_version_id VARCHAR(36) DEFAULT NULL,
   approved_version_id VARCHAR(36) DEFAULT NULL,
@@ -138,6 +141,7 @@ CREATE TABLE IF NOT EXISTS generation_runs (
   completed_at DATETIME(3) DEFAULT NULL,
   failed_at DATETIME(3) DEFAULT NULL,
   failure_message TEXT DEFAULT NULL,
+  attempt_seq BIGINT NOT NULL AUTO_INCREMENT UNIQUE,
   created_at DATETIME(3) NOT NULL DEFAULT NOW(3),
   INDEX idx_runs_document (document_id, created_at),
   INDEX idx_runs_status (status)
@@ -180,4 +184,17 @@ CREATE TABLE IF NOT EXISTS document_versions (
 -- Phase SOP-INFRA-36: Concurrency safety migrations.
 -- ALTER TABLE application_documents ADD COLUMN generation_started_at TIMESTAMP NULL DEFAULT NULL;
 -- ALTER TABLE document_versions ADD UNIQUE KEY uq_versions_doc_number (document_id, version_number);
+--
+-- Generation State Ownership wave (GEN-004 fix):
+-- active_generation_run_id names the run that owns the document's
+-- generation lifecycle; attempt_seq gives generation_runs a strict
+-- total order for supersession. Primary rollout = explicit migrations:
+--   migrations/2026-10-01-active-generation-run-id.sql
+--   migrations/2026-10-01-generation-runs-attempt-seq.sql
+-- Runtime ensure (generation-lifecycle.ensureGenerationLifecycleSchema)
+-- remains as an idempotent dev/test safety net (ER_DUP_FIELDNAME safe).
+-- ALTER TABLE application_documents ADD COLUMN active_generation_run_id VARCHAR(36) DEFAULT NULL;
+-- ALTER TABLE generation_runs ADD COLUMN attempt_seq BIGINT NULL;
+-- UPDATE generation_runs g JOIN (SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) rn FROM generation_runs) x ON x.id=g.id SET g.attempt_seq=x.rn;
+-- ALTER TABLE generation_runs MODIFY attempt_seq BIGINT NOT NULL AUTO_INCREMENT UNIQUE;
 `;

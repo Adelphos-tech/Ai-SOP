@@ -31,8 +31,9 @@ export async function planSop(input: AiInput): Promise<{ result: PlannerOutput; 
     try {
       result = JSON.parse(content) as PlannerOutput;
     } catch (e) {
-      console.error("PLANNER JSON PARSE ERROR. Content length:", content.length, "First 200:", content.substring(0, 200));
-      throw new Error("Planner returned invalid JSON: " + content.substring(0, 100));
+      // Never log model output — length is sufficient evidence.
+      console.error("PLANNER JSON PARSE ERROR. Content length:", content.length);
+      throw new Error("CONTENT_JSON_INVALID: planner output not parseable");
     }
     const duration = Date.now() - start;
 
@@ -66,6 +67,8 @@ export async function planSop(input: AiInput): Promise<{ result: PlannerOutput; 
     await logUsage({
       timestamp: new Date().toISOString(),
       model, pipelineStage: "planner",
+      providerResponseId: responseId || null,
+      requestKind: "NEW_PROVIDER_REQUEST", usageStatus: "USAGE_KNOWN",
       inputTokens: promptTokens, cachedInputTokens: cachedTokens,
       outputTokens: completionTokens, totalTokens, reasoningTokens,
       estimatedCostUsd: cost.totalCostUsd, duration, success: true,
@@ -74,11 +77,16 @@ export async function planSop(input: AiInput): Promise<{ result: PlannerOutput; 
     return { result, usage, stageUsage };
   } catch (error: any) {
     const duration = Date.now() - start;
-    console.error("PLANNER ERROR:", error?.message, error?.status, error?.error);
+    console.error("PLANNER ERROR:", error?.message, error?.status);
     await logUsage({
       timestamp: new Date().toISOString(), model, pipelineStage: "planner",
-      inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0,
-      reasoningTokens: 0, estimatedCostUsd: 0, duration, success: false,
+      providerResponseId: error?.id ?? null,
+      requestKind: "NEW_PROVIDER_REQUEST",
+      errorCode: "PROVIDER_REQUEST_FAILED",
+      usageStatus: "USAGE_UNKNOWN",
+      inputTokens: null, cachedInputTokens: null, outputTokens: null,
+      totalTokens: null, reasoningTokens: null, estimatedCostUsd: null,
+      duration, success: false,
     } as UsageLogEntry);
     throw error;
   }

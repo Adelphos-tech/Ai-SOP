@@ -17,12 +17,13 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
+import { emitEvent } from "@/lib/observability/events";
 import { writeFile, mkdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { createHash } from "crypto";
-import { parseCVFile, CVParseFailure, ParsedCV } from "@/lib/application/cv-parser";
-import { parseWithDocling, DoclingServiceError } from "@/lib/application/docling-client";
-import { mapDoclingToParsedCV, CV_MAPPER_VERSION } from "@/lib/application/cv-mapper-docling";
+import { CVParseFailure, ParsedCV, normalizeCVErrorCode } from "@/lib/application/cv-parser";
+import { importResume } from "@/lib/application/resume-import";
+import type { ResumeImportResult } from "@/lib/application/resume-import/types";
 import { getStudent } from "@/lib/application/application-repository";
 import { getStudentProfileRevision } from "@/lib/application/application-repository";
 import { validateDocx } from "@/lib/application/docx-validator";
@@ -59,16 +60,27 @@ function logCVParseFailure(args: {
   mimeType: string;
   fileSize: number;
   buildId: string;
+  diagnostics?: Record<string, string | number>;
 }): void {
-  console.log(JSON.stringify({
-    event: args.event,
+  // Canonical envelope — whitelisted fields only (ids, counts, codes).
+  // diagnostics is flattened into whitelisted keys where present.
+  emitEvent(args.event, {
     reason: args.reason,
+    errorCode: args.reason,
     studentId: args.studentId,
     mimeType: args.mimeType,
     fileSize: args.fileSize,
     buildId: args.buildId,
-  }));
+    strategy: args.diagnostics?.strategy,
+    coverage: args.diagnostics?.coverage,
+    rawTextLength: args.diagnostics?.rawTextLength,
+    detail: args.diagnostics?.attempts,
+    fallbackUsed: args.diagnostics?.fallbackUsed === 1,
+    sections: args.diagnostics?.sections,
+  }, args.event === "cv_import_result" ? "info" : "warn");
 }
+
+
 
 export async function POST(request: NextRequest) {
   try {
@@ -147,7 +159,7 @@ export async function POST(request: NextRequest) {
     if (ext === ".pdf" && buffer.length >= 4) {
       if (!buffer.subarray(0, 4).toString("ascii").startsWith("%PDF")) {
         return NextResponse.json(
-          { error: "File appears to not be a valid PDF." },
+          { error: "File appears to not be a valid PDF.", code: "CV_FILE_INVALID" },
           { status: 400 },
         );
       }
@@ -156,7 +168,7 @@ export async function POST(request: NextRequest) {
       const docxResult = validateDocx(buffer);
       if (!docxResult.valid) {
         return NextResponse.json(
-          { error: docxResult.error || "Invalid DOCX file." },
+          { error: docxResult.error || "Invalid DOCX file.", code: "CV_FILE_INVALID" },
           { status: 400 },
         );
       }
@@ -177,12 +189,13 @@ export async function POST(request: NextRequest) {
       // Not found — new upload
     }
 
-    // ===== PARSE ENGINE (declared early — dedup reuse depends on it) =====
-    // CV_PARSER_ENGINE=legacy (default) | docling
-    // Optional fallback: CV_PARSER_FALLBACK=legacy retries via the
-    // legacy parser when the docling service fails.
-    const parserEngine = process.env.CV_PARSER_ENGINE === "docling" ? "docling" : "legacy";
-    const fallbackToLegacy = process.env.CV_PARSER_FALLBACK === "legacy";
+    // ===== PARSE PIPELINE =====
+    // Resilient multi-strategy import (format-aware ordering, per-strategy
+    // timeout, coverage-ranked candidate selection). CV_PARSER_ENGINE /
+    // CV_PARSER_FALLBACK are superseded — the pipeline always degrades
+    // gracefully. Bump CV_PIPELINE_VERSION on chain changes so cached
+    // metas re-parse.
+    const CV_PIPELINE_VERSION = "1";
 
     if (existingMeta) {
       // Idempotent reuse ONLY when the stored parse came from the same
@@ -190,8 +203,9 @@ export async function POST(request: NextRequest) {
       // replay a broken parse for the same file hash.
       const metaEngine = existingMeta.parsed?.parserMeta?.engine || "legacy";
       const metaMapperV = existingMeta.parsed?.parserMeta?.mapperVersion || "";
-      const currentMapperV = parserEngine === "docling" ? CV_MAPPER_VERSION : "";
-      if (metaEngine === parserEngine && metaMapperV === currentMapperV) {
+      // Multi-strategy pipeline: dedup keyed on the pipeline version so a
+      // parser-chain change forces re-parse.
+      if (metaEngine === "resume-pipeline" && metaMapperV === CV_PIPELINE_VERSION) {
         const revision = await getStudentProfileRevision(studentId);
         return NextResponse.json({
           success: true,
@@ -207,7 +221,7 @@ export async function POST(request: NextRequest) {
       // Parser changed → fall through to re-parse and overwrite meta.
       logCVParseFailure({
         event: "cv_parse_stale_meta_reparse",
-        reason: `${metaEngine}@${metaMapperV || "0"} → ${parserEngine}@${currentMapperV || "0"}`,
+        reason: `${metaEngine}@${metaMapperV || "0"} → resume-pipeline@${CV_PIPELINE_VERSION}`,
         studentId, mimeType: file.type || ext, fileSize: buffer.length, buildId: BUILD_ID,
       });
     }
@@ -223,26 +237,11 @@ export async function POST(request: NextRequest) {
 
     await writeFile(hashFilePath, buffer);
 
-    let parsed: ParsedCV;
+    let importResult: ResumeImportResult;
     try {
       const release = await cvParseLimiter.acquire();
       try {
-        if (parserEngine === "docling") {
-          try {
-            const doc = await parseWithDocling(buffer, file.name);
-            parsed = mapDoclingToParsedCV(doc);
-          } catch (docErr: any) {
-            if (!fallbackToLegacy) throw docErr;
-            logCVParseFailure({
-              event: "cv_parse_docling_fallback",
-              reason: docErr?.code || "DOCLING_SERVICE_ERROR",
-              studentId, mimeType: file.type || ext, fileSize: buffer.length, buildId: BUILD_ID,
-            });
-            parsed = await parseCVFile(buffer, file.name);
-          }
-        } else {
-          parsed = await parseCVFile(buffer, file.name);
-        }
+        importResult = await importResume(buffer, file.name, file.type || ext);
       } finally {
         release();
       }
@@ -255,7 +254,7 @@ export async function POST(request: NextRequest) {
         );
       }
       // Deterministic failure classification — return controlled 400
-      const code = parseError?.code || "PARSE_FAILED";
+      const code = normalizeCVErrorCode(parseError?.code || "PARSE_FAILED", parseError?.message);
       const userMessage = parseError?.userMessage || "We could not process this file. Please try a different PDF or DOCX, or enter the details manually.";
       const mimeType = file.type || ext;
       logCVParseFailure({
@@ -265,6 +264,7 @@ export async function POST(request: NextRequest) {
         mimeType,
         fileSize: buffer.length,
         buildId: BUILD_ID,
+        diagnostics: parseError?.diagnostics,
       });
       return NextResponse.json(
         { error: userMessage, code },
@@ -273,6 +273,16 @@ export async function POST(request: NextRequest) {
     }
 
     // ===== SAVE METADATA (for dedup) =====
+    const winning = importResult.candidate;
+    const parsed: ParsedCV = {
+      ...winning.parsed,
+      parserMeta: {
+        engine: "resume-pipeline",
+        mapperVersion: CV_PIPELINE_VERSION,
+        sourceStrategy: winning.sourceStrategy,
+        coverage: winning.coverage.status,
+      } as any,
+    };
     const meta = {
       filename: file.name,
       savedFilename,
@@ -282,6 +292,67 @@ export async function POST(request: NextRequest) {
       parsed,
     };
     await writeFile(metaFilePath, JSON.stringify(meta));
+
+    // ===== STRUCTURED DIAGNOSTICS (content-free) =====
+    logCVParseFailure({
+      event: "cv_import_result",
+      reason: importResult.state,
+      studentId,
+      mimeType: file.type || ext,
+      fileSize: buffer.length,
+      buildId: BUILD_ID,
+      diagnostics: {
+        strategy: winning.sourceStrategy,
+        coverage: winning.coverage.status,
+        rawTextLength: winning.diagnostics.rawTextLength,
+        sections: winning.coverage.sectionCount,
+        fallbackUsed: importResult.fallbackUsed ? 1 : 0,
+        attempts: importResult.attempts
+          .map((a) => `${a.strategy}:${a.status}${a.coverage ? `/${a.coverage}` : ""}`)
+          .join(","),
+      },
+    });
+
+    // Candidate-comparison audit — counts and reason codes only.
+    if ((importResult.candidateDiagnostics?.length || 0) > 1) {
+      const winnerDiag = winning.candidateDiagnostics;
+      const candLines = (importResult.candidateDiagnostics || []).map(d =>
+        `${d.strategy}:edu ${d.plausibleEducationCount}p/${d.malformedEducationCount}m/${d.duplicateEducationCount}d` +
+        ` exp ${d.plausibleExperienceCount}p/${d.malformedExperienceCount}m/${d.duplicateExperienceCount}d` +
+        ` skills ${d.uniqueSkillCount}u/${d.suspiciousSkillCount}s` +
+        ` badContact=${d.invalidContactCount} pollution=${d.crossSectionPollutionCount} dates=${d.dateParseIssues}`
+      );
+      const detailParts = [
+        `reasons=${(importResult.winnerReasons || []).join(",")}`,
+        winnerDiag
+          ? `winner edu=${winnerDiag.educationCount}/${winnerDiag.plausibleEducationCount}p exp=${winnerDiag.experienceCount}/${winnerDiag.plausibleExperienceCount}p skills=${winnerDiag.skillsCount}/${winnerDiag.uniqueSkillCount}u`
+          : "",
+        (importResult.secondaryOnlySections?.length || 0) > 0
+          ? `secondaryOnly=${importResult.secondaryOnlySections!.join("+")}`
+          : "",
+      ].filter(Boolean);
+      emitEvent("cv_candidate_selection", {
+        strategy: winning.sourceStrategy,
+        coverage: winning.coverage.status,
+        detail: candLines.concat([detailParts.join(" ; ")]).join(" | "),
+      }, "info");
+    }
+
+    // OCR provenance — content-free (engine/counts/timing only).
+    const ocrAttempt = importResult.attempts.find((a) => a.strategy === "OCR_TEXT_EXTRACTION");
+    if (ocrAttempt || importResult.ocrRecovered) {
+      emitEvent("cv_ocr_triggered", {
+        strategy: winning.sourceStrategy,
+        coverage: winning.coverage.status,
+        detail: [
+          `engine=${importResult.ocrEngine || "rapidocr"}`,
+          `status=${ocrAttempt?.status || "na"}`,
+          `durationMs=${ocrAttempt?.durationMs ?? winning.parsed?.parserMeta?.durationMs ?? "na"}`,
+          `rawTextLength=${winning.diagnostics.rawTextLength}`,
+          `errorCode=${ocrAttempt?.errorCode || "none"}`,
+        ].join(" "),
+      }, "info");
+    }
 
     // ===== RETURN WITH PROFILE REVISION =====
     const revision = await getStudentProfileRevision(studentId);
@@ -294,6 +365,22 @@ export async function POST(request: NextRequest) {
       uploadedAt: meta.uploadedAt,
       reused: false,
       parsed,
+      parseState: importResult.state,
+      sourceStrategy: winning.sourceStrategy,
+      coverage: winning.coverage,
+      // OCR provenance — consultant must know text came from scanned/image
+      // content and review before applying. Never auto-applies.
+      ocrRecovered: importResult.ocrRecovered || undefined,
+      ocrEngine: importResult.ocrEngine,
+      ocrNotice: importResult.ocrRecovered
+        ? "Resume text recovered from scanned/image content. Please review extracted details before applying."
+        : undefined,
+      // Raw extracted text — lets the consultant review/copy content when
+      // structure is weak (PARTIAL_PARSE) or absent (EXTRACTION_ONLY).
+      extractedText:
+        winning.coverage.status === "EXTRACTION_ONLY" || winning.coverage.status === "PARTIAL"
+          ? winning.rawText
+          : undefined,
       profileRevision: revision,
     });
   } catch (error: any) {
