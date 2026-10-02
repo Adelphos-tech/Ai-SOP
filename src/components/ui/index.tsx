@@ -143,8 +143,13 @@ export function StatusBadge({ status, label }: { status: string; label?: string 
     DRAFT: { bg: "bg-gray-100", text: "text-dvivid-text-secondary" },
     FAILED: { bg: "bg-dvivid-error-light", text: "text-dvivid-error" },
     NEEDS_INFORMATION: { bg: "bg-dvivid-warning-light", text: "text-dvivid-warning" },
+    NEEDS_REVIEW: { bg: "bg-dvivid-warning-light", text: "text-dvivid-warning" },
     GENERATED: { bg: "bg-dvivid-success-light", text: "text-dvivid-success" },
     GENERATING: { bg: "bg-dvivid-primary-light", text: "text-dvivid-primary" },
+    RECOVERING: { bg: "bg-dvivid-warning-light", text: "text-dvivid-warning" },
+    COMPLETED: { bg: "bg-dvivid-success-light", text: "text-dvivid-success" },
+    COMPLETED_WITH_WARNINGS: { bg: "bg-dvivid-warning-light", text: "text-dvivid-warning" },
+    CANCELLED: { bg: "bg-gray-100", text: "text-dvivid-text-secondary" },
     NOT_GENERATED: { bg: "bg-gray-100", text: "text-dvivid-text-secondary" },
   };
   const style = map[status] || map.DRAFT;
@@ -218,3 +223,5 @@ export function Breadcrumb({ items }: { items: Array<{ label: string; href?: str
     </div>
   );
 }
+
+export { UserMessage, LoadingRows, ErrorState, Skeleton } from "./feedback";

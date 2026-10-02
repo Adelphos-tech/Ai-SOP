@@ -1,6 +1,7 @@
 "use client";
-import { AppHeader } from "@/components/ui/AppHeader";
 import { useEffect, useState } from "react";
+import { AppSidebar, AppSidebarMobile } from "./AppSidebar";
+import { AppTopBar } from "./AppTopBar";
 
 /**
  * Stale-client refresh notice.
@@ -49,12 +50,18 @@ function StaleClientNotice() {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
   return (
-    <div className="min-h-screen flex flex-col bg-dvivid-page-bg">
-      <AppHeader />
-      <main className="flex-1 overflow-auto">
-        {children}
-      </main>
+    <div className="min-h-screen flex bg-dvivid-page-bg">
+      <AppSidebar />
+      <AppSidebarMobile open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+      <div className="flex-1 min-w-0 flex flex-col">
+        <AppTopBar onMenuToggle={() => setMobileNavOpen(true)} />
+        <main className="flex-1 overflow-auto">
+          {children}
+        </main>
+      </div>
       <StaleClientNotice />
     </div>
   );

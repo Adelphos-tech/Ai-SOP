@@ -22,6 +22,8 @@ const config: Config = {
           "warning-light": "#FEF3E2",
           error: "#D14343",
           "error-light": "#FDECEC",
+          info: "#2563EB",
+          "info-light": "#EFF6FF",
           // Surfaces
           "page-bg": "#F7F9FC",
           surface: "#FFFFFF",
@@ -48,9 +50,10 @@ const config: Config = {
         },
       },
       borderRadius: {
-        card: "20px",
-        input: "11px",
-        button: "10px",
+        card: "12px",
+        input: "8px",
+        button: "8px",
+        panel: "16px",
       },
       boxShadow: {
         card: "0 1px 3px 0 rgba(37,50,75,0.04), 0 1px 2px 0 rgba(37,50,75,0.02)",

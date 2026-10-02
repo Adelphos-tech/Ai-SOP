@@ -41,16 +41,22 @@ export default function NewApplicantPage() {
 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   async function handleCreate() {
     setError("");
 
-    if (!firstName || !lastName || !email) {
-      setError("First name, last name, and email are required");
-      return;
-    }
-    if (!universityName || !programName || !degree) {
-      setError("University, program, and degree are required to create an application");
+    const errs: Record<string, string> = {};
+    if (!firstName.trim()) errs.firstName = "Please enter the applicant's first name.";
+    if (!lastName.trim()) errs.lastName = "Please enter the applicant's last name.";
+    if (!email.trim()) errs.email = "Please enter the applicant's email address.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errs.email = "Enter a valid email address.";
+    if (!universityName.trim()) errs.universityName = "Please enter the university name.";
+    if (!programName.trim()) errs.programName = "Please enter the program name.";
+    if (!degree) errs.degree = "Choose a degree type.";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setError("Please review the highlighted fields below.");
       return;
     }
 
@@ -122,14 +128,14 @@ export default function NewApplicantPage() {
       {/* Step 1: Student */}
       <SectionCard title="1. Student Details" description="The person whose application materials are being prepared." className="mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FormField label="First Name" required>
-            <input className={inputClass} value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Kunj" autoFocus />
+          <FormField label="First Name" required error={fieldErrors.firstName}>
+            <input className={inputClass} value={firstName} onChange={e => { setFirstName(e.target.value); setFieldErrors(f => ({ ...f, firstName: "" })); }} placeholder="Kunj" autoFocus />
           </FormField>
-          <FormField label="Last Name" required>
-            <input className={inputClass} value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Modh" />
+          <FormField label="Last Name" required error={fieldErrors.lastName}>
+            <input className={inputClass} value={lastName} onChange={e => { setLastName(e.target.value); setFieldErrors(f => ({ ...f, lastName: "" })); }} placeholder="Modh" />
           </FormField>
-          <FormField label="Email" required>
-            <input className={inputClass} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="kunj@example.com" />
+          <FormField label="Email" required error={fieldErrors.email}>
+            <input className={inputClass} type="email" value={email} onChange={e => { setEmail(e.target.value); setFieldErrors(f => ({ ...f, email: "" })); }} placeholder="kunj@example.com" />
           </FormField>
           <FormField label="Phone">
             <input className={inputClass} value={phone} onChange={e => setPhone(e.target.value)} placeholder="+91 98765 43210" />
@@ -143,14 +149,14 @@ export default function NewApplicantPage() {
       {/* Step 2: Application */}
       <SectionCard title="2. First Application" description="The first university/program target for this student. You can add more later." className="mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FormField label="University" required>
-            <UniversitySelect value={universityName} onChange={setUniversityName} required placeholder="Search university..." />
+          <FormField label="University" required error={fieldErrors.universityName}>
+            <UniversitySelect value={universityName} onChange={v => { setUniversityName(v); setFieldErrors(f => ({ ...f, universityName: "" })); }} required placeholder="Search university..." />
           </FormField>
-          <FormField label="Program" required>
-            <input className={inputClass} value={programName} onChange={e => setProgramName(e.target.value)} placeholder="MS Machine Learning" />
+          <FormField label="Program" required error={fieldErrors.programName}>
+            <input className={inputClass} value={programName} onChange={e => { setProgramName(e.target.value); setFieldErrors(f => ({ ...f, programName: "" })); }} placeholder="MS Machine Learning" />
           </FormField>
-          <FormField label="Degree" required>
-            <select className={inputClass} value={degree} onChange={e => setDegree(e.target.value)}>
+          <FormField label="Degree" required error={fieldErrors.degree}>
+            <select className={inputClass} value={degree} onChange={e => { setDegree(e.target.value); setFieldErrors(f => ({ ...f, degree: "" })); }}>
               <option value="">Select degree</option>
               <option value="Master of Science">Master of Science (MS)</option>
               <option value="Master of Engineering">Master of Engineering (MEng)</option>

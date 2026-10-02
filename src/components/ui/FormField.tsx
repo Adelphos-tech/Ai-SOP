@@ -5,12 +5,15 @@ export function FormField({
   required,
   children,
   helper,
+  error,
   className = "",
 }: {
   label: string;
   required?: boolean;
   children: React.ReactNode;
   helper?: string;
+  /** Field-tied validation message — shown instead of helper. */
+  error?: string;
   className?: string;
 }) {
   return (
@@ -20,7 +23,11 @@ export function FormField({
         {required && <span className="text-dvivid-error ml-0.5">*</span>}
       </label>
       {children}
-      {helper && <p className="text-sm text-dvivid-text-muted mt-1.5">{helper}</p>}
+      {error ? (
+        <p className="text-sm text-dvivid-error mt-1.5" role="alert">{error}</p>
+      ) : helper ? (
+        <p className="text-sm text-dvivid-text-muted mt-1.5">{helper}</p>
+      ) : null}
     </div>
   );
 }
