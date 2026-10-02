@@ -4,12 +4,20 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  PageContainer, Breadcrumb, PageHeader, PrimaryButton, SecondaryButton,
-  SectionCard, EmptyState, StatusBadge,
+  PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
+  SectionCard, EmptyState, StatusBadge, LoadingRows, ErrorState,
 } from "@/components/ui";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass } from "@/components/ui/FormField";
 import { UniversitySelect } from "@/components/ui/UniversitySelect";
+
+// ============================================================
+// /students/[id] — CRM-style student workspace.
+//
+// Header strip (identity + actions), compact stats, tabbed
+// sections: Overview / Applications / Documents / Profile.
+// Per-application document fetches are bounded by app count
+// (small per student) and reused for counts + recent docs.
+// ============================================================
 
 interface Student {
   id: string;
@@ -34,7 +42,18 @@ interface Application {
   intakeYear: string;
   status: string;
   createdAt: string;
-  documentCount?: number;
+  updatedAt: string;
+}
+
+interface AppDocument {
+  id: string;
+  applicationId: string;
+  documentType: string;
+  documentTitle: string;
+  generationStatus: string;
+  reviewStatus: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface ProfileData {
@@ -45,6 +64,37 @@ interface ProfileData {
   [key: string]: unknown;
 }
 
+type Tab = "overview" | "applications" | "documents" | "profile";
+
+/** Display status for a document — review status wins once real work exists. */
+function docStatus(d: AppDocument): string {
+  if (d.reviewStatus === "APPROVED") return "APPROVED";
+  if (d.reviewStatus === "NEEDS_REVIEW") return "NEEDS_REVIEW";
+  if (d.reviewStatus === "IN_REVIEW") return "IN_REVIEW";
+  if (d.generationStatus === "GENERATING") return "GENERATING";
+  if (d.generationStatus === "GENERATED") return "GENERATED";
+  if (d.generationStatus === "FAILED") return "FAILED";
+  return "DRAFT";
+}
+
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return "Today";
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+}
+
+function Stat({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div className="px-4 py-3">
+      <p className={`text-xl font-semibold tabular-nums ${accent && value > 0 ? "text-dvivid-warning" : "text-dvivid-text-primary"}`}>{value}</p>
+      <p className="text-xs text-dvivid-text-muted mt-0.5">{label}</p>
+    </div>
+  );
+}
+
 export default function StudentWorkspacePage() {
   const params = useParams();
   const router = useRouter();
@@ -53,8 +103,10 @@ export default function StudentWorkspacePage() {
   const [student, setStudent] = useState<Student | null>(null);
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [documents, setDocuments] = useState<AppDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [tab, setTab] = useState<Tab>("overview");
   const [showNewAppForm, setShowNewAppForm] = useState(false);
 
   const [universityName, setUniversityName] = useState("");
@@ -65,6 +117,7 @@ export default function StudentWorkspacePage() {
   const [intake, setIntake] = useState("");
   const [intakeYear, setIntakeYear] = useState("");
   const [creating, setCreating] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const loadTokenRef = useRef(0);
 
   // Identity change resets all student-scoped state AND invalidates
@@ -74,6 +127,7 @@ export default function StudentWorkspacePage() {
     setStudent(null);
     setProfile(null);
     setApplications([]);
+    setDocuments([]);
     setError("");
     setShowNewAppForm(false);
     loadStudent();
@@ -113,24 +167,25 @@ export default function StudentWorkspacePage() {
       if (appsRes.ok) {
         const appsData = await appsRes.json();
         if (stale()) return;
-        const apps = appsData.applications || [];
+        const apps: Application[] = appsData.applications || [];
 
-        const withCounts = await Promise.all(
-          apps.map(async (app: Application) => {
+        // One document fetch per application (bounded — few apps/student);
+        // reused for counts, recent docs, and stats.
+        const docResults = await Promise.all(
+          apps.map(async (app) => {
             try {
               const docRes = await fetch(`/api/application/list?applicationId=${app.id}`);
               if (docRes.ok) {
                 const docData = await docRes.json();
-                return { ...app, documentCount: docData.documents?.length || 0 };
+                return (docData.documents || []) as AppDocument[];
               }
-              return { ...app, documentCount: 0 };
-            } catch {
-              return { ...app, documentCount: 0 };
-            }
+            } catch { /* counts optional */ }
+            return [] as AppDocument[];
           }),
         );
         if (stale()) return;
-        setApplications(withCounts);
+        setApplications(apps);
+        setDocuments(docResults.flat());
       }
     } catch {
       if (!stale()) setError("Failed to load student");
@@ -140,10 +195,12 @@ export default function StudentWorkspacePage() {
   }
 
   async function handleCreateApplication() {
-    if (!universityName || !programName || !degree) {
-      setError("University, program, and degree are required");
-      return;
-    }
+    const errs: Record<string, string> = {};
+    if (!universityName.trim()) errs.universityName = "Please enter the university name.";
+    if (!programName.trim()) errs.programName = "Please enter the program name.";
+    if (!degree) errs.degree = "Choose a degree type.";
+    setFormErrors(errs);
+    if (Object.keys(errs).length > 0) return;
 
     setCreating(true);
     setError("");
@@ -180,6 +237,7 @@ export default function StudentWorkspacePage() {
       setCountry("");
       setIntake("");
       setIntakeYear("");
+      setFormErrors({});
 
       // No dead-end: go straight to the new Application Workspace
       if (newAppId) {
@@ -194,16 +252,42 @@ export default function StudentWorkspacePage() {
     }
   }
 
+  const docsByApp = new Map<string, AppDocument[]>();
+  for (const d of documents) {
+    const list = docsByApp.get(d.applicationId) || [];
+    list.push(d);
+    docsByApp.set(d.applicationId, list);
+  }
+  const needsReviewCount = documents.filter(d => docStatus(d) === "NEEDS_REVIEW" || docStatus(d) === "IN_REVIEW").length;
+  const generatedCount = documents.filter(d => ["GENERATED", "APPROVED", "IN_REVIEW", "NEEDS_REVIEW"].includes(docStatus(d))).length;
+  const approvedCount = documents.filter(d => docStatus(d) === "APPROVED").length;
+  const recentDocs = [...documents].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 8);
+  const appName = (id: string) => applications.find(a => a.id === id)?.universityName || "Application";
+  const firstApp = applications[0];
+
+  const tabs: { id: Tab; label: string; count?: number }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "applications", label: "Applications", count: applications.length },
+    { id: "documents", label: "Documents", count: documents.length },
+    { id: "profile", label: "Profile" },
+  ];
+
   if (loading) {
-    return <PageContainer><div className="text-center py-12 text-dvivid-text-secondary text-sm">Loading student...</div></PageContainer>;
+    return (
+      <PageContainer>
+        <div className="bg-white border border-dvivid-border rounded-card mt-6"><LoadingRows rows={4} /></div>
+      </PageContainer>
+    );
   }
 
   if (error && !student) {
     return (
       <PageContainer>
-        <div className="text-center py-12">
-          <p className="text-sm text-dvivid-error">{error}</p>
-          <Link href="/students" className="mt-4 inline-block text-sm text-dvivid-primary hover:underline">← Back to Students</Link>
+        <div className="bg-white border border-dvivid-border rounded-card mt-6">
+          <ErrorState title="We couldn't load this student" description={error} onRetry={loadStudent} />
+          <div className="text-center pb-8">
+            <Link href="/students" className="text-sm text-dvivid-primary hover:underline">← Back to Students</Link>
+          </div>
         </div>
       </PageContainer>
     );
@@ -211,55 +295,83 @@ export default function StudentWorkspacePage() {
 
   return (
     <PageContainer>
-      <WorkflowStepper />
       <Breadcrumb items={[{ label: "Students", href: "/students" }, { label: `${student?.firstName} ${student?.lastName}` }]} />
 
-      {/* Student Summary */}
-      <div className="bg-white border border-dvivid-border rounded-card shadow-card p-7 mb-8">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-full bg-dvivid-primary-light flex items-center justify-center flex-shrink-0">
-              <span className="text-lg font-semibold text-dvivid-primary">
-                {student?.firstName?.[0]?.toUpperCase()}{student?.lastName?.[0]?.toUpperCase()}
-              </span>
-            </div>
-            <div>
-              <h1 className="text-page-title text-dvivid-text-primary">
-                {student?.firstName} {student?.lastName}
-              </h1>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-dvivid-text-secondary">
-                <span>{student?.email}</span>
-                {student?.phone && <span>{student.phone}</span>}
-                {student?.country && <span>{student.country}</span>}
-              </div>
-            </div>
+      {/* Identity header — flat strip, not a card */}
+      <div className="flex items-start justify-between gap-4 flex-wrap mb-6">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-12 h-12 rounded-full bg-dvivid-primary-light flex items-center justify-center flex-shrink-0">
+            <span className="text-base font-semibold text-dvivid-primary">
+              {student?.firstName?.[0]?.toUpperCase()}{student?.lastName?.[0]?.toUpperCase()}
+            </span>
           </div>
-          <div className="flex gap-3">
-            {applications.length > 0 && (
-              <Link href={`/students/${studentId}/applications/${applications[0].id}`}>
-                <SecondaryButton>Edit / Complete Profile</SecondaryButton>
-              </Link>
-            )}
-            <PrimaryButton onClick={() => setShowNewAppForm(!showNewAppForm)}>
-              + New Application
-            </PrimaryButton>
+          <div className="min-w-0">
+            <h1 className="text-page-title text-dvivid-text-primary leading-tight">
+              {student?.firstName} {student?.lastName}
+            </h1>
+            <p className="text-sm text-dvivid-text-secondary mt-1 truncate">
+              {student?.email}
+              {student?.country ? ` · ${student.country}` : ""}
+              {student?.phone ? ` · ${student.phone}` : ""}
+            </p>
           </div>
         </div>
+        <div className="flex gap-3">
+          {firstApp && (
+            <Link href={`/students/${studentId}/applications/${firstApp.id}`}>
+              <SecondaryButton>Edit Profile</SecondaryButton>
+            </Link>
+          )}
+          <PrimaryButton onClick={() => setShowNewAppForm(!showNewAppForm)}>
+            + New Application
+          </PrimaryButton>
+        </div>
+      </div>
 
+      {/* Stats strip */}
+      <div className="bg-white border border-dvivid-border rounded-card divide-x divide-dvivid-border-light grid grid-cols-2 sm:grid-cols-4 mb-6">
+        <Stat label="Applications" value={applications.length} />
+        <Stat label="Documents" value={documents.length} />
+        <Stat label="Approved" value={approvedCount} />
+        <Stat label="Needs Review" value={needsReviewCount} accent />
+      </div>
+
+      {/* Tabs */}
+      <div className="border-b border-dvivid-border mb-6 -mx-1 px-1 overflow-x-auto">
+        <div className="flex gap-1 min-w-max" role="tablist">
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+                tab === t.id
+                  ? "border-dvivid-primary text-dvivid-primary"
+                  : "border-transparent text-dvivid-text-secondary hover:text-dvivid-text-primary"
+              }`}
+            >
+              {t.label}
+              {t.count !== undefined && (
+                <span className="ml-1.5 text-xs text-dvivid-text-muted tabular-nums">{t.count}</span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* New Application Form */}
       {showNewAppForm && (
-        <SectionCard title="New Application" description="Create a new university application for this student." className="mb-8">
+        <SectionCard title="New Application" description="Create a new university application for this student." className="mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <FormField label="University" required>
-              <UniversitySelect value={universityName} onChange={setUniversityName} required placeholder="Search university..." />
+            <FormField label="University" required error={formErrors.universityName}>
+              <UniversitySelect value={universityName} onChange={v => { setUniversityName(v); setFormErrors(f => ({ ...f, universityName: "" })); }} required placeholder="Search university..." />
             </FormField>
-            <FormField label="Program" required>
-              <input className={inputClass} value={programName} onChange={e => setProgramName(e.target.value)} placeholder="Civil Engineering" />
+            <FormField label="Program" required error={formErrors.programName}>
+              <input className={inputClass} value={programName} onChange={e => { setProgramName(e.target.value); setFormErrors(f => ({ ...f, programName: "" })); }} placeholder="Civil Engineering" />
             </FormField>
-            <FormField label="Degree" required>
-              <select className={inputClass} value={degree} onChange={e => setDegree(e.target.value)}>
+            <FormField label="Degree" required error={formErrors.degree}>
+              <select className={inputClass} value={degree} onChange={e => { setDegree(e.target.value); setFormErrors(f => ({ ...f, degree: "" })); }}>
                 <option value="">Select degree</option>
                 <option value="Master of Science">Master of Science (MS)</option>
                 <option value="Master of Engineering">Master of Engineering (MEng)</option>
@@ -294,55 +406,203 @@ export default function StudentWorkspacePage() {
         </SectionCard>
       )}
 
-      {/* Error */}
-      {error && (
+      {error && student && (
         <div className="mb-6 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
           <p className="text-sm text-dvivid-error">{error}</p>
         </div>
       )}
 
-      {/* Applications */}
-      <div className="mb-4">
-        <h2 className="text-section-title text-dvivid-text-primary">
-          Applications
-        </h2>
-      </div>
-
-      {applications.length === 0 ? (
-        <EmptyState
-          title="No Applications Yet"
-          description="Create the student's first university application to begin."
-          action={<PrimaryButton onClick={() => setShowNewAppForm(true)}>Create First Application</PrimaryButton>}
-        />
-      ) : (
-        <div className="space-y-4">
-          {applications.map(app => (
-            <Link
-              key={app.id}
-              href={`/students/${studentId}/applications/${app.id}`}
-              className="block bg-white border border-dvivid-border rounded-card shadow-card p-6 hover:shadow-card-hover hover:border-dvivid-primary-border transition-all"
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-card-title text-dvivid-text-primary">{app.universityName}</h3>
-                  <p className="text-sm text-dvivid-text-secondary mt-1">
-                    {app.programName} · {app.degree}
-                  </p>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-dvivid-text-muted">
-                    <span>{app.intake} {app.intakeYear}</span>
-                    {app.country && <span>{app.country}</span>}
-                    {app.department && <span>{app.department}</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  {app.documentCount !== undefined && app.documentCount > 0 && (
-                    <StatusBadge status="IN_REVIEW" label={`${app.documentCount} Doc${app.documentCount !== 1 ? "s" : ""}`} />
-                  )}
-                  <StatusBadge status={app.status} />
-                </div>
+      {/* ===== Overview ===== */}
+      {tab === "overview" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Applications column */}
+          <section>
+            <h2 className="text-base font-semibold text-dvivid-text-primary mb-3">Applications</h2>
+            {applications.length === 0 ? (
+              <div className="bg-white border border-dvivid-border rounded-card">
+                <EmptyState
+                  title="No applications yet"
+                  description="Create this student's first university application to begin."
+                  action={<PrimaryButton onClick={() => setShowNewAppForm(true)}>Create First Application</PrimaryButton>}
+                />
               </div>
+            ) : (
+              <div className="bg-white border border-dvivid-border rounded-card divide-y divide-dvivid-border-light">
+                {applications.map(app => (
+                  <Link key={app.id} href={`/students/${studentId}/applications/${app.id}`} className="block px-4 py-3.5 hover:bg-dvivid-surface-alt/70 transition-colors group">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{app.universityName}</p>
+                        <p className="text-xs text-dvivid-text-muted mt-0.5 truncate">
+                          {app.programName} · {app.country || "—"} {app.intakeYear ? `· ${app.intake} ${app.intakeYear}` : ""}
+                        </p>
+                      </div>
+                      <StatusBadge status={app.status} />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Recent documents column */}
+          <section>
+            <h2 className="text-base font-semibold text-dvivid-text-primary mb-3">Recent Documents</h2>
+            {recentDocs.length === 0 ? (
+              <div className="bg-white border border-dvivid-border rounded-card">
+                <EmptyState
+                  title="No documents yet"
+                  description="Documents are created inside an application workspace."
+                />
+              </div>
+            ) : (
+              <div className="bg-white border border-dvivid-border rounded-card divide-y divide-dvivid-border-light">
+                {recentDocs.map(doc => (
+                  <Link
+                    key={doc.id}
+                    href={`/students/${studentId}/applications/${doc.applicationId}/documents/${doc.id}`}
+                    className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-dvivid-surface-alt/70 transition-colors group"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{doc.documentTitle}</p>
+                      <p className="text-xs text-dvivid-text-muted mt-0.5 truncate">{appName(doc.applicationId)} · {fmtDate(doc.updatedAt)}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <StatusBadge status={docStatus(doc)} />
+                      <span className="text-xs font-medium text-dvivid-primary opacity-0 group-hover:opacity-100 transition-opacity">Open →</span>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* ===== Applications ===== */}
+      {tab === "applications" && (
+        applications.length === 0 ? (
+          <div className="bg-white border border-dvivid-border rounded-card">
+            <EmptyState
+              title="No applications yet"
+              description="Create this student's first university application to begin."
+              action={<PrimaryButton onClick={() => setShowNewAppForm(true)}>Create First Application</PrimaryButton>}
+            />
+          </div>
+        ) : (
+          <div className="bg-white border border-dvivid-border rounded-card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-dvivid-border bg-dvivid-surface-alt/60 text-left">
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Application</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Destination</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide text-center hidden sm:table-cell">Docs</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dvivid-border-light">
+                {applications.map(app => (
+                  <tr key={app.id} className="hover:bg-dvivid-surface-alt/70 transition-colors group">
+                    <td className="px-4 py-3">
+                      <Link href={`/students/${studentId}/applications/${app.id}`} className="min-w-0">
+                        <span className="block font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{app.universityName}</span>
+                        <span className="block text-xs text-dvivid-text-muted truncate">{app.programName} · {app.degree}</span>
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3 text-dvivid-text-secondary hidden md:table-cell">
+                      {app.country || "—"}{app.intakeYear ? ` · ${app.intake} ${app.intakeYear}` : ""}
+                    </td>
+                    <td className="px-4 py-3 text-center text-dvivid-text-secondary tabular-nums hidden sm:table-cell">
+                      {docsByApp.get(app.id)?.length || 0}
+                    </td>
+                    <td className="px-4 py-3"><StatusBadge status={app.status} /></td>
+                    <td className="px-4 py-3 text-xs text-dvivid-text-muted whitespace-nowrap hidden md:table-cell">{fmtDate(app.updatedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+
+      {/* ===== Documents ===== */}
+      {tab === "documents" && (
+        documents.length === 0 ? (
+          <div className="bg-white border border-dvivid-border rounded-card">
+            <EmptyState
+              title="No documents yet"
+              description="Documents are created inside an application workspace."
+            />
+          </div>
+        ) : (
+          <div className="bg-white border border-dvivid-border rounded-card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-dvivid-border bg-dvivid-surface-alt/60 text-left">
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Document</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Application</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden sm:table-cell">Updated</th>
+                  <th className="px-4 py-2.5 w-16" aria-label="Open" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dvivid-border-light">
+                {[...documents].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).map(doc => (
+                  <tr key={doc.id} className="hover:bg-dvivid-surface-alt/70 transition-colors group">
+                    <td className="px-4 py-3">
+                      <Link href={`/students/${studentId}/applications/${doc.applicationId}/documents/${doc.id}`} className="font-medium text-dvivid-text-primary group-hover:text-dvivid-primary">
+                        {doc.documentTitle}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3 text-dvivid-text-secondary hidden md:table-cell">{appName(doc.applicationId)}</td>
+                    <td className="px-4 py-3"><StatusBadge status={docStatus(doc)} /></td>
+                    <td className="px-4 py-3 text-xs text-dvivid-text-muted whitespace-nowrap hidden sm:table-cell">{fmtDate(doc.updatedAt)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <Link href={`/students/${studentId}/applications/${doc.applicationId}/documents/${doc.id}`} className="text-xs font-medium text-dvivid-primary hover:underline whitespace-nowrap">
+                        {docStatus(doc) === "NEEDS_REVIEW" || docStatus(doc) === "IN_REVIEW" ? "Review →" : "Open →"}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+
+      {/* ===== Profile ===== */}
+      {tab === "profile" && (
+        <div className="bg-white border border-dvivid-border rounded-card p-6">
+          <h2 className="text-base font-semibold text-dvivid-text-primary mb-4">Reusable Profile</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
+              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.education?.length ?? 0}</p>
+              <p className="text-xs text-dvivid-text-muted">Education entries</p>
+            </div>
+            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
+              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.experience?.length ?? 0}</p>
+              <p className="text-xs text-dvivid-text-muted">Experience entries</p>
+            </div>
+            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
+              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.personalData?.firstName ? "Yes" : "—"}</p>
+              <p className="text-xs text-dvivid-text-muted">Personal details</p>
+            </div>
+            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
+              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.personalData?.currentCountry || student?.country || "—"}</p>
+              <p className="text-xs text-dvivid-text-muted">Country</p>
+            </div>
+          </div>
+          <p className="text-sm text-dvivid-text-secondary mb-4">
+            The full intake is edited inside an application workspace so answers can be scoped per application.
+          </p>
+          {firstApp ? (
+            <Link href={`/students/${studentId}/applications/${firstApp.id}`}>
+              <SecondaryButton>Open intake workspace →</SecondaryButton>
             </Link>
-          ))}
+          ) : (
+            <p className="text-sm text-dvivid-text-muted">Create an application to start the intake.</p>
+          )}
         </div>
       )}
     </PageContainer>
