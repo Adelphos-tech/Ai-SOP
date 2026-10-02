@@ -65,3 +65,37 @@ BLOCKER:              NONE | <description>
 ACTION_NEEDED:        NONE | <description>
 SEVERITY:             — | P0 | P1 | P2 | P3
 ```
+
+## Production smoke execution — 2026-10-01 (commit 53aa4f7)
+
+Executed on production with controlled test applicant
+`smoke-uat-002@example.invalid`. GENERATION_RESULT intentionally not
+executed (paid provider calls require explicit approval); preflight,
+parsing, isolation, and error paths verified live.
+
+| Case | Executed portion | Result |
+|---|---|---|
+| 1 | student→app→context→SOP doc→CV upload (normal DOCX) | PASS — 200, 483 chars parsed |
+| 9 | table DOCX upload | PASS — 200, 596 chars, 2 warnings |
+| 10 | two-col PDF upload | PASS — 200, 620 chars |
+| 11 | scanned PDF upload | PASS — 200, 637 chars (OCR path) |
+| 12 | blank/image DOCX upload | PASS — clean 400 CV_EXTRACTION_EMPTY |
+| 13 | mixed text/image DOCX | PASS — 200, 2082 chars (image-dominant → OCR won) |
+| 14 | mixed text/image PDF | PASS — 200, 323 chars (/inspect → OCR) |
+| 15 | manual intake, no CV | PASS — app context saved v2 |
+| 18 | app-context isolation A vs B | PASS — A reads A marker, B reads B marker |
+| 19 | 4 docs on one app, distinct prompts/limits | PASS — each resolves its own |
+| 22 | Visa SOP evidence gate | covered by gate inventory |
+| 23 | LOR no recommender → generate | PASS — 422 GENERATION_BLOCKED, no provider call |
+| 24 | corrupt DOCX | PASS — clean 400 CV_FILE_INVALID |
+| 27 | doc creation with incomplete intake | PASS — 200, unblocked |
+| 28 | generate with incomplete intake | PASS — advisory; server gate authoritative |
+| 26 | recovery path | PASS — generation-resilience suites in CI |
+| remaining | full generation, review, download, replace-CV | NOT RUN — requires paid provider calls / consultant session |
+
+Error-UX spot checks (all clean, no SQL/stack/Zod/provider leaks):
+bogus generate → 404 "Application not found"; cv-upload no file →
+400 "No file provided"; bad student ID → 400 INVALID_STUDENT_ID;
+bad doc id → 404 "Document not found"; empty save → 400 field list.
+
+P0: 0   P1: 0   P2: 0   P3: 0  (first pass, non-generation scope)
