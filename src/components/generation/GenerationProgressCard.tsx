@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { StageProgressRail } from "./StageProgressRail";
 import { SectionCard, SecondaryButton } from "@/components/ui";
+import { deriveStageProgress } from "@/lib/application/generation-ui-state";
 
 // Internal stage ids (never rendered) → consultant-facing copy.
 const STAGES = [
@@ -60,9 +61,13 @@ function fmtClock(iso?: string | null): string {
 export function GenerationProgressCard({ documentTitle, status, cancelling, onCancel, onCheckAgain }: GenerationProgressCardProps) {
   const reduce = useReducedMotion();
   const total = status?.totalStages ?? 6;
-  const completed = status?.completedStages ?? 0;
-  const stageIdx = STAGES.findIndex(s => s.id === status?.currentStage);
-  const activeIdx = stageIdx >= 0 ? stageIdx : Math.min(completed, total - 1);
+  // Stages run sequentially — when a later stage is current, all
+  // preceding stages are complete even if completedStages lags.
+  const { activeIndex: activeIdx, completedCount } = deriveStageProgress({
+    currentStage: status?.currentStage,
+    completedStages: status?.completedStages,
+    stageIds: STAGES.map(s => s.id),
+  });
   const active = STAGES[activeIdx];
   const cancelRequested = status?.status === "CANCEL_REQUESTED" || cancelling;
 
@@ -125,17 +130,17 @@ export function GenerationProgressCard({ documentTitle, status, cancelling, onCa
             Generating {documentTitle || "document"}
           </p>
           <p className="text-xs text-dvivid-text-secondary">
-            Stage {Math.min(activeIdx + 1, total)} of {total} · {completed} complete
+            Stage {Math.min(activeIdx + 1, total)} of {total} · {completedCount} complete
             {status?.startedAt ? ` · ${fmtElapsed(status.startedAt)} elapsed` : ""}
           </p>
         </div>
 
         {/* Rail — desktop/tablet labels, mobile compact */}
         <div className="hidden sm:block">
-          <StageProgressRail stages={STAGES} activeIndex={activeIdx} completedCount={completed} healthy={healthy} />
+          <StageProgressRail stages={STAGES} activeIndex={activeIdx} completedCount={completedCount} healthy={healthy} />
         </div>
         <div className="sm:hidden">
-          <StageProgressRail stages={STAGES} activeIndex={activeIdx} completedCount={completed} healthy={healthy} compact />
+          <StageProgressRail stages={STAGES} activeIndex={activeIdx} completedCount={completedCount} healthy={healthy} compact />
         </div>
 
         {/* Current activity */}

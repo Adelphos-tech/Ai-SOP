@@ -20,6 +20,11 @@ export async function requestGenerate(body: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    // Hard client bound — a half-open connection must not pin
+    // `generating` forever; the status poll is the authoritative
+    // reconciler once this request is released.
+    signal: AbortSignal.timeout(310_000),
+    cache: "no-store",
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };

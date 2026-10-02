@@ -56,6 +56,10 @@ export async function GET(req: NextRequest) {
 
     const run = await getLatestRun(documentId);
 
+    // Polling endpoint — never let a terminal status hide behind a
+    // cached response.
+    const headers = { "Cache-Control": "no-store, no-cache, must-revalidate" };
+
     // No persisted run — derive a minimal status from the document row
     // (covers generations started before run persistence existed).
     if (!run) {
@@ -79,7 +83,7 @@ export async function GET(req: NextRequest) {
         failureMessage: null,
         documentGenerationStatus: docStatus,
         reviewStatus: doc.review_status,
-      });
+      }, { headers });
     }
 
     // Restart recovery: an active run whose heartbeat is old and has no
@@ -122,7 +126,7 @@ export async function GET(req: NextRequest) {
       documentGenerationStatus: doc.generation_status,
       reviewStatus: doc.review_status,
       active: ACTIVE_RUN_STATUSES.includes(run.status),
-    });
+    }, { headers });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     if (isSchemaMigrationRequiredError(error)) {

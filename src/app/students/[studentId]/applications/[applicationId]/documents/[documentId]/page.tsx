@@ -13,6 +13,7 @@ import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { GenerationProgressCard } from "@/components/generation/GenerationProgressCard";
 import { DocumentRichEditor } from "@/components/documents/DocumentRichEditor";
 import { createSingleFlightSubmitter, requestGenerate, resolveVersionContent } from "@/lib/application/generate-client";
+import { decidePollAction } from "@/lib/application/generation-ui-state";
 
 interface Document {
   id: string;
@@ -279,20 +280,22 @@ export default function DocumentWorkspacePage() {
         );
         if (!res.ok || stopped) return;
         const data = await res.json();
-        // Ignore terminal statuses from a run that predates the current
-        // submit — the new run row may not exist yet; flipping
-        // generating=false here would resurrect the stale FAILED card.
-        const isTerminal = data.status === "COMPLETED" || data.status === "COMPLETED_WITH_WARNINGS" || data.status === "FAILED" || data.status === "CANCELLED";
-        const staleTerminal =
-          isTerminal && generating &&
-          data.startedAt && new Date(data.startedAt).getTime() < lastSubmitAtRef.current - 2000;
-        if (staleTerminal) return;
+        // Backend run status is authoritative. decidePollAction only
+        // ignores FAILED/CANCELLED payloads provably belonging to a
+        // previous run — COMPLETED can never be suppressed.
+        const decision = decidePollAction({
+          status: data.status,
+          generationId: data.generationId,
+          startedAt: data.startedAt,
+          generating,
+          liveGenerationId: liveStatus?.generationId,
+          lastSubmitAt: lastSubmitAtRef.current,
+        });
+        if (!decision.updateLive) return;
         setLiveStatus(data);
-        if (isTerminal) {
-          setGenerating(false);
-          if (data.status === "COMPLETED" || data.status === "COMPLETED_WITH_WARNINGS") {
-            await loadDocument();
-          }
+        if (decision.clearGenerating) setGenerating(false);
+        if (decision.refreshDocument) {
+          await loadDocument();
         }
       } catch { /* transient poll error — keep polling */ }
     };
@@ -356,7 +359,16 @@ export default function DocumentWorkspacePage() {
       setGenerationResult(data as any);
       await loadDocument();
     } catch (err: any) {
-      setGenerationError(err?.message || "Generation failed");
+      // A client-side abort/timeout only means this HTTP request ended —
+      // the server-side run continues and the status poll reconciles it.
+      // Don't surface a scary "failed" for a request that may have won.
+      if (err?.name !== "AbortError" && err?.name !== "TimeoutError") {
+        setGenerationError(err?.message || "Generation failed");
+      } else {
+        // Refresh the document row — if the run is active, the doc shows
+        // GENERATING and the status poll keeps reconciling to terminal.
+        await loadDocument();
+      }
     } finally {
       setGenerating(false);
     }
