@@ -43,7 +43,15 @@ export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
             onChange={e => setQuery(e.target.value)}
             placeholder="Search students, applications, or documents..."
             aria-label="Search"
-            className="w-full h-9 pl-9 pr-3 rounded-input border border-dvivid-border bg-dvivid-surface-alt text-sm text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:bg-white focus:ring-2 focus:ring-dvivid-primary/15 focus:border-dvivid-primary transition-colors"
+            className="w-full h-9 pl-9 pr-3 rounded-input border border-dvivid-border bg-dvivid-surface-alt text-sm text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:bg-white focus:ring-2 focus:ring-dvivid-primary/15 focus:border-dvivid-primary transition-colors hidden sm:block"
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search..."
+            aria-label="Search"
+            className="sm:hidden w-full h-9 pl-9 pr-3 rounded-input border border-dvivid-border bg-dvivid-surface-alt text-sm text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:bg-white focus:ring-2 focus:ring-dvivid-primary/15 focus:border-dvivid-primary transition-colors"
           />
         </div>
       </form>

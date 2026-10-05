@@ -216,7 +216,7 @@ function StudentsPageInner() {
             type="search"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search by name or email..."
+            placeholder="Search..."
             aria-label="Search students"
             className="w-full h-10 pl-10 pr-4 border border-dvivid-border rounded-input bg-white text-sm text-dvivid-text-primary placeholder-dvivid-text-muted focus:outline-none focus:ring-2 focus:ring-dvivid-primary/15 focus:border-dvivid-primary transition-colors"
           />

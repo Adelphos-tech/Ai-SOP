@@ -336,8 +336,8 @@ export default function StudentWorkspacePage() {
         <Stat label="Needs Review" value={needsReviewCount} accent />
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-dvivid-border mb-6 -mx-1 px-1 overflow-x-auto">
+      {/* Tabs — intentional horizontal scroll on mobile with clear discoverability */}
+      <div className="border-b border-dvivid-border mb-6 -mx-4 sm:-mx-1 px-4 sm:px-1 overflow-x-auto scrollbar-hide">
         <div className="flex gap-1 min-w-max" role="tablist">
           {tabs.map(t => (
             <button
@@ -345,7 +345,7 @@ export default function StudentWorkspacePage() {
               role="tab"
               aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
-              className={`px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+              className={`px-3 sm:px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
                 tab === t.id
                   ? "border-dvivid-primary text-dvivid-primary"
                   : "border-transparent text-dvivid-text-secondary hover:text-dvivid-text-primary"
@@ -431,13 +431,18 @@ export default function StudentWorkspacePage() {
                 {applications.map(app => (
                   <Link key={app.id} href={`/students/${studentId}/applications/${app.id}`} className="block px-4 py-3.5 hover:bg-dvivid-surface-alt/70 transition-colors group">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{app.universityName}</p>
                         <p className="text-xs text-dvivid-text-muted mt-0.5 truncate">
                           {app.programName} · {app.country || "—"} {app.intakeYear ? `· ${app.intake} ${app.intakeYear}` : ""}
                         </p>
                       </div>
-                      <StatusBadge status={app.status} />
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <StatusBadge status={app.status} />
+                        <svg className="w-4 h-4 text-dvivid-text-muted group-hover:text-dvivid-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
                     </div>
                   </Link>
                 ))}
@@ -463,13 +468,15 @@ export default function StudentWorkspacePage() {
                     href={`/students/${studentId}/applications/${doc.applicationId}/documents/${doc.id}`}
                     className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-dvivid-surface-alt/70 transition-colors group"
                   >
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{doc.documentTitle}</p>
                       <p className="text-xs text-dvivid-text-muted mt-0.5 truncate">{appName(doc.applicationId)} · {fmtDate(doc.updatedAt)}</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <StatusBadge status={docStatus(doc)} />
-                      <span className="text-xs font-medium text-dvivid-primary opacity-0 group-hover:opacity-100 transition-opacity">Open →</span>
+                      <svg className="w-4 h-4 text-dvivid-text-muted group-hover:text-dvivid-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
                     </div>
                   </Link>
                 ))}
@@ -490,39 +497,63 @@ export default function StudentWorkspacePage() {
             />
           </div>
         ) : (
-          <div className="bg-white border border-dvivid-border rounded-card overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-dvivid-border bg-dvivid-surface-alt/60 text-left">
-                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Application</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Destination</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide text-center hidden sm:table-cell">Docs</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Updated</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-dvivid-border-light">
-                {applications.map(app => (
-                  <tr key={app.id} className="hover:bg-dvivid-surface-alt/70 transition-colors group">
-                    <td className="px-4 py-3">
-                      <Link href={`/students/${studentId}/applications/${app.id}`} className="min-w-0">
-                        <span className="block font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{app.universityName}</span>
-                        <span className="block text-xs text-dvivid-text-muted truncate">{app.programName} · {app.degree}</span>
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-dvivid-text-secondary hidden md:table-cell">
-                      {app.country || "—"}{app.intakeYear ? ` · ${app.intake} ${app.intakeYear}` : ""}
-                    </td>
-                    <td className="px-4 py-3 text-center text-dvivid-text-secondary tabular-nums hidden sm:table-cell">
-                      {docsByApp.get(app.id)?.length || 0}
-                    </td>
-                    <td className="px-4 py-3"><StatusBadge status={app.status} /></td>
-                    <td className="px-4 py-3 text-xs text-dvivid-text-muted whitespace-nowrap hidden md:table-cell">{fmtDate(app.updatedAt)}</td>
+          <>
+            {/* Desktop/Tablet table view */}
+            <div className="hidden sm:block bg-white border border-dvivid-border rounded-card overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-dvivid-border bg-dvivid-surface-alt/60 text-left">
+                    <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Application</th>
+                    <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Destination</th>
+                    <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide text-center hidden sm:table-cell">Docs</th>
+                    <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide">Status</th>
+                    <th className="px-4 py-2.5 text-xs font-semibold text-dvivid-text-secondary uppercase tracking-wide hidden md:table-cell">Updated</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-dvivid-border-light">
+                  {applications.map(app => (
+                    <tr key={app.id} className="hover:bg-dvivid-surface-alt/70 transition-colors group">
+                      <td className="px-4 py-3">
+                        <Link href={`/students/${studentId}/applications/${app.id}`} className="min-w-0">
+                          <span className="block font-medium text-dvivid-text-primary truncate group-hover:text-dvivid-primary">{app.universityName}</span>
+                          <span className="block text-xs text-dvivid-text-muted truncate">{app.programName} · {app.degree}</span>
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-dvivid-text-secondary hidden md:table-cell">
+                        {app.country || "—"}{app.intakeYear ? ` · ${app.intake} ${app.intakeYear}` : ""}
+                      </td>
+                      <td className="px-4 py-3 text-center text-dvivid-text-secondary tabular-nums hidden sm:table-cell">
+                        {docsByApp.get(app.id)?.length || 0}
+                      </td>
+                      <td className="px-4 py-3"><StatusBadge status={app.status} /></td>
+                      <td className="px-4 py-3 text-xs text-dvivid-text-muted whitespace-nowrap hidden md:table-cell">{fmtDate(app.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile stacked view — compact, no clipping */}
+            <div className="sm:hidden bg-white border border-dvivid-border rounded-card divide-y divide-dvivid-border-light">
+              {applications.map(app => (
+                <Link key={app.id} href={`/students/${studentId}/applications/${app.id}`} className="block px-4 py-3.5 hover:bg-dvivid-surface-alt/70 transition-colors">
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium text-dvivid-text-primary">{app.universityName}</p>
+                    <p className="text-sm text-dvivid-text-secondary">{app.programName}</p>
+                    <div className="flex items-center justify-between gap-3 pt-1">
+                      <p className="text-xs text-dvivid-text-muted">
+                        {app.country || "—"} · {app.intake} {app.intakeYear}
+                      </p>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <StatusBadge status={app.status} />
+                        <span className="text-xs text-dvivid-text-muted tabular-nums">{docsByApp.get(app.id)?.length || 0} docs</span>
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </>
         )
       )}
 
@@ -573,36 +604,140 @@ export default function StudentWorkspacePage() {
 
       {/* ===== Profile ===== */}
       {tab === "profile" && (
-        <div className="bg-white border border-dvivid-border rounded-card p-6">
-          <h2 className="text-base font-semibold text-dvivid-text-primary mb-4">Reusable Profile</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
-              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.education?.length ?? 0}</p>
-              <p className="text-xs text-dvivid-text-muted">Education entries</p>
+        <div className="space-y-6">
+          {/* Personal Information */}
+          {profile?.personalData && (
+            <div className="bg-white border border-dvivid-border rounded-card p-6">
+              <h3 className="text-base font-semibold text-dvivid-text-primary mb-4">Personal Information</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {profile.personalData.firstName && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Name</p>
+                    <p className="text-sm text-dvivid-text-primary">{profile.personalData.firstName} {profile.personalData.lastName}</p>
+                  </div>
+                )}
+                {profile.personalData.currentCountry && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Country</p>
+                    <p className="text-sm text-dvivid-text-primary">{profile.personalData.currentCountry}</p>
+                  </div>
+                )}
+                {(profile.personalData as any).dateOfBirth && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Date of Birth</p>
+                    <p className="text-sm text-dvivid-text-primary">{(profile.personalData as any).dateOfBirth}</p>
+                  </div>
+                )}
+                {(profile.personalData as any).nationality && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Nationality</p>
+                    <p className="text-sm text-dvivid-text-primary">{(profile.personalData as any).nationality}</p>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
-              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.experience?.length ?? 0}</p>
-              <p className="text-xs text-dvivid-text-muted">Experience entries</p>
-            </div>
-            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
-              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.personalData?.firstName ? "Yes" : "—"}</p>
-              <p className="text-xs text-dvivid-text-muted">Personal details</p>
-            </div>
-            <div className="px-4 py-3 bg-dvivid-surface-alt rounded-input">
-              <p className="text-lg font-semibold text-dvivid-text-primary tabular-nums">{profile?.personalData?.currentCountry || student?.country || "—"}</p>
-              <p className="text-xs text-dvivid-text-muted">Country</p>
-            </div>
-          </div>
-          <p className="text-sm text-dvivid-text-secondary mb-4">
-            The full intake is edited inside an application workspace so answers can be scoped per application.
-          </p>
-          {firstApp ? (
-            <Link href={`/students/${studentId}/applications/${firstApp.id}`}>
-              <SecondaryButton>Open intake workspace →</SecondaryButton>
-            </Link>
-          ) : (
-            <p className="text-sm text-dvivid-text-muted">Create an application to start the intake.</p>
           )}
+
+          {/* Education */}
+          {profile?.education && Array.isArray(profile.education) && profile.education.length > 0 && (
+            <div className="bg-white border border-dvivid-border rounded-card p-6">
+              <h3 className="text-base font-semibold text-dvivid-text-primary mb-4">Education ({profile.education.length})</h3>
+              <div className="space-y-4">
+                {profile.education.slice(0, 3).map((edu: any, i: number) => (
+                  <div key={i} className="pb-4 border-b border-dvivid-border-light last:border-0 last:pb-0">
+                    <p className="text-sm font-medium text-dvivid-text-primary">{edu.level || edu.degree} {edu.major ? `in ${edu.major}` : ""}</p>
+                    {edu.institution && <p className="text-sm text-dvivid-text-secondary mt-1">{edu.institution}</p>}
+                    {(edu.cgpa || edu.percentage) && (
+                      <p className="text-xs text-dvivid-text-muted mt-1">
+                        {edu.cgpa ? `${edu.cgpa}/${edu.cgpaScale || "10"} CGPA` : `${edu.percentage}%`}
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {profile.education.length > 3 && (
+                  <p className="text-xs text-dvivid-text-muted">+ {profile.education.length - 3} more</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Experience */}
+          {profile?.experience && Array.isArray(profile.experience) && profile.experience.length > 0 && (
+            <div className="bg-white border border-dvivid-border rounded-card p-6">
+              <h3 className="text-base font-semibold text-dvivid-text-primary mb-4">Experience ({profile.experience.length})</h3>
+              <div className="space-y-4">
+                {profile.experience.slice(0, 3).map((exp: any, i: number) => (
+                  <div key={i} className="pb-4 border-b border-dvivid-border-light last:border-0 last:pb-0">
+                    <p className="text-sm font-medium text-dvivid-text-primary">{exp.role}</p>
+                    {exp.organization && <p className="text-sm text-dvivid-text-secondary mt-1">{exp.organization}</p>}
+                    {exp.type && <p className="text-xs text-dvivid-text-muted mt-1">{exp.type}</p>}
+                  </div>
+                ))}
+                {profile.experience.length > 3 && (
+                  <p className="text-xs text-dvivid-text-muted">+ {profile.experience.length - 3} more</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Skills */}
+          {(profile as any)?.skills && (
+            <div className="bg-white border border-dvivid-border rounded-card p-6">
+              <h3 className="text-base font-semibold text-dvivid-text-primary mb-4">Skills</h3>
+              <div className="space-y-3">
+                {(profile as any).skills.programming && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Programming</p>
+                    <p className="text-sm text-dvivid-text-primary">{(profile as any).skills.programming.join(", ")}</p>
+                  </div>
+                )}
+                {(profile as any).skills.technical && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Technical</p>
+                    <p className="text-sm text-dvivid-text-primary">{(profile as any).skills.technical.join(", ")}</p>
+                  </div>
+                )}
+                {(profile as any).skills.tools && (
+                  <div>
+                    <p className="text-xs text-dvivid-text-muted mb-1">Tools</p>
+                    <p className="text-sm text-dvivid-text-primary">{(profile as any).skills.tools.join(", ")}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Research/Projects */}
+          {(profile as any)?.projects && Array.isArray((profile as any).projects) && (profile as any).projects.length > 0 && (
+            <div className="bg-white border border-dvivid-border rounded-card p-6">
+              <h3 className="text-base font-semibold text-dvivid-text-primary mb-4">Research & Projects ({(profile as any).projects.length})</h3>
+              <div className="space-y-4">
+                {(profile as any).projects.slice(0, 2).map((proj: any, i: number) => (
+                  <div key={i} className="pb-4 border-b border-dvivid-border-light last:border-0 last:pb-0">
+                    <p className="text-sm font-medium text-dvivid-text-primary">{proj.name}</p>
+                    {proj.role && <p className="text-xs text-dvivid-text-muted mt-1">{proj.role}</p>}
+                  </div>
+                ))}
+                {(profile as any).projects.length > 2 && (
+                  <p className="text-xs text-dvivid-text-muted">+ {(profile as any).projects.length - 2} more</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Edit Profile CTA */}
+          <div className="bg-white border border-dvivid-border rounded-card p-6">
+            <p className="text-sm text-dvivid-text-secondary mb-4">
+              The full profile is edited inside an application workspace where answers can be scoped per application.
+            </p>
+            {firstApp ? (
+              <Link href={`/students/${studentId}/applications/${firstApp.id}`}>
+                <PrimaryButton>Edit Profile →</PrimaryButton>
+              </Link>
+            ) : (
+              <p className="text-sm text-dvivid-text-muted">Create an application to start editing the profile.</p>
+            )}
+          </div>
         </div>
       )}
     </PageContainer>

@@ -72,8 +72,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
 function Brand() {
   return (
     <Link href="/students" className="flex items-center gap-2.5 px-5 h-16 border-b border-dvivid-border-light" aria-label="D-Vivid home">
-      <Image src="/logo_single.svg" alt="" width={28} height={28} priority />
-      <span className="text-[15px] font-semibold text-dvivid-text-primary tracking-tight">D-Vivid</span>
+      <Image src="/dvivid_logo.png" alt="D-Vivid" width={110} height={33} priority className="h-[33px] w-auto" />
     </Link>
   );
 }
