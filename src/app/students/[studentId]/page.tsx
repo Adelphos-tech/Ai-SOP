@@ -362,46 +362,60 @@ export default function StudentWorkspacePage() {
 
       {/* New Application Form */}
       {showNewAppForm && (
-        <SectionCard title="New Application" description="Create a new university application for this student." className="mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <FormField label="University" required error={formErrors.universityName}>
-              <UniversitySelect value={universityName} onChange={v => { setUniversityName(v); setFormErrors(f => ({ ...f, universityName: "" })); }} required placeholder="Search university..." />
-            </FormField>
-            <FormField label="Program" required error={formErrors.programName}>
-              <input className={inputClass} value={programName} onChange={e => { setProgramName(e.target.value); setFormErrors(f => ({ ...f, programName: "" })); }} placeholder="Civil Engineering" />
-            </FormField>
-            <FormField label="Degree" required error={formErrors.degree}>
-              <select className={inputClass} value={degree} onChange={e => { setDegree(e.target.value); setFormErrors(f => ({ ...f, degree: "" })); }}>
-                <option value="">Select degree</option>
-                <option value="Master of Science">Master of Science (MS)</option>
-                <option value="Master of Engineering">Master of Engineering (MEng)</option>
-                <option value="Doctor of Philosophy">Doctor of Philosophy (PhD)</option>
-                <option value="Other">Other</option>
-              </select>
-            </FormField>
-            <FormField label="Department">
-              <input className={inputClass} value={department} onChange={e => setDepartment(e.target.value)} placeholder="CEE" />
-            </FormField>
-            <FormField label="Country">
-              <input className={inputClass} value={country} onChange={e => setCountry(e.target.value)} placeholder="USA" />
-            </FormField>
-            <FormField label="Intake">
-              <select className={inputClass} value={intake} onChange={e => setIntake(e.target.value)}>
-                <option value="">Select intake</option>
-                <option value="Fall">Fall</option>
-                <option value="Spring">Spring</option>
-                <option value="Summer">Summer</option>
-              </select>
-            </FormField>
-            <FormField label="Intake Year">
-              <input className={inputClass} value={intakeYear} onChange={e => setIntakeYear(e.target.value)} placeholder="2027" />
-            </FormField>
-          </div>
-          <div className="flex gap-3 justify-end mt-6">
-            <SecondaryButton onClick={() => setShowNewAppForm(false)}>Cancel</SecondaryButton>
-            <PrimaryButton onClick={handleCreateApplication} disabled={creating}>
-              {creating ? "Creating..." : "Create Application"}
-            </PrimaryButton>
+        <SectionCard title="New Application" description="Create a new university application for this student." className="mb-6 max-w-[1000px] mx-auto">
+          <div className="space-y-6">
+            {/* Required Fields */}
+            <div>
+              <h4 className="text-sm font-semibold text-dvivid-text-primary mb-3">Required</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField label="University" required error={formErrors.universityName}>
+                  <UniversitySelect value={universityName} onChange={v => { setUniversityName(v); setFormErrors(f => ({ ...f, universityName: "" })); }} required placeholder="Search university..." />
+                </FormField>
+                <FormField label="Program" required error={formErrors.programName}>
+                  <input className={inputClass} value={programName} onChange={e => { setProgramName(e.target.value); setFormErrors(f => ({ ...f, programName: "" })); }} placeholder="MS Machine Learning" />
+                </FormField>
+                <FormField label="Degree" required error={formErrors.degree}>
+                  <select className={inputClass} value={degree} onChange={e => { setDegree(e.target.value); setFormErrors(f => ({ ...f, degree: "" })); }}>
+                    <option value="">Select degree</option>
+                    <option value="Master of Science">Master of Science (MS)</option>
+                    <option value="Master of Engineering">Master of Engineering (MEng)</option>
+                    <option value="Doctor of Philosophy">Doctor of Philosophy (PhD)</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </FormField>
+              </div>
+            </div>
+
+            {/* Additional Details */}
+            <div>
+              <h4 className="text-sm font-semibold text-dvivid-text-primary mb-3">Additional details</h4>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <FormField label="Department">
+                  <input className={inputClass} value={department} onChange={e => setDepartment(e.target.value)} placeholder="Clinical Research" />
+                </FormField>
+                <FormField label="Country">
+                  <input className={inputClass} value={country} onChange={e => setCountry(e.target.value)} placeholder="United States" />
+                </FormField>
+                <FormField label="Intake">
+                  <select className={inputClass} value={intake} onChange={e => setIntake(e.target.value)}>
+                    <option value="">Select intake</option>
+                    <option value="Fall">Fall</option>
+                    <option value="Spring">Spring</option>
+                    <option value="Summer">Summer</option>
+                  </select>
+                </FormField>
+                <FormField label="Intake Year">
+                  <input className={inputClass} value={intakeYear} onChange={e => setIntakeYear(e.target.value)} placeholder="2027" />
+                </FormField>
+              </div>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <SecondaryButton onClick={() => setShowNewAppForm(false)}>Cancel</SecondaryButton>
+              <PrimaryButton onClick={handleCreateApplication} disabled={creating}>
+                {creating ? "Creating..." : "Create Application"}
+              </PrimaryButton>
+            </div>
           </div>
         </SectionCard>
       )}

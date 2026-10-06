@@ -14,7 +14,6 @@ import {
   PageContainer, Breadcrumb, PrimaryButton, SecondaryButton,
   SectionCard, EmptyState, StatusBadge, PromptSourceBadge,
 } from "@/components/ui";
-import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass } from "@/components/ui/FormField";
 import {
   INTAKE_SECTIONS,
@@ -79,6 +78,47 @@ interface Student {
   email: string;
 }
 
+function docStatus(d: Document): string {
+  if (d.reviewStatus === "APPROVED") return "APPROVED";
+  if (d.reviewStatus === "NEEDS_REVIEW") return "NEEDS_REVIEW";
+  if (d.reviewStatus === "IN_REVIEW") return "IN_REVIEW";
+  if (d.generationStatus === "GENERATING") return "GENERATING";
+  if (d.generationStatus === "GENERATED") return "GENERATED";
+  if (d.generationStatus === "FAILED") return "FAILED";
+  return "NOT_STARTED";
+}
+
+function docAction(d: Document): { label: string; color: string } {
+  if (d.reviewStatus === "APPROVED") return { label: "Export →", color: "text-dvivid-success font-medium" };
+  if (d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW") return { label: "Review →", color: "text-dvivid-primary font-medium" };
+  if (d.generationStatus === "GENERATING") return { label: "Generating...", color: "text-dvivid-warning" };
+  if (d.generationStatus === "FAILED") return { label: "Retry →", color: "text-dvivid-error font-medium" };
+  if (d.generationStatus === "GENERATED") return { label: "Review →", color: "text-dvivid-primary font-medium" };
+  return { label: "Generate →", color: "text-dvivid-primary font-medium" };
+}
+
+function hasNeedsReview(documents: Document[]): boolean {
+  return documents.some(d => d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW");
+}
+
+function hasGenerating(documents: Document[]): boolean {
+  return documents.some(d => d.generationStatus === "GENERATING");
+}
+
+function hasFailed(documents: Document[]): boolean {
+  return documents.some(d => d.generationStatus === "FAILED");
+}
+
+function getPrimaryDoc(documents: Document[]): Document | null {
+  if (documents.length === 0) return null;
+  const ranked = [...documents].sort((a, b) => {
+    const rankA = a.reviewStatus === "APPROVED" ? 4 : a.generationStatus === "GENERATED" ? 3 : a.generationStatus === "GENERATING" || a.generationStatus === "FAILED" ? 2 : 1;
+    const rankB = b.reviewStatus === "APPROVED" ? 4 : b.generationStatus === "GENERATED" ? 3 : b.generationStatus === "GENERATING" || b.generationStatus === "FAILED" ? 2 : 1;
+    return rankB - rankA;
+  });
+  return ranked[0];
+}
+
 export default function ApplicationWorkspacePage() {
   const params = useParams();
   const router = useRouter();
@@ -120,8 +160,6 @@ export default function ApplicationWorkspacePage() {
 
   const loadTokenRef = useRef(0);
 
-  // Identity change resets application-scoped state AND invalidates
-  // in-flight loads — no stale data from another application/student.
   useEffect(() => {
     loadTokenRef.current++;
     setApplication(null);
@@ -140,7 +178,6 @@ export default function ApplicationWorkspacePage() {
     setLoading(true);
     setError("");
     try {
-      // Fetch application, student, and profile in parallel — no-store to avoid stale data after intake saves
       const [res, studentRes, profileRes] = await Promise.all([
         fetch(`/api/application/list?applicationId=${applicationId}&studentId=${studentId}`, { cache: "no-store" }),
         fetch(`/api/application/student?id=${studentId}`, { cache: "no-store" }),
@@ -174,7 +211,6 @@ export default function ApplicationWorkspacePage() {
       if (data.application) {
         try {
           const app = data.application;
-          // Guard against empty values that cause 400 on requirements lookup
           if (app.universityName && app.programName && app.degree && app.intake && app.intakeYear) {
             const reqRes = await fetch(
               `/api/requirements/lookup?university=${encodeURIComponent(app.universityName)}&program=${encodeURIComponent(app.programName)}&degree=${encodeURIComponent(app.degree)}&intake=${encodeURIComponent(app.intake)}&intakeYear=${encodeURIComponent(app.intakeYear)}`,
@@ -251,7 +287,6 @@ export default function ApplicationWorkspacePage() {
       setResolutionPath(null);
       setResolutionLabel(null);
 
-      // No dead-end: go straight to the document workspace
       if (newDocId) {
         router.push(`/students/${studentId}/applications/${applicationId}/documents/${newDocId}`);
       } else {
@@ -426,70 +461,70 @@ export default function ApplicationWorkspacePage() {
     );
   }
 
-  // Compute intake readiness for tracker + CTA
+  // Compute intake readiness
   const readiness = profile !== null && application ? getProfileReadiness(profile, application) : null;
   const firstMissingSlug = readiness?.sections.find(s => s.status === "missing")?.slug;
   const intakeComplete = readiness?.canGenerate ?? false;
 
-  // Determine the primary document — the most advanced one:
-  // approved > generated > in-progress/failed > not-started
-  const docRank = (d: Document) =>
-    d.reviewStatus === "APPROVED" ? 3 :
-    d.generationStatus === "GENERATED" ? 2 :
-    d.generationStatus === "GENERATING" || d.generationStatus === "FAILED" ? 1 : 0;
-  const primaryDoc = documents.length > 0
-    ? [...documents].sort((a, b) => docRank(b) - docRank(a))[0]
-    : null;
+  const primaryDoc = getPrimaryDoc(documents);
   const docWorkspaceHref = primaryDoc ? `/students/${studentId}/applications/${applicationId}/documents/${primaryDoc.id}` : null;
 
-  // State-based CTA: A=incomplete, B=ready+no docs, C=doc not started,
-  // D=generating/failed, E=generated, F=approved
   const intakeHref = firstMissingSlug
     ? `/students/${studentId}/applications/${applicationId}/intake/missing`
     : `/students/${studentId}/applications/${applicationId}/intake/student-details`;
 
+  // State-aware primary CTA priority
   let primaryCta: { label: string; href: string; onClick?: () => void } | null = null;
   if (!intakeComplete) {
-    primaryCta = { label: "Complete Missing Information →", href: intakeHref };
+    const missingSections = readiness?.sections.filter(s => !s.optional && s.status !== "missing") || [];
+    const missingCount = missingSections.length;
+    primaryCta = { label: `Complete ${missingCount} Missing Answer${missingCount !== 1 ? "s" : ""} →`, href: intakeHref };
   } else if (documents.length === 0) {
-    primaryCta = { label: "Add Document →", href: "", onClick: () => setShowAddForm(true) };
-  } else if (primaryDoc && primaryDoc.reviewStatus === "APPROVED") {
-    primaryCta = { label: "Export Final Document →", href: docWorkspaceHref! };
-  } else if (primaryDoc && primaryDoc.generationStatus === "GENERATED") {
-    primaryCta = { label: "Review Document →", href: docWorkspaceHref! };
-  } else if (primaryDoc && primaryDoc.generationStatus === "GENERATING") {
-    primaryCta = { label: "Generation in Progress — Open Document →", href: docWorkspaceHref! };
-  } else if (primaryDoc && primaryDoc.generationStatus === "FAILED") {
-    primaryCta = { label: "Retry Generation →", href: docWorkspaceHref! };
-  } else if (primaryDoc && primaryDoc.generationStatus === "NOT_STARTED") {
-    primaryCta = { label: "Generate Document →", href: docWorkspaceHref! };
+    primaryCta = { label: "+ Add Document →", href: "", onClick: () => setShowAddForm(true) };
+  } else if (hasNeedsReview(documents)) {
+    const needsReviewDoc = documents.find(d => d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW");
+    primaryCta = { label: "Review Document →", href: needsReviewDoc ? `/students/${studentId}/applications/${applicationId}/documents/${needsReviewDoc.id}` : docWorkspaceHref! };
+  } else if (hasGenerating(documents)) {
+    const genDoc = documents.find(d => d.generationStatus === "GENERATING");
+    primaryCta = { label: "View Generation →", href: genDoc ? `/students/${studentId}/applications/${applicationId}/documents/${genDoc.id}` : docWorkspaceHref! };
+  } else if (hasFailed(documents)) {
+    const failedDoc = documents.find(d => d.generationStatus === "FAILED");
+    primaryCta = { label: "Review / Retry →", href: failedDoc ? `/students/${studentId}/applications/${applicationId}/documents/${failedDoc.id}` : docWorkspaceHref! };
+  } else {
+    primaryCta = { label: "+ Add Document →", href: "", onClick: () => setShowAddForm(true) };
   }
+
+  // Compute metrics
+  const generatedCount = documents.filter(d => ["GENERATED", "APPROVED", "NEEDS_REVIEW", "IN_REVIEW"].includes(docStatus(d))).length;
+  const approvedCount = documents.filter(d => docStatus(d) === "APPROVED").length;
+  const needsReviewCount = documents.filter(d => d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW").length;
 
   return (
     <PageContainer>
-      <WorkflowStepper
-        intakeComplete={intakeComplete}
-        firstIncompleteIntakeSlug={firstMissingSlug}
-      />
+      {/* Breadcrumb */}
       <Breadcrumb items={[
         { label: "Students", href: "/students" },
         { label: student ? `${student.firstName} ${student.lastName}` : "Student", href: `/students/${studentId}` },
-        { label: application ? `${application.universityName}` : "Application" },
+        { label: application ? application.universityName : "Application" },
       ]} />
 
-      {/* Application Header — who/where */}
-      <div className="bg-white border border-dvivid-border rounded-card shadow-card p-7 mb-8">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-page-title text-dvivid-text-primary">
+      {/* Application Header */}
+      <div className="mb-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+          <div className="min-w-0">
+            <p className="text-xs text-dvivid-text-muted uppercase tracking-wide">Application Workspace</p>
+            <h1 className="text-page-title text-dvivid-text-primary mt-1 truncate">
               {student ? `${student.firstName} ${student.lastName}` : "Applicant"}
             </h1>
-            <p className="text-base text-dvivid-text-secondary mt-1.5">
-              {application?.universityName} · {application?.programName}
+            <p className="text-base text-dvivid-text-secondary mt-1.5 truncate">
+              {application?.universityName} · {application?.programName} · {application?.degree}
               {application?.intake ? ` · ${application.intake} ${application.intakeYear}` : ""}
             </p>
+            {application?.country && (
+              <p className="text-sm text-dvivid-text-secondary mt-0.5">{application.country}</p>
+            )}
           </div>
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-end gap-2 flex-shrink-0">
             <StatusBadge status={application?.status || "DRAFT"} />
             {!confirmDelete && (
               <button
@@ -502,7 +537,7 @@ export default function ApplicationWorkspacePage() {
           </div>
         </div>
 
-        {/* Delete application — danger action, explicit confirm */}
+        {/* Delete application confirmation */}
         {confirmDelete && (
           <div className="mt-4 p-4 bg-dvivid-error-light border border-dvivid-error/30 rounded-input">
             <p className="text-sm font-semibold text-dvivid-error mb-1">Delete application?</p>
@@ -544,19 +579,41 @@ export default function ApplicationWorkspacePage() {
           </div>
         )}
 
-        {/* APPLICATION STATUS — what is missing / what is next */}
-        {readiness && (() => {
-          const missingSections = readiness.sections.filter(s => !s.optional && s.status !== "complete");
-          const missingCount = missingSections.length;
-          return (
-            <div className="mt-6 pt-6 border-t border-dvivid-border-light">
-              <p className="text-xs font-medium text-dvivid-text-muted uppercase tracking-wide mb-3">Application status</p>
-              {!intakeComplete ? (
+        {/* Compact Metrics Strip */}
+        <div className="mt-4 bg-white border border-dvivid-border rounded-card divide-x divide-dvivid-border-light grid grid-cols-4">
+          <div className="px-4 py-3 border-r border-dvivid-border-light last:border-0">
+            <p className="text-xl font-semibold text-dvivid-text-primary tabular-nums">{documents.length}</p>
+            <p className="text-xs text-dvivid-text-muted mt-0.5">Documents</p>
+          </div>
+          <div className="px-4 py-3 border-r border-dvivid-border-light last:border-0">
+            <p className="text-xl font-semibold text-dvivid-text-primary tabular-nums">{generatedCount}</p>
+            <p className="text-xs text-dvivid-text-muted mt-0.5">Generated</p>
+          </div>
+          <div className="px-4 py-3 border-r border-dvivid-border-light last:border-0">
+            <p className="text-xl font-semibold text-dvivid-text-primary tabular-nums">{approvedCount}</p>
+            <p className="text-xs text-dvivid-text-muted mt-0.5">Approved</p>
+          </div>
+          <div className="px-4 py-3">
+            <p className={`text-xl font-semibold tabular-nums ${needsReviewCount > 0 ? "text-dvivid-warning" : "text-dvivid-text-primary"}`}>{needsReviewCount}</p>
+            <p className="text-xs text-dvivid-text-muted mt-0.5">Needs Review</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Readiness / Missing Information */}
+      {readiness && !intakeComplete && (
+        <div className="mb-6 p-4 bg-dvivid-warning-light border border-dvivid-warning/30 rounded-card">
+          <p className="text-xs font-medium text-dvivid-text-muted uppercase tracking-wide mb-2">Application Information</p>
+          <div>
+            {(() => {
+              const missingSections = readiness.sections.filter(s => !s.optional && s.status !== "complete");
+              const missingCount = missingSections.length;
+              return (
                 <div>
                   <p className="text-sm font-medium text-dvivid-text-primary mb-2">
-                    {missingCount} required answer{missingCount !== 1 ? "s" : ""} still needed
+                    {missingCount} section{missingCount !== 1 ? "s" : ""} need attention
                   </p>
-                  <ul className="mb-4 space-y-1">
+                  <ul className="mb-3 space-y-1">
                     {missingSections.map(s => (
                       <li key={s.slug} className="text-sm text-dvivid-text-secondary">
                         · {s.label}
@@ -566,60 +623,132 @@ export default function ApplicationWorkspacePage() {
                       </li>
                     ))}
                   </ul>
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <Link href={`/students/${studentId}/applications/${applicationId}/intake/missing`} prefetch={false}>
-                      <PrimaryButton>Complete {missingCount} Missing Answer{missingCount !== 1 ? "s" : ""} →</PrimaryButton>
-                    </Link>
-                    <button
-                      onClick={() => setShowCVUpload(!showCVUpload)}
-                      className="text-sm text-dvivid-primary hover:underline font-medium"
-                    >
-                      Upload CV to pre-fill instead
-                    </button>
-                  </div>
-                  {showCVUpload && (
-                    <div className="mt-4 p-4 bg-dvivid-surface-alt border border-dvivid-border rounded-input">
-                      <CVUpload
-                        key={studentId}
-                        studentId={studentId}
-                        studentIdentity={student ? { firstName: student.firstName, lastName: student.lastName, email: student.email } : undefined}
-                        onApplied={() => {
-                          setShowCVUpload(false);
-                          loadApplication();
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <p className="text-sm font-medium text-dvivid-success">✓ Applicant information ready</p>
-                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/student-details`} prefetch={false}>
-                    <span className="text-sm text-dvivid-primary hover:underline font-medium cursor-pointer">Review all information →</span>
+                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/missing`} prefetch={false}>
+                    <PrimaryButton>Complete {missingCount} Missing Answer{missingCount !== 1 ? "s" : ""} →</PrimaryButton>
                   </Link>
                 </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {/* Document state CTA (only when intake is ready) */}
-        {intakeComplete && primaryCta && (
-          <div className="mt-4">
-            {primaryCta.onClick ? (
-              <PrimaryButton onClick={primaryCta.onClick}>{primaryCta.label}</PrimaryButton>
-            ) : (
-              <Link href={primaryCta.href}>
-                <PrimaryButton>{primaryCta.label}</PrimaryButton>
-              </Link>
-            )}
+              );
+            })()}
           </div>
+        </div>
+      )}
+
+      {/* State-Aware Primary CTA — suppress when readiness panel already has CTA */}
+      {primaryCta && !(readiness && !intakeComplete) && (
+        <div className="mb-6">
+          {primaryCta.onClick ? (
+            <PrimaryButton onClick={primaryCta.onClick}>{primaryCta.label}</PrimaryButton>
+          ) : (
+            <Link href={primaryCta.href}>
+              <PrimaryButton>{primaryCta.label}</PrimaryButton>
+            </Link>
+          )}
+        </div>
+      )}
+
+      {/* Documents Section (Primary Focus) */}
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <h2 className="text-section-title text-dvivid-text-primary">Documents</h2>
+        {!showAddForm && (
+          <SecondaryButton onClick={() => setShowAddForm(true)}>+ Add Document</SecondaryButton>
         )}
       </div>
 
-      {/* Requirements — advanced info, collapsed by default */}
+      {documents.length === 0 ? (
+        <EmptyState
+          title="No Documents Yet"
+          description="Add an SOP, essay, personal statement or other writing task."
+          action={
+            <PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>
+          }
+        />
+      ) : (
+        <div className="space-y-3">
+          {documents.map((doc) => {
+            const docHref = `/students/${studentId}/applications/${applicationId}/documents/${doc.id}`;
+            const action = docAction(doc);
+            const wordRange = doc.wordMax ? `${doc.wordMin || 0}–${doc.wordMax} words` : "";
+            const pageInfo = doc.pageLimit ? `${doc.pageLimit} page(s)` : "";
+            return (
+              <div
+                key={doc.id}
+                className="bg-white border border-dvivid-border rounded-card p-5 hover:bg-dvivid-surface-alt/50 transition-colors"
+              >
+                <Link href={`/students/${studentId}/applications/${applicationId}/documents/${doc.id}`} className="block">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-card-title text-dvivid-text-primary truncate">{doc.documentTitle}</h3>
+                      <p className="text-sm text-dvivid-text-secondary mt-1 line-clamp-2">{doc.promptText.substring(0, 140)}{doc.promptText.length > 140 ? "..." : ""}</p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        <PromptSourceBadge source={doc.promptSource} />
+                        <span className="px-2 py-1 bg-dvivid-surface-alt text-dvivid-text-secondary text-xs font-medium rounded-full">
+                          {doc.documentType.replace(/_/g, " ").toLowerCase()}
+                        </span>
+                        {doc.wordMax && (
+                          <span className="px-2 py-1 bg-dvivid-surface-alt text-dvivid-text-muted text-xs font-medium rounded-full">
+                            {doc.wordMin || 0}–{doc.wordMax} words
+                          </span>
+                        )}
+                        {doc.pageLimit && (
+                          <span className="px-2 py-1 bg-dvivid-surface-alt text-dvivid-text-muted text-xs font-medium rounded-full">
+                            {doc.pageLimit} page(s)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-2 flex-shrink-0 sm:flex-row sm:items-center sm:gap-3">
+                      <StatusBadge status={docStatus(doc)} />
+                      <span className={`text-sm font-medium ${action.color}`}>{action.label}</span>
+                    </div>
+</div>
+            </Link>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Application Info */}
+      <details className="mt-8 group">
+        <summary className="text-sm font-medium text-dvivid-text-secondary cursor-pointer list-none flex items-center gap-2">
+          <span className="text-dvivid-text-muted group-open:rotate-90 transition-transform inline-block">▸</span>
+          Application Info
+        </summary>
+        <div className="mt-4 pt-4 border-t border-dvivid-border-light grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <p className="text-xs text-dvivid-text-muted">University</p>
+            <p className="text-sm text-dvivid-text-primary font-medium">{application?.universityName}</p>
+          </div>
+          <div>
+            <p className="text-xs text-dvivid-text-muted">Program</p>
+            <p className="text-sm text-dvivid-text-primary font-medium">{application?.programName}</p>
+          </div>
+          <div>
+            <p className="text-xs text-dvivid-text-muted">Degree</p>
+            <p className="text-sm text-dvivid-text-primary font-medium">{application?.degree}</p>
+          </div>
+          <div>
+            <p className="text-xs text-dvivid-text-muted">Department</p>
+            <p className="text-sm text-dvivid-text-primary font-medium">{application?.department || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-dvivid-text-muted">Country</p>
+            <p className="text-sm text-dvivid-text-primary font-medium">{application?.country || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-dvivid-text-muted">Intake</p>
+            <p className="text-sm text-dvivid-text-primary font-medium">{application?.intake || "—"} {application?.intakeYear || ""}</p>
+          </div>
+          <div>
+            <p className="text-xs text-dvivid-text-muted">Status</p>
+            <p className="text-sm text-dvivid-text-primary font-medium"><StatusBadge status={application?.status || "DRAFT"} /></p>
+          </div>
+        </div>
+      </details>
+
+      {/* Requirements (collapsed) */}
       {reqLookup && (
-        <details className="bg-white border border-dvivid-border rounded-card shadow-card px-5 py-4 mb-8 group">
+        <details className="mt-6 group">
           <summary className="text-sm font-medium text-dvivid-text-secondary cursor-pointer list-none flex items-center justify-between">
             <span>Requirements status
               <span className="ml-2 text-xs text-dvivid-text-muted font-normal">
@@ -628,7 +757,7 @@ export default function ApplicationWorkspacePage() {
             </span>
             <span className="text-dvivid-text-muted group-open:rotate-180 transition-transform">▾</span>
           </summary>
-          <div className="pt-3 mt-3 border-t border-dvivid-border-light">
+          <div className="mt-3 pt-3 border-t border-dvivid-border-light">
             {reqLookup.result === "EXACT_FRESH_MATCH" && (
               <p className="text-sm text-dvivid-success">✓ Requirements available — {reqLookup.writingRequirements?.length || 0} writing requirements verified</p>
             )}
@@ -647,7 +776,7 @@ export default function ApplicationWorkspacePage() {
 
       {/* Add Document Form */}
       {showAddForm && (
-        <SectionCard title="Add Document" description="Create a new writing task for this application." className="mb-8">
+        <SectionCard title="Add Document" description="Create a new writing task for this application." className="mt-8">
           {/* Available writing requirements */}
           {reqLookup?.writingRequirements && reqLookup.writingRequirements.length > 0 && (
             <div className="mb-6 pb-6 border-b border-dvivid-border-light">
@@ -684,7 +813,7 @@ export default function ApplicationWorkspacePage() {
                       <p className="text-sm font-medium text-dvivid-text-primary">{wr.officialTitle}</p>
                       <p className="text-sm text-dvivid-text-secondary mt-0.5">
                         {wr.documentType.replace(/_/g, " ").toLowerCase()}
-                        {wr.wordMax ? ` · ${wr.wordMin || 0}-${wr.wordMax} words` : ""}
+                        {wr.wordMax ? ` · ${wr.wordMin || 0}–${wr.wordMax} words` : ""}
                         {wr.required ? " · required" : ""}
                       </p>
                     </div>
@@ -740,28 +869,28 @@ export default function ApplicationWorkspacePage() {
                 {promptUi.label} {promptUi.required && <span className="text-dvivid-error">*</span>}
               </label>
               {(promptUi.primaryLookupLabel || promptUi.secondaryLookupLabel) && (
-              <div className="flex gap-2">
-                {promptUi.primaryLookupLabel && (
-                <button
-                  type="button"
-                  onClick={handleAutoResolve}
-                  disabled={resolving}
-                  className="px-3 py-1.5 text-xs font-medium text-dvivid-primary border border-dvivid-primary/30 rounded-button hover:bg-dvivid-primary-light transition-colors disabled:opacity-50"
-                >
-                  {resolving ? "Finding requirements..." : promptUi.primaryLookupLabel}
-                </button>
-                )}
-                {promptUi.secondaryLookupLabel && (
-                <button
-                  type="button"
-                  onClick={handleTriggerDiscovery}
-                  disabled={resolving}
-                  className="px-3 py-1.5 text-xs font-medium text-dvivid-text-secondary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt transition-colors disabled:opacity-50"
-                >
-                  {resolving ? "Searching..." : promptUi.secondaryLookupLabel}
-                </button>
-                )}
-              </div>
+                <div className="flex gap-2">
+                  {promptUi.primaryLookupLabel && (
+                    <button
+                      type="button"
+                      onClick={handleAutoResolve}
+                      disabled={resolving}
+                      className="px-3 py-1.5 text-xs font-medium text-dvivid-primary border border-dvivid-primary/30 rounded-button hover:bg-dvivid-primary-light transition-colors disabled:opacity-50"
+                    >
+                      {resolving ? "Finding requirements..." : promptUi.primaryLookupLabel}
+                    </button>
+                  )}
+                  {promptUi.secondaryLookupLabel && (
+                    <button
+                      type="button"
+                      onClick={handleTriggerDiscovery}
+                      disabled={resolving}
+                      className="px-3 py-1.5 text-xs font-medium text-dvivid-text-secondary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt transition-colors disabled:opacity-50"
+                    >
+                      {resolving ? "Searching..." : promptUi.secondaryLookupLabel}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
             <textarea
@@ -859,121 +988,10 @@ export default function ApplicationWorkspacePage() {
           </div>
         </SectionCard>
       )}
-
       {/* Error */}
       {error && (
         <div className="mb-6 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
           <p className="text-sm text-dvivid-error">{error}</p>
-        </div>
-      )}
-
-      {/* Documents */}
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <h2 className="text-section-title text-dvivid-text-primary">Documents</h2>
-        {!showAddForm && (
-          <PrimaryButton onClick={() => setShowAddForm(true)}>+ Add Document</PrimaryButton>
-        )}
-      </div>
-
-      {documents.length === 0 ? (
-        <EmptyState
-          title="No Documents Yet"
-          description="Add an SOP, essay, personal statement or other writing task."
-          action={
-            <PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>
-          }
-        />
-      ) : (
-        <div className="space-y-4">
-          {documents.map((doc) => {
-            const docHref = `/students/${studentId}/applications/${applicationId}/documents/${doc.id}`;
-            let actionLabel = "Open";
-            let actionColor = "text-dvivid-text-secondary";
-            if (doc.reviewStatus === "APPROVED") {
-              actionLabel = "Export / Open →";
-              actionColor = "text-dvivid-success font-medium";
-            } else if (doc.generationStatus === "GENERATED") {
-              actionLabel = "Review →";
-              actionColor = "text-dvivid-primary font-medium";
-            } else if (doc.generationStatus === "GENERATING") {
-              actionLabel = "Generating...";
-              actionColor = "text-dvivid-warning";
-            } else if (doc.generationStatus === "FAILED") {
-              actionLabel = "Retry →";
-              actionColor = "text-dvivid-error font-medium";
-            } else if (doc.generationStatus === "NOT_STARTED") {
-              actionLabel = "Generate →";
-              actionColor = "text-dvivid-primary font-medium";
-            }
-            return (
-              <div
-                key={doc.id}
-                className="relative bg-white border border-dvivid-border rounded-card shadow-card p-6 hover:shadow-card-hover hover:border-dvivid-primary-border transition-all"
-              >
-                <Link href={docHref} className="block">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-card-title text-dvivid-text-primary">{doc.documentTitle}</h3>
-                      <p className="text-sm text-dvivid-text-secondary mt-1 line-clamp-2">
-                        {doc.promptText.substring(0, 120)}{doc.promptText.length > 120 ? "..." : ""}
-                      </p>
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        <PromptSourceBadge source={doc.promptSource} />
-                        <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-secondary text-xs font-medium rounded-full">
-                          {doc.documentType.replace(/_/g, " ").toLowerCase()}
-                        </span>
-                        {doc.wordMax && (
-                          <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
-                            {doc.wordMin || 0}-{doc.wordMax} words
-                          </span>
-                        )}
-                        {doc.pageLimit && (
-                          <span className="px-2.5 py-1 bg-gray-100 text-dvivid-text-muted text-xs font-medium rounded-full">
-                            {doc.pageLimit} page(s)
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                      <StatusBadge status={doc.generationStatus} />
-                      {doc.generationStatus !== "NOT_STARTED" && doc.reviewStatus && (
-                        <StatusBadge status={doc.reviewStatus} />
-                      )}
-                      <span className={`text-sm ${actionColor}`}>{actionLabel}</span>
-                    </div>
-                  </div>
-                </Link>
-                {/* Delete document — secondary/destructive, never more prominent than Open */}
-                {docToDelete?.id === doc.id ? (
-                  <div className="mt-4 pt-4 border-t border-dvivid-border-light bg-dvivid-error-light/50 -mx-6 -mb-6 px-6 pb-6 rounded-b-card">
-                    <p className="text-sm font-semibold text-dvivid-error mb-1">
-                      Delete &ldquo;{doc.documentTitle}&rdquo;?
-                    </p>
-                    <p className="text-sm text-dvivid-text-secondary mb-3">
-                      This will permanently delete this document, its generated versions, and its generation history. Other documents and the application will not be affected.
-                    </p>
-                    <div className="flex gap-3">
-                      <button
-                        onClick={(e) => { e.preventDefault(); handleDeleteDocument(); }}
-                        disabled={deletingDoc}
-                        className="px-4 py-2 text-sm font-medium rounded-input bg-dvivid-error text-white hover:opacity-90 transition-opacity disabled:opacity-50"
-                      >
-                        {deletingDoc ? "Deleting..." : "Delete Document"}
-                      </button>
-                      <SecondaryButton onClick={() => setDocToDelete(null)}>Cancel</SecondaryButton>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={(e) => { e.preventDefault(); setDocToDelete(doc); }}
-                    className="absolute bottom-4 right-6 text-xs text-dvivid-error/60 hover:text-dvivid-error hover:underline font-medium"
-                  >
-                    Delete
-                  </button>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
     </PageContainer>
