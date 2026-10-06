@@ -135,6 +135,49 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
 /**
  * Get a summary of profile readiness for the generation gate.
  */
+// Helper: Build readiness from server response (missingSections = section labels)
+export function buildReadinessFromServerResponse(missingSectionLabels: string[]): {
+  sections: SectionCompletion[];
+  requiredComplete: number;
+  requiredTotal: number;
+  optionalComplete: number;
+  optionalTotal: number;
+  canGenerate: boolean;
+  weakAreas: string[];
+} {
+  const sections = INTAKE_SECTIONS.map(section => {
+    const isMissing = missingSectionLabels.includes(section.label);
+    const status: SectionStatus = section.optional
+      ? isMissing ? "optional" : "complete"
+      : isMissing ? "missing" : "complete";
+    return {
+      sectionId: section.id,
+      slug: section.slug,
+      label: section.label,
+      status,
+      optional: section.optional,
+      missingFields: [], // Not available from server response
+    };
+  });
+
+  const required = sections.filter(s => !s.optional);
+  const optional = sections.filter(s => s.optional);
+  const requiredComplete = required.filter(s => s.status === "complete").length;
+  const optionalComplete = optional.filter(s => s.status === "complete").length;
+  const canGenerate = required.every(s => s.status === "complete");
+  const weakAreas = sections.filter(s => s.status === "missing").map(s => s.label);
+
+  return {
+    sections,
+    requiredComplete,
+    requiredTotal: required.length,
+    optionalComplete,
+    optionalTotal: optional.length,
+    canGenerate,
+    weakAreas,
+  };
+}
+
 export function getProfileReadiness(profile: any, application?: any): {
   sections: SectionCompletion[];
   requiredComplete: number;

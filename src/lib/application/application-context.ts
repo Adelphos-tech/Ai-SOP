@@ -159,17 +159,36 @@ export function parseContextData(raw: unknown): ApplicationContextData | null {
  *
  * LEGACY (v1): the shared profile is returned as-is — the same values
  * the application has always read. crossApplicationFallbackUsed=YES.
+ * 
+ * Country Questions fix: for v2 applications, validate that the
+ * countryQuestionnaire.countryCode in context_data matches the
+ * application's country. If not, treat Country Questions as empty.
  */
 export function resolveApplicationContext(
-  application: { applicationContextVersion?: number; contextData?: unknown } | null | undefined,
+  application: { applicationContextVersion?: number; contextData?: unknown; country?: string } | null | undefined,
   studentProfile: any,
 ): ResolvedApplicationContext {
   const version = application?.applicationContextVersion ?? APPLICATION_CONTEXT_VERSION.LEGACY;
   const ctx = application?.contextData ? parseContextData(application.contextData) : null;
 
   if (version >= APPLICATION_CONTEXT_VERSION.APP_SCOPED) {
+    const appScopeFields = ctx?.fields || {};
+    
+    // Country Questions cross-application fix:
+    // If the stored countryQuestionnaire countryCode doesn't match
+    // the application's country, discard it.
+    let validatedAppFields = { ...appScopeFields };
+    if (appScopeFields.countryQuestionnaire && application?.country) {
+      const storedCountryCode = (appScopeFields.countryQuestionnaire as any)?.countryCode;
+      const appCountryCode = application.country; // application.country is the country code
+      if (storedCountryCode && storedCountryCode !== appCountryCode) {
+        // Country mismatch — treat Country Questions as unset for this application
+        delete validatedAppFields.countryQuestionnaire;
+      }
+    }
+
     return {
-      profile: { ...stripApplicationScopeFields(studentProfile), ...(ctx?.fields || {}) },
+      profile: { ...stripApplicationScopeFields(studentProfile), ...validatedAppFields },
       applicationContextSource: "APPLICATION_CONTEXT",
       crossApplicationFallbackUsed: false,
       provenance: ctx?.provenance || {},

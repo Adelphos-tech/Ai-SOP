@@ -18,6 +18,7 @@ import {
   INTAKE_SECTIONS,
   calculateIntakeCompletion,
   getProfileReadiness,
+  buildReadinessFromServerResponse,
 } from "@/lib/application/intake-completion";
 import {
   getCountryQuestionnaire,
@@ -56,6 +57,50 @@ interface Application {
   intake: string;
   intakeYear: string;
   status: string;
+}
+
+// ============================================================
+// HELPER: Determine next missing section after save
+// ============================================================
+function getNextMissingSection(
+  currentSection: { id: number; slug: string } | null,
+  missingSections: Array<{ id: number; slug: string }>
+): { slug: string; reason: "next" | "wrap" | "last" | "none" } | null {
+  if (!currentSection || missingSections.length === 0) return null;
+
+  // Find missing sections strictly AFTER current section
+  const laterMissing = missingSections.filter(s => s.id > currentSection.id);
+  if (laterMissing.length > 0) {
+    return { slug: laterMissing[0].slug, reason: "next" };
+  }
+
+  // No later missing — wrap to first remaining missing
+  return { slug: missingSections[0].slug, reason: "wrap" };
+}
+
+function sectionCompletionToNav(section: { sectionId: number; slug: string }): { id: number; slug: string } {
+  return { id: section.sectionId, slug: section.slug };
+}
+
+function getMissingFieldsDisplay(missingFields: string[]): string {
+  // Map internal field names to user-friendly labels
+  const fieldLabels: Record<string, string> = {
+    "first name": "First name",
+    "last name": "Last name",
+    "nationality": "Nationality",
+    "current country": "Current country",
+    "education history": "Education history",
+    "whyField": "Why this field?",
+    "whyNow": "Why now?",
+    "academicMotivation": "Academic motivation",
+    "skillGaps": "Skill gaps",
+    "professionalMotivation": "Professional motivation",
+    "expectedLearning": "Expected learning",
+    "careerSupport": "Career support",
+  };
+  if (missingFields.length === 0) return "";
+  const labels = missingFields.map(f => fieldLabels[f] || f);
+  return labels.join(", ");
 }
 
 export default function IntakePage() {
@@ -167,29 +212,31 @@ export default function IntakePage() {
     }
   }
 
-  // Save profile — throws on error so callers can block navigation
-  const saveProfile = useCallback(async (values: IntakeProfileForm) => {
+  // Save profile — returns readiness data from server response
+  const saveProfile = useCallback(async (values: IntakeProfileForm): Promise<{
+    revision: number;
+    readiness?: { complete: boolean; missingSections: string[]; missingCount: number };
+  }> => {
     setSaving(true);
     setSaveStatus("saving");
     try {
       const res = await fetch("/api/application/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        // Conditional write — never clobber a newer profile (e.g. a CV
-        // apply that landed after this page loaded).
         body: JSON.stringify({ studentId, applicationId, profileData: values, expectedRevision: profileRevision }),
       });
       if (res.ok) {
         const data = await res.json().catch(() => null);
-        if (data && typeof data.revision === "number") setProfileRevision(data.revision);
+        const revision = data && typeof data.revision === "number" ? data.revision : profileRevision + 1;
+        setProfileRevision(revision);
         setSaveStatus("saved");
-        // reset() the saved values — isDirty returns to false.
         reset(values);
         setTimeout(() => setSaveStatus("idle"), 2000);
+        return {
+          revision,
+          readiness: data?.readiness,
+        };
       } else if (res.status === 409) {
-        // Profile changed since load — reload fresh state, keep the
-        // user's unsaved field on top would lose data; safest is reload
-        // + visible message so the user re-saves intentionally.
         await loadAll();
         const msg = "Profile was updated elsewhere (e.g. CV import). Latest data loaded — please re-apply your change and save again.";
         setSaveStatus("error");
@@ -214,26 +261,58 @@ export default function IntakePage() {
     }
   }, [studentId, applicationId, profileRevision, reset]);
 
-  // Save & Continue — validates, saves, blocks navigation on failure.
-  // Wizard mode stays on /intake/missing and reloads so the next
-  // missing required section becomes the current one.
+  // Save & Continue — validates, saves, then deterministically computes next section.
+  // Uses server response readiness for navigation — no stale loadAll() race.
   const handleSaveAndContinue = handleSubmit(async (values) => {
+    let saveResult;
     try {
-      await saveProfile(values);
+      saveResult = await saveProfile(values);
     } catch (err: any) {
       setError(err?.message || "Failed to save. Please try again.");
       return;
     }
+
+    // Determine next section using server-provided readiness (or liveProfile fallback)
+    let readiness;
+    if (saveResult?.readiness) {
+      // Build readiness from server response using helper
+      readiness = buildReadinessFromServerResponse(saveResult.readiness.missingSections);
+    } else {
+      readiness = getProfileReadiness(liveProfile, application);
+    }
+
+    const missingRequired = readiness.sections.filter(s => !s.optional && s.status !== "complete");
+    const current = currentSection ? { id: currentSection.id, slug: currentSection.slug } : null;
+
     if (wizardMode) {
-      await loadAll();
+      // Determine next missing section
+      const missingRequiredNav = missingRequired.map(s => ({ id: s.sectionId, slug: s.slug }));
+      const nextResult = getNextMissingSection(current, missingRequiredNav);
+      
+      if (nextResult) {
+        // Advance to next missing section
+        setActiveWizardSection(nextResult.slug);
+        // Update form with fresh server data for the new section
+        await loadAll(); // for form rehydration only
+      } else if (missingRequired.length === 0) {
+        // All complete — exit wizard to Application Workspace
+        router.push(`/students/${studentId}/applications/${applicationId}`);
+      } else if (current && missingRequired.length === 1 && missingRequired[0].sectionId === current.id) {
+        // Only current section remains incomplete — save succeeded but section not complete
+        const missingFields = missingRequired[0].missingFields || [];
+        const guidance = missingFields.length > 0
+          ? `Your answers were saved, but this section still needs: ${getMissingFieldsDisplay(missingFields)}.`
+          : "Your answers were saved, but this section still needs more information.";
+        setError(guidance);
+      }
       return;
     }
-    // Navigate to next section
+
+    // Non-wizard mode: navigate to next section or workspace
     const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
     if (nextSection) {
       router.push(`/students/${studentId}/applications/${applicationId}/intake/${nextSection.slug}`);
     } else {
-      // Last section — go to application workspace
       router.push(`/students/${studentId}/applications/${applicationId}`);
     }
   });

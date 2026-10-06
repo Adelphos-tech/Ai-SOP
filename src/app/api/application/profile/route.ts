@@ -157,7 +157,10 @@ export async function PUT(request: NextRequest) {
       let profileToSave = studentScopeFields;
       if (application) {
         const existing = (await getStudentProfile(body.studentId)) || {};
-        profileToSave = { ...existing, ...studentScopeFields };
+        // Strip application-scope fields from existing profile to prevent
+        // legacy shared app-scope values from being re-written to student profile.
+        const existingStudentScope = stripApplicationScopeFields(existing);
+        profileToSave = { ...existingStudentScope, ...studentScopeFields };
       }
       const saved = await saveStudentProfileConditional(
         body.studentId,
@@ -209,7 +212,10 @@ export async function PUT(request: NextRequest) {
     let profileToSave = { ...studentScopeFields, _revision: currentRev + 1 };
     if (application) {
       const existing = (await getStudentProfile(body.studentId)) || {};
-      profileToSave = { ...existing, ...profileToSave };
+      // Strip application-scope fields from existing profile to prevent
+      // legacy shared app-scope values from being re-written to student profile.
+      const existingStudentScope = stripApplicationScopeFields(existing);
+      profileToSave = { ...existingStudentScope, ...studentScopeFields, _revision: currentRev + 1 };
       savedContextData = buildContextDataForSave(application, appScopeFields, profileToSave);
     }
     await saveStudentProfile(body.studentId, profileToSave);
