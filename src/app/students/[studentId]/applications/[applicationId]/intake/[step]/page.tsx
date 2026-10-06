@@ -199,7 +199,8 @@ export default function IntakePage() {
       // Wizard: pick the first missing REQUIRED section ONCE per load.
       // This is the only place (besides identity reset) that writes
       // activeWizardSection — field changes can never re-derive it.
-      if (wizardMode) {
+      // Only set if not already set (to avoid overwriting explicit navigation).
+      if (wizardMode && activeWizardSection === null) {
         const readiness = getProfileReadiness(loadedProfile || getValues(), loadedApp);
         const missing = readiness.sections.filter(s => !s.optional && s.status !== "complete");
         setActiveWizardSection(missing[0]?.slug ?? null);
@@ -263,7 +264,7 @@ export default function IntakePage() {
 
   // Save & Continue — validates, saves, then deterministically computes next section.
   // Uses server response readiness for navigation — no stale loadAll() race.
-  const handleSaveAndContinue = handleSubmit(async (values) => {
+  const handleSaveAndContinue = async (values: IntakeProfileForm) => {
     let saveResult;
     try {
       saveResult = await saveProfile(values);
@@ -292,8 +293,11 @@ export default function IntakePage() {
       if (nextResult) {
         // Advance to next missing section
         setActiveWizardSection(nextResult.slug);
-        // Update form with fresh server data for the new section
-        await loadAll(); // for form rehydration only
+        // NOTE: Do NOT call loadAll() here — it would overwrite activeWizardSection
+        // with the first missing section. The server response readiness already
+        // confirmed the next section. We only need to refresh form values for the
+        // new section, which happens naturally when the section component re-renders
+        // with the updated activeWizardSection.
       } else if (missingRequired.length === 0) {
         // All complete — exit wizard to Application Workspace
         router.push(`/students/${studentId}/applications/${applicationId}`);
@@ -315,7 +319,7 @@ export default function IntakePage() {
     } else {
       router.push(`/students/${studentId}/applications/${applicationId}`);
     }
-  });
+  };
 
   // Skip optional section — also save current progress before navigating.
   // Skip intentionally saves without blocking validation (draft semantics).
@@ -333,6 +337,22 @@ export default function IntakePage() {
       router.push(`/students/${studentId}/applications/${applicationId}`);
     }
   }
+
+  // Save & Finish — saves current edits and exits to Application Workspace.
+  // Does NOT require intake to be complete. Preserves incomplete-state warnings in workspace.
+  const handleSaveAndFinish = async () => {
+    const values = getValues();
+    
+    let saveResult;
+    try {
+      saveResult = await saveProfile(values);
+    } catch (err: any) {
+      setError(err?.message || "Failed to save. Please try again.");
+      return;
+    }
+    // Save succeeded — exit to Application Workspace regardless of completeness
+    router.push(`/students/${studentId}/applications/${applicationId}`);
+  };
 
   // Live values for completion/progress — completion stays LIVE but
   // never controls the rendered section while the user is editing.
@@ -445,6 +465,7 @@ export default function IntakePage() {
       )}
 
       <FormProvider {...methods}>
+        <form onSubmit={e => { e.preventDefault(); handleSubmit(handleSaveAndContinue)(e); }}>
         {/* CV Upload — only on Section 1 */}
         {displayStep === 1 && (
           <div className="mb-6">
@@ -478,50 +499,65 @@ export default function IntakePage() {
         <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6 mb-6">
           {renderSection(displayStep, application)}
         </div>
-      </FormProvider>
 
-      {/* Navigation */}
-      <div className="flex justify-between items-center flex-wrap gap-3">
-        {wizardMode ? (
-          <Link href={`/students/${studentId}/applications/${applicationId}`}>
-            <SecondaryButton>← Back to application</SecondaryButton>
-          </Link>
-        ) : prevSection ? (
-          <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
-            <SecondaryButton>← Back</SecondaryButton>
-          </Link>
-        ) : (
-          <Link href={`/students/${studentId}/applications/${applicationId}`}>
-            <SecondaryButton>← Back</SecondaryButton>
-          </Link>
-        )}
-
-        <div className="flex gap-3 items-center flex-wrap">
+        {/* Navigation */}
+        <div className="flex justify-between items-center flex-wrap gap-3">
           {wizardMode ? (
-            <Link
-              href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}
-              className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
-            >
-              Review all information
+            <Link href={`/students/${studentId}/applications/${applicationId}`}>
+              <SecondaryButton>← Back to application</SecondaryButton>
+            </Link>
+          ) : prevSection ? (
+            <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
+              <SecondaryButton>← Back</SecondaryButton>
             </Link>
           ) : (
-            <Link
-              href={`/students/${studentId}/applications/${applicationId}`}
-              className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
-            >
-              Exit to application
+            <Link href={`/students/${studentId}/applications/${applicationId}`}>
+              <SecondaryButton>← Back</SecondaryButton>
             </Link>
           )}
-          {!wizardMode && currentSection!.optional && (
-            <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
-          )}
-          <PrimaryButton onClick={() => handleSaveAndContinue()} disabled={saving}>
-            {saving ? "Saving..." : wizardMode
-              ? (missingRequired.length > 1 ? "Save & Next Missing Answer →" : "Save & Finish →")
-              : nextSection ? "Save & Continue →" : "Save & Finish →"}
-          </PrimaryButton>
+
+          <div className="flex gap-3 items-center flex-wrap">
+            {wizardMode ? (
+              <Link
+                href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}
+                className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+              >
+                Review all information
+              </Link>
+            ) : (
+              <Link
+                href={`/students/${studentId}/applications/${applicationId}`}
+                className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+              >
+                Exit to application
+              </Link>
+            )}
+            {!wizardMode && currentSection!.optional && (
+              <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
+            )}
+            {wizardMode && missingRequired.length > 1 && (
+              <PrimaryButton type="submit" disabled={saving}>
+                Save & Next Missing Answer →
+              </PrimaryButton>
+            )}
+            {wizardMode && (
+              <PrimaryButton
+                type="button"
+                disabled={saving}
+                onClick={handleSaveAndFinish}
+              >
+                Save & Finish →
+              </PrimaryButton>
+            )}
+            {!wizardMode && (
+              <PrimaryButton type="submit" disabled={saving}>
+                {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
+              </PrimaryButton>
+            )}
+          </div>
         </div>
-      </div>
+        </form>
+      </FormProvider>
     </PageContainer>
   );
 }
