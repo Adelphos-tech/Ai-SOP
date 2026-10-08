@@ -439,8 +439,8 @@ function extractLocation(text: string): { city?: string; country?: string } {
 function extractEducation(text: string): ParsedEducation[] {
   const education: ParsedEducation[] = [];
 
-  // Look for education section
-  const eduSectionMatch = text.match(/(?:education|academic|qualifications)\s*:?\s*([\s\S]*?)(?=\n\s*(?:experience|employment|work|projects|skills|certifications|awards|$))/i);
+  // Look for education section — stop at next recognized resume section heading
+  const eduSectionMatch = text.match(/(?:education|academic|qualifications)\s*:?\s*([\s\S]*?)(?=\n\s*(?:experience|employment|work|projects|skills|certifications|awards|academic appointments|research|publications|teaching|volunteer|languages|summary|objective|profile|interests|hobbies|references|achievements|leadership|patents|conferences|$))/i);
   const eduText = eduSectionMatch ? eduSectionMatch[1] : text;
 
   const lines = eduText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
