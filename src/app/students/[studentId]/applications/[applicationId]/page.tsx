@@ -131,8 +131,7 @@ export default function ApplicationWorkspacePage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [reqLookup, setReqLookup] = useState<RequirementLookupResult | null>(null);
+    const [reqLookup, setReqLookup] = useState<RequirementLookupResult | null>(null);
   const [selectedWritingReqId, setSelectedWritingReqId] = useState<string | null>(null);
 
   const [documentType, setDocumentType] = useState<DocumentType>("STATEMENT_OF_PURPOSE");
@@ -168,8 +167,7 @@ export default function ApplicationWorkspacePage() {
     setDocuments([]);
     setReqLookup(null);
     setError("");
-    setShowAddForm(false);
-    loadApplication();
+        loadApplication();
   }, [applicationId, studentId]);
 
   async function loadApplication() {
@@ -270,8 +268,7 @@ export default function ApplicationWorkspacePage() {
       const docData = await res.json();
       const newDocId = docData.document?.id;
 
-      setShowAddForm(false);
-      setDocumentType("STATEMENT_OF_PURPOSE");
+            setDocumentType("STATEMENT_OF_PURPOSE");
       setDocumentTitle("");
       setPromptText("");
       setPromptSource("CONSULTANT_PROVIDED");
@@ -480,7 +477,7 @@ export default function ApplicationWorkspacePage() {
     const missingCount = missingSections.length;
     primaryCta = { label: `Complete ${missingCount} Missing Answer${missingCount !== 1 ? "s" : ""} →`, href: intakeHref };
   } else if (documents.length === 0) {
-    primaryCta = { label: "+ Add Document →", href: "", onClick: () => setShowAddForm(true) };
+    primaryCta = { label: "+ Add Document →", href: `/students/${studentId}/applications/${applicationId}/documents/new` };
   } else if (hasNeedsReview(documents)) {
     const needsReviewDoc = documents.find(d => d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW");
     primaryCta = { label: "Review Document →", href: needsReviewDoc ? `/students/${studentId}/applications/${applicationId}/documents/${needsReviewDoc.id}` : docWorkspaceHref! };
@@ -491,7 +488,7 @@ export default function ApplicationWorkspacePage() {
     const failedDoc = documents.find(d => d.generationStatus === "FAILED");
     primaryCta = { label: "Review / Retry →", href: failedDoc ? `/students/${studentId}/applications/${applicationId}/documents/${failedDoc.id}` : docWorkspaceHref! };
   } else {
-    primaryCta = { label: "+ Add Document →", href: "", onClick: () => setShowAddForm(true) };
+    primaryCta = { label: "+ Add Document →", href: `/students/${studentId}/applications/${applicationId}/documents/new` };
   }
 
   // Compute metrics
@@ -649,18 +646,14 @@ export default function ApplicationWorkspacePage() {
       {/* Documents Section (Primary Focus) */}
       <div className="mb-4 flex items-center justify-between gap-4">
         <h2 className="text-section-title text-dvivid-text-primary">Documents</h2>
-        {!showAddForm && (
-          <SecondaryButton onClick={() => setShowAddForm(true)}>+ Add Document</SecondaryButton>
-        )}
+        <Link href={`/students/${studentId}/applications/${applicationId}/documents/new`}><PrimaryButton>+ Add Document</PrimaryButton></Link>
       </div>
 
       {documents.length === 0 ? (
         <EmptyState
           title="No Documents Yet"
           description="Add an SOP, essay, personal statement or other writing task."
-          action={
-            <PrimaryButton onClick={() => setShowAddForm(true)}>Add First Document</PrimaryButton>
-          }
+          action={<Link href={`/students/${studentId}/applications/${applicationId}/documents/new`}><PrimaryButton>Add First Document</PrimaryButton></Link>}
         />
       ) : (
         <div className="space-y-3">
@@ -775,219 +768,6 @@ export default function ApplicationWorkspacePage() {
       )}
 
       {/* Add Document Form */}
-      {showAddForm && (
-        <SectionCard title="Add Document" description="Create a new writing task for this application." className="mt-8">
-          {/* Available writing requirements */}
-          {reqLookup?.writingRequirements && reqLookup.writingRequirements.length > 0 && (
-            <div className="mb-6 pb-6 border-b border-dvivid-border-light">
-              <p className="text-sm font-medium text-dvivid-text-secondary mb-3">Available Official Requirements</p>
-              <div className="space-y-2">
-                {reqLookup.writingRequirements.map((wr) => (
-                  <label
-                    key={wr.id}
-                    className={`flex items-start gap-3 p-4 border rounded-input cursor-pointer transition-colors ${
-                      selectedWritingReqId === wr.id
-                        ? "border-dvivid-primary bg-dvivid-primary-light"
-                        : "border-dvivid-border hover:border-dvivid-primary-border"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="writingReq"
-                      checked={selectedWritingReqId === wr.id}
-                      onChange={() => {
-                        setSelectedWritingReqId(wr.id);
-                        setDocumentType(wr.documentType as DocumentType);
-                        setDocumentTitle(wr.officialTitle);
-                        setPromptText(wr.promptText);
-                        setPromptSource("OFFICIAL_VERIFIED");
-                        setWordMin(wr.wordMin?.toString() || "");
-                        setWordMax(wr.wordMax?.toString() || "");
-                        setCharacterLimit(wr.characterLimit?.toString() || "");
-                        setPageLimit(wr.pageLimit?.toString() || "");
-                        setSpecialInstructions(wr.specialInstructions || "");
-                      }}
-                      className="mt-0.5"
-                    />
-                    <div>
-                      <p className="text-sm font-medium text-dvivid-text-primary">{wr.officialTitle}</p>
-                      <p className="text-sm text-dvivid-text-secondary mt-0.5">
-                        {wr.documentType.replace(/_/g, " ").toLowerCase()}
-                        {wr.wordMax ? ` · ${wr.wordMin || 0}–${wr.wordMax} words` : ""}
-                        {wr.required ? " · required" : ""}
-                      </p>
-                    </div>
-                  </label>
-                ))}
-                <label
-                  className={`flex items-start gap-3 p-4 border rounded-input cursor-pointer transition-colors ${
-                    selectedWritingReqId === null
-                      ? "border-dvivid-primary bg-dvivid-primary-light"
-                      : "border-dvivid-border hover:border-dvivid-primary-border"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="writingReq"
-                    checked={selectedWritingReqId === null}
-                    onChange={() => {
-                      setSelectedWritingReqId(null);
-                      setDocumentType("STATEMENT_OF_PURPOSE");
-                      setDocumentTitle("");
-                      setPromptText("");
-                      setPromptSource("CONSULTANT_PROVIDED");
-                      setWordMin("");
-                      setWordMax("");
-                      setCharacterLimit("");
-                      setPageLimit("");
-                      setSpecialInstructions("");
-                    }}
-                    className="mt-0.5"
-                  />
-                  <div>
-                    <p className="text-sm font-medium text-dvivid-text-primary">+ Add document manually</p>
-                    <p className="text-sm text-dvivid-text-secondary mt-0.5">Enter your own prompt and instructions</p>
-                  </div>
-                </label>
-              </div>
-            </div>
-          )}
-
-          <div className="mb-5">
-            <FormField label="Document Type" required>
-              <select className={inputClass} value={documentType} onChange={e => setDocumentType(e.target.value as DocumentType)}>
-                {DOCUMENT_TYPE_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </FormField>
-          </div>
-
-          <div className="mb-5">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-sm font-medium text-dvivid-text-primary">
-                {promptUi.label} {promptUi.required && <span className="text-dvivid-error">*</span>}
-              </label>
-              {(promptUi.primaryLookupLabel || promptUi.secondaryLookupLabel) && (
-                <div className="flex gap-2">
-                  {promptUi.primaryLookupLabel && (
-                    <button
-                      type="button"
-                      onClick={handleAutoResolve}
-                      disabled={resolving}
-                      className="px-3 py-1.5 text-xs font-medium text-dvivid-primary border border-dvivid-primary/30 rounded-button hover:bg-dvivid-primary-light transition-colors disabled:opacity-50"
-                    >
-                      {resolving ? "Finding requirements..." : promptUi.primaryLookupLabel}
-                    </button>
-                  )}
-                  {promptUi.secondaryLookupLabel && (
-                    <button
-                      type="button"
-                      onClick={handleTriggerDiscovery}
-                      disabled={resolving}
-                      className="px-3 py-1.5 text-xs font-medium text-dvivid-text-secondary border border-dvivid-border rounded-button hover:bg-dvivid-surface-alt transition-colors disabled:opacity-50"
-                    >
-                      {resolving ? "Searching..." : promptUi.secondaryLookupLabel}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-            <textarea
-              className={`${inputClass} min-h-[120px] resize-y`}
-              value={promptText}
-              onChange={e => setPromptText(e.target.value)}
-              placeholder={promptUi.placeholder}
-            />
-            {resolutionLabel && (
-              <div className="mt-2 flex items-center gap-2">
-                <span className="text-xs text-dvivid-text-muted">Prompt found via:</span>
-                <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-                  resolutionPath === "DB_REUSED" ? "bg-dvivid-success-light text-dvivid-success" :
-                  resolutionPath === "DISCOVERY_SAVED" ? "bg-dvivid-primary-light text-dvivid-primary" :
-                  resolutionPath === "DEFAULT_TEMPLATE" ? "bg-dvivid-warning-light text-dvivid-warning" :
-                  "bg-gray-100 text-dvivid-text-secondary"
-                }`}>
-                  {resolutionLabel}
-                </span>
-              </div>
-            )}
-          </div>
-
-          <FormField label="Consultant Instruction (optional)" helper="Your own guidance for the writing — kept separate from the university prompt." className="mb-5">
-            <textarea className={`${inputClass} min-h-[80px] resize-y`} value={specialInstructions} onChange={e => setSpecialInstructions(e.target.value)} placeholder="e.g. Emphasize the student's research internship over coursework..." />
-          </FormField>
-
-          <details className="mb-6 group">
-            <summary className="text-sm font-medium text-dvivid-text-secondary cursor-pointer list-none flex items-center gap-2">
-              <span className="text-dvivid-text-muted group-open:rotate-90 transition-transform inline-block">▸</span>
-              Advanced options (title, prompt source, length limits, topics, questions, formatting)
-            </summary>
-            <div className="pt-4 mt-3 border-t border-dvivid-border-light space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <FormField label="Document Title">
-                  <input className={inputClass} value={documentTitle} onChange={e => setDocumentTitle(e.target.value)} placeholder="Statement of Objectives" />
-                </FormField>
-                <FormField label="Prompt Source">
-                  <select className={inputClass} value={promptSource} onChange={e => setPromptSource(e.target.value as PromptSource)}>
-                    {PROMPT_SOURCE_OPTIONS.filter(o => o.value !== "OFFICIAL_VERIFIED" && o.value !== "DVIVID_DEFAULT_TEMPLATE").map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                </FormField>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {([
-                  ["Word Min", "wordMin", wordMin, setWordMin],
-                  ["Word Max", "wordMax", wordMax, setWordMax],
-                  ["Character Limit", "characterLimit", characterLimit, setCharacterLimit],
-                  ["Page Limit", "pageLimit", pageLimit, setPageLimit],
-                ] as const).map(([label, key, val, setter]) => {
-                  return (
-                    <FormField key={key} label={label}>
-                      <input className={inputClass} type="number" value={val} onChange={e => setter(e.target.value)} placeholder="—" />
-                    </FormField>
-                  );
-                })}
-              </div>
-              <FormField label="Mandatory Topics (one per line)">
-                <textarea
-                  className={inputClass}
-                  rows={3}
-                  value={mandatoryTopics}
-                  onChange={e => setMandatoryTopics(e.target.value)}
-                  placeholder={"Research methodology\nData ethics\nLeadership experience"}
-                />
-              </FormField>
-              <FormField label="Additional / Specific Questions (one per line)">
-                <textarea
-                  className={inputClass}
-                  rows={3}
-                  value={additionalQuestions}
-                  onChange={e => setAdditionalQuestions(e.target.value)}
-                  placeholder={"Describe a challenge you overcame.\nWhy this specific program?"}
-                />
-              </FormField>
-              <FormField label="Formatting Rules">
-                <textarea
-                  className={inputClass}
-                  rows={2}
-                  value={formattingInstructions}
-                  onChange={e => setFormattingInstructions(e.target.value)}
-                  placeholder="12pt font, 1.5 line spacing, margins 1 inch"
-                />
-              </FormField>
-            </div>
-          </details>
-
-          <div className="flex gap-3 justify-end">
-            <SecondaryButton onClick={() => setShowAddForm(false)}>Cancel</SecondaryButton>
-            <PrimaryButton onClick={handleAddDocument} disabled={saving}>
-              {saving ? "Saving..." : "Create Document"}
-            </PrimaryButton>
-          </div>
-        </SectionCard>
-      )}
       {/* Error */}
       {error && (
         <div className="mb-6 p-4 bg-dvivid-error-light border border-dvivid-error/20 rounded-input">
