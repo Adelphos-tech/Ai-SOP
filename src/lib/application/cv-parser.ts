@@ -440,16 +440,16 @@ function extractEducation(text: string): ParsedEducation[] {
   const education: ParsedEducation[] = [];
 
   // Look for education section — stop at next recognized resume section heading
-  const eduSectionMatch = text.match(/(?:education|academic|qualifications)\s*:?\s*([\s\S]*?)(?=\n\s*(?:experience|employment|work|projects|skills|certifications|awards|academic appointments|research|publications|teaching|volunteer|languages|summary|objective|profile|interests|hobbies|references|achievements|leadership|patents|conferences|$))/i);
+  const eduSectionMatch = text.match(/(?:education|academic|qualifications)\s*:?\s*([\s\S]*?)(?=\n\s*(?:experience|employment|work|projects|skills|certifications|awards|academic appointments|research|publications|teaching|volunteer|languages|summary|objective|profile|interests|hobbies|references|achievements|leadership|patents|conferences|subjects|co-curricular|extra-curricular|curricular activities|activities|$))/i);
   const eduText = eduSectionMatch ? eduSectionMatch[1] : text;
 
   const lines = eduText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
-  // Common degree keywords
-  const degreeKeywords = /(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC)/i;
+  // Common degree keywords — word-bounded to prevent substring false matches (e.g. "ME" in "Time").
+  const degreeKeywords = /(?<![A-Za-z0-9])(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC)(?![A-Za-z0-9])/i;
 
-  // Common institution keywords
-  const institutionKeywords = /(?:University|Institute|College|School|IIT|NIT|IIIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge|Polytechnic)/i;
+  // Common institution keywords — word-bounded to prevent substring false matches (e.g. "VIT" in "activities").
+  const institutionKeywords = /(?<![A-Za-z0-9])(?:University|Institute|College|School|IIT|NIT|IIIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge|Polytechnic|Board)(?![A-Za-z0-9])/i;
 
   let currentEdu: Partial<ParsedEducation> | null = null;
 
@@ -458,7 +458,8 @@ function extractEducation(text: string): ParsedEducation[] {
     const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
 
     // Check for degree keyword
-    const hasDegree = degreeKeywords.test(line);
+    // Suppress degree matches on lines that are clearly board names (e.g. "Gujarat Secondary and Higher Secondary Education Board")
+    const hasDegree = !/\bboard\b/i.test(line) && degreeKeywords.test(line);
     const hasInstitution = institutionKeywords.test(line);
 
     if (hasDegree || hasInstitution) {
@@ -495,7 +496,7 @@ function extractEducation(text: string): ParsedEducation[] {
         } else {
           // Single line — try to extract degree and institution
           if (hasDegree) currentEdu.degree = line.match(degreeKeywords)?.[0] || line;
-          if (hasInstitution) currentEdu.institution = line.match(institutionKeywords)?.[0] || line;
+          if (hasInstitution) currentEdu.institution = line;
         }
       }
     }
@@ -508,8 +509,8 @@ function extractEducation(text: string): ParsedEducation[] {
         currentEdu.endYear = yearMatch[2]?.match(/\d{4}/)?.[0] || "";
       }
 
-      // Check for CGPA
-      const cgpaMatch = line.match(/(?:CGPA|GPA|CPI|SGPA)\s*:?\s*(\d+\.?\d*)\s*(?:\/|out of)?\s*(\d+\.?\d*)?/i);
+      // Check for CGPA or Percentage
+      const cgpaMatch = line.match(/(?:CGPA|GPA|CPI|SGPA|Percentage)\s*[:=\-–—]?\s*(\d+\.?\d*)\s*(?:\/|out of|%)?\s*(\d+\.?\d*)?/i);
       if (cgpaMatch) {
         currentEdu.cgpa = cgpaMatch[1];
         if (cgpaMatch[2]) currentEdu.cgpaScale = cgpaMatch[2];
@@ -531,7 +532,34 @@ function extractEducation(text: string): ParsedEducation[] {
     });
   }
 
-  return education;
+  // Merge adjacent fragmented records: degree-only + institution-only pairs
+  const merged: ParsedEducation[] = [];
+  for (let i = 0; i < education.length; i++) {
+    const current = education[i];
+    const next = education[i + 1];
+    if (
+      next &&
+      ((current.degree && !current.institution && next.institution && !next.degree) ||
+       (!current.degree && current.institution && next.degree && !next.institution))
+    ) {
+      merged.push({
+        id: current.id,
+        institution: current.institution || next.institution,
+        degree: current.degree || next.degree,
+        specialization: current.specialization || next.specialization || "",
+        startYear: current.startYear || next.startYear || "",
+        endYear: current.endYear || next.endYear || "",
+        cgpa: current.cgpa || next.cgpa || "",
+        cgpaScale: current.cgpaScale || next.cgpaScale || "10",
+      });
+      i++; // skip next
+    } else {
+      merged.push(current);
+    }
+  }
+
+  // Drop board-only header records that have no degree — they are structural fragments, not entries.
+  return merged.filter(e => !(e.degree === "" && /\bboard\b/i.test(e.institution)));
 }
 
 /**
