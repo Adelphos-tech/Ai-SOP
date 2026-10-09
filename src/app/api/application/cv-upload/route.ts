@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
     // CV_PARSER_FALLBACK are superseded — the pipeline always degrades
     // gracefully. Bump CV_PIPELINE_VERSION on chain changes so cached
     // metas re-parse.
-    const CV_PIPELINE_VERSION = "1";
+    const CV_PIPELINE_VERSION = "2";
 
     if (existingMeta) {
       // Idempotent reuse ONLY when the stored parse came from the same
