@@ -36,7 +36,7 @@
     "file": "02_table_heavy_program_manager.docx",
     "hash": "ca0e435cb406404a77dd2b32e8eaed76f9f19a52897d1e8de60e32e01386c506",
     "size": 38688,
-    "extractionStrategy": "docling",
+    "extractionStrategy": "mammoth_html",
     "detectedSections": [
       "EDUCATION",
       "EXPERIENCE",
@@ -44,7 +44,7 @@
       "CERTIFICATIONS"
     ],
     "unknownSections": [],
-    "education": 3,
+    "education": 2,
     "experience": 3,
     "projects": 3,
     "skills": {
@@ -59,8 +59,8 @@
     "achievements": 0,
     "warnings": [
       "No skills detected.",
-      "Quality: 1757 chars, 0/1 empty pages, tables: 0, interleaved: false",
-      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+      "Quality: 1757 chars, 0/1 empty pages, tables: 37, interleaved: false",
+      "Route: mammoth_html - DOCX with tables extracted successfully via Mammoth HTML"
     ],
     "suspiciousRecords": [],
     "parseOutcome": "SUCCESS"
@@ -138,7 +138,7 @@
     "file": "05_academic_research_cv.docx",
     "hash": "22caf97057510ea53db6dc92132dfa3c6ef0f2128f2b67712c6b337cf6950ca3",
     "size": 38306,
-    "extractionStrategy": "docling",
+    "extractionStrategy": "mammoth_html",
     "detectedSections": [
       "EDUCATION",
       "EXPERIENCE",
@@ -163,7 +163,7 @@
       "Could not detect phone. Please enter manually.",
       "No projects detected.",
       "Quality: 1842 chars, 0/1 empty pages, tables: 0, interleaved: false",
-      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+      "Route: mammoth_html - DOCX without complex tables uses Mammoth HTML extraction"
     ],
     "suspiciousRecords": [],
     "parseOutcome": "SUCCESS"
@@ -207,7 +207,7 @@
     "file": "07_unusual_headings_cybersecurity.docx",
     "hash": "5efd62021f649be87e699fbf49476117a8a6be52ef59ae9f6439cd65c2e87eb3",
     "size": 37509,
-    "extractionStrategy": "docling",
+    "extractionStrategy": "mammoth_html",
     "detectedSections": [
       "EDUCATION",
       "EXPERIENCE",
@@ -232,7 +232,7 @@
       "Could not detect phone. Please enter manually.",
       "No skills detected.",
       "Quality: 1286 chars, 0/1 empty pages, tables: 0, interleaved: false",
-      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+      "Route: mammoth_html - DOCX without complex tables uses Mammoth HTML extraction"
     ],
     "suspiciousRecords": [],
     "parseOutcome": "SUCCESS"
@@ -310,7 +310,7 @@
     "file": "10_repeated_header_footer_product_ops.docx",
     "hash": "62326814953360e5c86d6b67bf602f3d82ea8d9aca575b71c584f06b93ac88da",
     "size": 38835,
-    "extractionStrategy": "docling",
+    "extractionStrategy": "mammoth_html",
     "detectedSections": [
       "EDUCATION",
       "EXPERIENCE",
@@ -324,17 +324,17 @@
     "projects": 3,
     "skills": {
       "technical": 1,
-      "programming": 1,
+      "programming": 0,
       "tools": 1,
-      "software": 1,
+      "software": 0,
       "domain": 0,
       "soft": 0
     },
     "certifications": 2,
     "achievements": 0,
     "warnings": [
-      "Quality: 1654 chars, 0/1 empty pages, tables: 0, interleaved: false",
-      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+      "Quality: 1654 chars, 0/1 empty pages, tables: 8, interleaved: false",
+      "Route: mammoth_html - DOCX with tables extracted successfully via Mammoth HTML"
     ],
     "suspiciousRecords": [
       "EXPERIENCE_DUPLICATE_ORGANIZATIONS: 1 duplicate organizations"

@@ -856,7 +856,7 @@ function parseEducationSection(section: Section): ParsedEducation[] {
 }
 
 // --- Education table parser (for table-aware structured data) ---
-function parseEducationTableSection(section: Section): ParsedEducation[] {
+export function parseEducationTableSection(section: Section): ParsedEducation[] {
   const education: ParsedEducation[] = [];
   
 // Group blocks by tableId
@@ -932,6 +932,135 @@ const tables: Map<string, TextBlock[]> = new Map();
   }
   
   return education;
+}
+
+// --- Experience table parser (for table-aware structured data) ---
+export function parseExperienceTableSection(section: Section): ParsedExperience[] {
+  const experience: ParsedExperience[] = [];
+  
+  // Group blocks by tableId
+  const tables: Map<string, TextBlock[]> = new Map();
+  
+  for (const block of section.blocks) {
+    const tableId = block.metadata?.tableId;
+    if (tableId != null && typeof tableId === 'string') {
+      if (!tables.has(tableId)) {
+        tables.set(tableId, []);
+      }
+      tables.get(tableId)!.push(block);
+    }
+  }
+  
+  // Process each table
+  for (const [tableId, tableBlocks] of tables) {
+    // Sort by rowIndex, then columnIndex
+    const sortedBlocks = [...tableBlocks].sort((a, b) => {
+      const rowA = a.row ?? 0;
+      const rowB = b.row ?? 0;
+      if (rowA !== rowB) return rowA - rowB;
+      const colA = a.column ?? 0;
+      const colB = b.column ?? 0;
+      return colA - colB;
+    });
+    
+    // Group by rowIndex
+    const rows: Map<number, TextBlock[]> = new Map();
+    for (const block of sortedBlocks) {
+      const rowIndex = block.row ?? 0;
+      if (!rows.has(rowIndex)) {
+        rows.set(rowIndex, []);
+      }
+      rows.get(rowIndex)!.push(block);
+    }
+    
+    // Process each row
+    const sortedRowKeys = [...rows.keys()].sort((a, b) => a - b);
+    for (const rowIndex of sortedRowKeys) {
+      const rowBlocks = rows.get(rowIndex)!;
+      
+      // Skip header rows
+      const isHeaderRow = rowBlocks.some(b => b.metadata?.isHeader === true);
+      if (isHeaderRow) continue;
+      
+      // Extract cells in order
+      const cells: { [columnIndex: number]: string } = {};
+      for (const block of rowBlocks) {
+        const colIndex = block.column ?? 0;
+        cells[colIndex] = block.text;
+      }
+      
+      // Expect: Company / Role, Dates, Location, Selected Impact
+      // Column 0: Company / Role (may contain both)
+      // Column 1: Dates
+      // Column 2: Location
+      // Column 3: Selected Impact (responsibilities)
+      if (cells[0] !== undefined && cells[1] !== undefined) {
+        const companyRole = cells[0] || "";
+        const dateRange = cells[1] || "";
+        const location = cells[2] || "";
+        const responsibilities = cells[3] || "";
+        
+        // Parse company/role from combined field
+        let organization = "";
+        let role = "";
+        
+        // Try to split "Company / Role" or "Company Role"
+        if (companyRole.includes("/")) {
+          const parts = companyRole.split("/").map(p => p.trim());
+          organization = parts[0] || "";
+          role = parts[1] || "";
+        } else if (companyRole.includes(" ")) {
+          // Try to detect role keywords
+          const words = companyRole.split(/\s+/);
+          if (words.length >= 2) {
+            // Last word(s) might be role
+            const possibleRole = words.slice(-2).join(" ");
+            if (/manager|director|analyst|engineer|developer|lead|specialist|officer|president|vp|vice|head|chief/i.test(possibleRole)) {
+              role = possibleRole;
+              organization = words.slice(0, -2).join(" ");
+            } else {
+              organization = companyRole;
+            }
+          } else {
+            organization = companyRole;
+          }
+        } else {
+          organization = companyRole;
+        }
+        
+        // Parse date range
+        let startDate = "";
+        let endDate = "";
+        let currentlyWorking = false;
+        
+        const dateMatch = dateRange.match(/((?:20|19)\d{2})\s*(?:-|–|to)\s*((?:20|19)\d{2}|present|current|ongoing)/i);
+        if (dateMatch) {
+          startDate = dateMatch[1];
+          const end = dateMatch[2];
+          if (/present|current|ongoing/i.test(end)) {
+            currentlyWorking = true;
+            endDate = "";
+          } else {
+            endDate = end.match(/\d{4}/)?.[0] || "";
+          }
+        }
+        
+        experience.push({
+          id: generateId(),
+          type: "Full-time Job",
+          organization: organization,
+          role: role,
+          location: location,
+          startDate: startDate,
+          endDate: endDate,
+          currentlyWorking: currentlyWorking,
+          responsibilities: responsibilities,
+        });
+      }
+    }
+  }
+  
+  return experience;
 }
 
 // ============================================================
@@ -1593,8 +1722,16 @@ export function parseCVFromDocument(doc: ExtractedDocument): ParsedCV {
   const certificationsSection = sections.find(s => s.type === "CERTIFICATIONS");
   const achievementsSection = sections.find(s => s.type === "ACHIEVEMENTS");
 
-  const education = educationSection ? parseEducationSection(educationSection) : [];
-  const experience = experienceSection ? parseExperienceSection(experienceSection) : [];
+  const education = educationSection ? 
+    (educationSection.blocks.some(b => b.metadata && b.metadata.tableId) ? 
+      parseEducationTableSection(educationSection) : 
+      parseEducationSection(educationSection)) 
+    : [];
+  const experience = experienceSection ? 
+    (experienceSection.blocks.some(b => b.metadata && b.metadata.tableId) ? 
+      parseExperienceTableSection(experienceSection) : 
+      parseExperienceSection(experienceSection)) 
+    : [];
   const projects = projectsSection ? parseProjectsSection(projectsSection) : [];
   const skills = skillsSection ? parseSkillsSection(skillsSection) : {
     technical: [], programming: [], tools: [], software: [], domain: [], soft: []
@@ -1683,6 +1820,9 @@ export async function parseCVFile(buffer: Buffer, filename: string): Promise<Par
         columnIndex: undefined,
         blockType: b.blockType.toLowerCase() as any,
         order: b.order,
+        row: b.row,
+        column: b.column,
+        metadata: b.metadata,
       })),
       fullText: canonicalDoc.blocks.map(b => b.text).join("\n"),
       pageCount: canonicalDoc.pageCount,

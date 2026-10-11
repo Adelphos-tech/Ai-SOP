@@ -118,7 +118,8 @@ function assessExtractionQuality(
     totalChars += block.text.length;
     blockLengths.push(block.text.length);
 
-    if (block.blockType === "TABLE_ROW" || block.blockType === "TABLE_CELL") {
+    if (block.blockType === "TABLE_ROW" || block.blockType === "TABLE_CELL" || 
+      (block.blockType === "PARAGRAPH" && block.metadata && block.metadata.tableId)) {
       tableIndicators++;
     }
 
@@ -196,15 +197,17 @@ function decideExtractionRoute(
 
   // DOCX routing
   if (format === "docx") {
-    // If table indicators present OR layout metadata available, use Docling for better table handling
-    if (quality.tableIndicators > 0 || quality.hasLayoutMetadata) {
+    // Mammoth HTML extraction handles tables natively via Cheerio.
+    // Only fall back to Docling if Mammoth HTML extraction fails or yields poor quality.
+    // This preserves the proven Mammoth HTML + Cheerio table-aware architecture.
+    if (quality.tableIndicators > 0 && quality.hasLayoutMetadata) {
       return { 
-        strategy: "docling-native", 
-        reason: "DOCX with tables or layout benefits from Docling extraction" 
+        strategy: "mammoth_html", 
+        reason: "DOCX with tables extracted successfully via Mammoth HTML" 
       };
     }
-    // Simple DOCX - mammoth is acceptable
-    return { strategy: "mammoth", reason: "Simple DOCX without complex tables" };
+    // Simple DOCX - mammoth HTML extraction is acceptable
+    return { strategy: "mammoth_html", reason: "DOCX without complex tables uses Mammoth HTML extraction" };
   }
 
   // PDF routing
@@ -479,11 +482,14 @@ async function extractWithMammothHtml(buffer: Buffer, filename: string): Promise
         break;
         
       case 'table': // Tables
+        // Generate a unique table ID for this table
+        const tableId = `table_${blocks.length}_${order}`;
         elem.find('tr').each((rowIndex, tr) => {
           $(tr).find('td, th').each((cellIndex, td) => {
             const cellText = $(td).text().trim();
             if (cellText) {
-              const isHeader = $(td).is('th');
+              // First row of table is typically the header row
+              const isHeader = rowIndex === 0;
               blocks.push({
                 text: cellText,
                 page: 1,
@@ -496,7 +502,7 @@ async function extractWithMammothHtml(buffer: Buffer, filename: string): Promise
                 sourceStrategy: "mammoth_html",
                 confidence: 0.7,
                 metadata: { 
-                  tableId: `table_${order}`, 
+                  tableId: tableId, 
                   isHeader: isHeader 
                 },
               });
@@ -645,19 +651,20 @@ async function extractCanonicalBlocks(
     warnings.push(`Quality: ${quality.totalChars} chars, ${quality.emptyPages}/${pageCount} empty pages, tables: ${quality.tableIndicators}, interleaved: ${quality.interleavedColumns}`);
     warnings.push(`Route: ${route.strategy} - ${route.reason}`);
 
-    // STEP 3: Apply routing decision
+// STEP 3: Apply routing decision
     let finalBlocks: CanonicalBlock[];
     let finalOcrUsed = initialOcrUsed;
-    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" = "docling-native";
+    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" | "mammoth_html" = "docling-native";
     let finalDurationMs = initialDurationMs;
     const ocrPages: number[] = [];
 
-switch (route.strategy) {
-       case "mammoth":
-       case "mammoth_html":
-         // Already done
-         finalBlocks = initialBlocks;
-         break;
+    switch (route.strategy) {
+      case "mammoth":
+      case "mammoth_html":
+        // Already done
+        finalBlocks = initialBlocks;
+        finalStrategy = route.strategy;
+        break;
 
       case "docling-native":
         if (initialStrategy !== "docling") {
@@ -881,7 +888,7 @@ async function reconcileStructureWithPdfParse(
       return doclingBlocks; // pdf-parse doesn't have more lines
     }
     
-    // Find Docling headings and their associated body blocks
+// Find Docling headings and their associated body blocks
     const reconciled: CanonicalBlock[] = [];
     let i = 0;
     
@@ -896,20 +903,52 @@ async function reconcileStructureWithPdfParse(
         // NOT for narrative sections (PROFILE, SUMMARY, EDUCATION, EXPERIENCE)
         if (!isListTypeHeading(block.text)) {
           // Not a list-type heading, skip reconciliation
-         } else if (nextBlock.blockType === "PARAGRAPH" && 
-             looksLikeFlattenedContent(nextBlock.text)) {
+         } else {
           
-          // Try to match this heading in pdf-parse and get lines until next heading
+          // Find ALL consecutive body blocks that belong to this heading
+          // (until next KNOWN canonical section heading or end of array)
+          let bodyEnd = i + 1;
+          while (bodyEnd < doclingBlocks.length) {
+            const b = doclingBlocks[bodyEnd];
+            // Only stop at KNOWN canonical section headings, not arbitrary heading-like text
+            // This prevents TOOLS, SKILLS, etc. from incorrectly terminating list-type sections
+            const bIsCanonicalHeading = b.blockType === "HEADING" && 
+              ["EDUCATION", "EXPERIENCE", "PROJECTS", "SKILLS", "CERTIFICATIONS", "ACHIEVEMENTS", "PERSONAL", "SUMMARY", "OBJECTIVE", "PROFILE", "CERTIFICATIONS"].some(h => 
+                b.text.toUpperCase().includes(h)
+              );
+            if (bIsCanonicalHeading && bodyEnd > i + 1) {
+              // Next canonical heading found - body region ends before it
+              break;
+            }
+            if (bodyEnd === i + 1 || b.blockType === "PARAGRAPH" || b.blockType === "LIST_ITEM") {
+              bodyEnd++;
+            } else {
+              break;
+            }
+          }
+          
+          const bodyBlocks = doclingBlocks.slice(i + 1, bodyEnd);
+          
+          // For list-type headings, check if pdf-parse has more lines than Docling body blocks
+          // This handles cases where Docling splits a section across multiple headings incorrectly
           const matchedLines = matchHeadingInPdfParse(
             block.text, 
-            nextBlock.text, 
+            bodyBlocks.map(b => b.text).join(" "), 
             pdfLines
           );
           
+          // If pdf-parse has more lines than Docling body blocks, attempt reconciliation
+          if (!matchedLines || matchedLines.length <= bodyBlocks.length) {
+            i = bodyEnd;
+            continue;
+          }
+          
+          const bodyText = bodyBlocks.map(b => b.text).join(" ");
+          
           if (matchedLines && matchedLines.length > 1 && 
-              textEquivalenceCheck(nextBlock.text, matchedLines.join(" "))) {
+              textEquivalenceCheck(bodyText, matchedLines.join(" "))) {
             
-            // EQUIVALENCE CONFIRMED - split Docling block using pdf-parse lines
+            // EQUIVALENCE CONFIRMED - split Docling body blocks using pdf-parse lines
             warnings.push(`Structure reconciliation: split heading "${block.text.substring(0, 50)}..." into ${matchedLines.length} lines via pdf-parse`);
             
             reconciled.push(block); // Keep heading
@@ -934,7 +973,8 @@ async function reconcileStructureWithPdfParse(
               });
             }
             
-            i += 2; // Skip heading and flattened body
+            // Skip heading and ALL body blocks in the matched region
+            i = bodyEnd;
             continue;
           }
         }
@@ -1347,6 +1387,7 @@ export {
    extractWithMammoth,
    extractWithMammothHtml,
    assessExtractionQuality,
-   decideExtractionRoute
+   decideExtractionRoute,
+   reconcileStructureWithPdfParse
 };
 
