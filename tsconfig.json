@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "es2015",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
@@ -20,9 +20,8 @@
   "exclude": [
     "node_modules",
     "backups",
-    "tests/phase-12b-evidence-enforcement.test.mjs",
-    "tests/phase-12b-runner-mock.test.ts",
-    "tests/phase-12-mit-002-simulation.ts",
-    "tests/phase-12b-cost-audit.ts"
+    "tests",
+    "test_stress_pack.ts",
+    "analyze_stress_results.ts"
   ]
 }

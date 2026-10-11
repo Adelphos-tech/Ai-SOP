@@ -57,19 +57,20 @@ function makeCandidate(
 export const mammothSemanticStrategy: ResumeParserStrategy = {
   id: "MAMMOTH_SEMANTIC",
   timeoutMs: 30_000,
-  async parse(buffer, filename) {
-    const started = Date.now();
-    // parseCVFile does extractTextFromFile + parseCVText internally and
-    // already classifies unreadable/image-only cases as typed failures.
-    const parsed = await parseCVFile(buffer, filename);
-    const rawText = await extractTextFromFile(buffer, filename).catch(() => "");
-    return makeCandidate(
-      "MAMMOTH_SEMANTIC",
-      parsed,
-      rawText,
-      { rawTextLength: rawText.length, engine: "mammoth", mapperVersion: "legacy-1" },
-    );
-  },
+   async parse(buffer, filename) {
+     const started = Date.now();
+     // parseCVFile does extractTextFromFile + parseCVText internally and
+     // already classifies unreadable/image-only cases as typed failures.
+     const parsed = await parseCVFile(buffer, filename);
+     const rawTextResult = await extractTextFromFile(buffer, filename).catch(() => ({ fullText: "" }));
+     const rawText = rawTextResult.fullText;
+     return makeCandidate(
+       "MAMMOTH_SEMANTIC",
+       parsed,
+       rawText,
+       { rawTextLength: rawText.length, engine: "mammoth", mapperVersion: "legacy-1" },
+     );
+   },
 };
 
 // ============================================================
@@ -116,14 +117,15 @@ export const doclingMapperStrategy: ResumeParserStrategy = {
 export const textExtractionStrategy: ResumeParserStrategy = {
   id: "TEXT_EXTRACTION",
   timeoutMs: 30_000,
-  async parse(buffer, filename) {
-    const started = Date.now();
-    let rawText = "";
-    try {
-      rawText = await extractTextFromFile(buffer, filename);
-    } catch (e: any) {
-      throw createCVParseFailure("CV_EXTRACTION_FAILED", e?.message);
-    }
+async parse(buffer, filename) {
+     const started = Date.now();
+     let rawText = "";
+     try {
+       const rawTextResult = await extractTextFromFile(buffer, filename);
+       rawText = rawTextResult.fullText;
+     } catch (e: any) {
+       throw createCVParseFailure("CV_EXTRACTION_FAILED", e?.message);
+     }
     if (!rawText || rawText.trim().length === 0) {
       throw createCVParseFailure("CV_EXTRACTION_EMPTY");
     }

@@ -1,0 +1,344 @@
+[
+  {
+    "file": "01_dense_two_column_product_analyst.pdf",
+    "hash": "f7f324e871c5a24cd29b7c75544fa8b538c7f2031093b5d21797584b134b864d",
+    "size": 45491,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "PROJECTS",
+      "SKILLS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 2,
+    "experience": 3,
+    "projects": 2,
+    "skills": {
+      "technical": 0,
+      "programming": 2,
+      "tools": 2,
+      "software": 4,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 2,
+    "achievements": 0,
+    "warnings": [
+      "Quality: 1704 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - Text-based PDF with healthy extraction"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "02_table_heavy_program_manager.docx",
+    "hash": "ca0e435cb406404a77dd2b32e8eaed76f9f19a52897d1e8de60e32e01386c506",
+    "size": 38688,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "PROJECTS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 3,
+    "experience": 3,
+    "projects": 3,
+    "skills": {
+      "technical": 0,
+      "programming": 0,
+      "tools": 0,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 3,
+    "achievements": 0,
+    "warnings": [
+      "No skills detected.",
+      "Quality: 1757 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "03_indian_education_substring_traps.pdf",
+    "hash": "127eaf3fd1d4b8fe50725e768417eadddc90524cd8862337e34f10b64d61c132",
+    "size": 44816,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "PROJECTS",
+      "SKILLS"
+    ],
+    "unknownSections": [],
+    "education": 4,
+    "experience": 0,
+    "projects": 6,
+    "skills": {
+      "technical": 1,
+      "programming": 2,
+      "tools": 3,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 0,
+    "achievements": 0,
+    "warnings": [
+      "No work experience detected.",
+      "Quality: 1301 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - Text-based PDF with healthy extraction"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "04_senior_executive_multi_role.pdf",
+    "hash": "5a12c1fec5c2613c368dbde777b333aacb298b01dda0bed80e2d941e74c8bb2d",
+    "size": 46345,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "PROJECTS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 3,
+    "experience": 5,
+    "projects": 4,
+    "skills": {
+      "technical": 0,
+      "programming": 0,
+      "tools": 0,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 2,
+    "achievements": 0,
+    "warnings": [
+      "Could not detect phone. Please enter manually.",
+      "No skills detected.",
+      "Quality: 1996 chars, 0/2 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - Text-based PDF with healthy extraction",
+      "Structure reconciliation: split heading \"SELECTED INITIATIVES...\" into 4 lines via pdf-parse"
+    ],
+    "suspiciousRecords": [
+      "EXPERIENCE_DUPLICATE_ORGANIZATIONS: 1 duplicate organizations"
+    ],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "05_academic_research_cv.docx",
+    "hash": "22caf97057510ea53db6dc92132dfa3c6ef0f2128f2b67712c6b337cf6950ca3",
+    "size": 38306,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "SKILLS",
+      "ACHIEVEMENTS"
+    ],
+    "unknownSections": [],
+    "education": 4,
+    "experience": 3,
+    "projects": 0,
+    "skills": {
+      "technical": 0,
+      "programming": 2,
+      "tools": 2,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 0,
+    "achievements": 3,
+    "warnings": [
+      "Could not detect phone. Please enter manually.",
+      "No projects detected.",
+      "Quality: 1842 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "06_no_education_content_designer.pdf",
+    "hash": "ca01256efb6fc98805d7de7ac9b8ac14a694bdbbef6787354ac8ae8b129e7605",
+    "size": 44769,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EXPERIENCE",
+      "PROJECTS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 0,
+    "experience": 3,
+    "projects": 3,
+    "skills": {
+      "technical": 0,
+      "programming": 0,
+      "tools": 0,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 1,
+    "achievements": 0,
+    "warnings": [
+      "Could not detect phone. Please enter manually.",
+      "No education records detected.",
+      "No skills detected.",
+      "Quality: 1075 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - Text-based PDF with healthy extraction",
+      "Structure reconciliation: split heading \"CERTIFICATIONS...\" into 4 lines via pdf-parse"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "07_unusual_headings_cybersecurity.docx",
+    "hash": "5efd62021f649be87e699fbf49476117a8a6be52ef59ae9f6439cd65c2e87eb3",
+    "size": 37509,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "PROJECTS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 2,
+    "experience": 4,
+    "projects": 2,
+    "skills": {
+      "technical": 0,
+      "programming": 0,
+      "tools": 0,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 2,
+    "achievements": 0,
+    "warnings": [
+      "Could not detect phone. Please enter manually.",
+      "No skills detected.",
+      "Quality: 1286 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "08_scanned_image_only_quality_engineer.pdf",
+    "hash": "20fe409297fd92c8c557f7cfc15a26ea9d59c99194f78a770e96e5ffb05eeefe",
+    "size": 556158,
+    "extractionStrategy": "rapidocr",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "PROJECTS",
+      "SKILLS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 2,
+    "experience": 2,
+    "projects": 3,
+    "skills": {
+      "technical": 0,
+      "programming": 0,
+      "tools": 0,
+      "software": 2,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 2,
+    "achievements": 0,
+    "warnings": [
+      "Docling unavailable, used fallback pdf-parse",
+      "Quality: 0 chars, 1/1 empty pages, tables: 0, interleaved: false",
+      "Route: rapidocr - PDF appears image-only or scanned"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "09_mixed_text_scan_solutions_architect.pdf",
+    "hash": "d8f38f4cc1baa4f5dba5984d50f1779e74eaccd46efdcdc2ea6cce1b93081f22",
+    "size": 268979,
+    "extractionStrategy": "mixed",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "SKILLS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 2,
+    "experience": 3,
+    "projects": 0,
+    "skills": {
+      "technical": 0,
+      "programming": 2,
+      "tools": 4,
+      "software": 0,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 2,
+    "achievements": 0,
+    "warnings": [
+      "Could not detect phone. Please enter manually.",
+      "No projects detected.",
+      "Quality: 790 chars, 1/2 empty pages, tables: 0, interleaved: false",
+      "Route: mixed-native-ocr - Mixed PDF: 1/2 pages need OCR",
+      "Mixed extraction: native for most pages, OCR for pages 2"
+    ],
+    "suspiciousRecords": [],
+    "parseOutcome": "SUCCESS"
+  },
+  {
+    "file": "10_repeated_header_footer_product_ops.docx",
+    "hash": "62326814953360e5c86d6b67bf602f3d82ea8d9aca575b71c584f06b93ac88da",
+    "size": 38835,
+    "extractionStrategy": "docling",
+    "detectedSections": [
+      "EDUCATION",
+      "EXPERIENCE",
+      "PROJECTS",
+      "SKILLS",
+      "CERTIFICATIONS"
+    ],
+    "unknownSections": [],
+    "education": 2,
+    "experience": 5,
+    "projects": 3,
+    "skills": {
+      "technical": 1,
+      "programming": 1,
+      "tools": 1,
+      "software": 1,
+      "domain": 0,
+      "soft": 0
+    },
+    "certifications": 2,
+    "achievements": 0,
+    "warnings": [
+      "Quality: 1654 chars, 0/1 empty pages, tables: 0, interleaved: false",
+      "Route: docling-native - DOCX with tables or layout benefits from Docling extraction"
+    ],
+    "suspiciousRecords": [
+      "EXPERIENCE_DUPLICATE_ORGANIZATIONS: 1 duplicate organizations"
+    ],
+    "parseOutcome": "SUCCESS"
+  }
+]

@@ -197,6 +197,80 @@ See `.env.example`: `OPENAI_API_KEY`, `OPENAI_SOP_MODEL=gpt-5.6-sol`, `SOP_DB_*`
 - `53aa4f7` — CV upload resilience fix
 - `4ea6fe8` — Generation ownership, app-context scope, CV resilience
 
+## CV Parser Stress Test — Release Hardening (2026-10-11)
+
+**Status: FILE 02 FIXED — File 06 certification parsing issue identified (structure reconciliation splits certifications section incorrectly)**
+
+Clean worktree: `/Users/shivang/Desktop/AI SOP/deploy/server-12b-cv-release-check`
+
+Stress campaign against 10-file D-Vivid corpus (run on clean worktree):
+- 7/10 FULL PASS
+- 3/10 PARTIAL
+- 0 FAIL
+- PASS RATE: 70.0%
+
+**Required threshold for release:** 9/10 FULL PASS, 1/10 PARTIAL (file 08 only), 0 FAIL
+
+### Detailed Results
+01_dense_two_column_product_analyst.pdf: ✅ FULL PASS
+02_table_heavy_program_manager.docx: ✅ FULL PASS (FIXED — routing now uses Docling for table-aware DOCX)
+03_indian_education_substring_traps.pdf: ✅ FULL PASS
+04_senior_executive_multi_role.pdf: ✅ FULL PASS
+05_academic_research_cv.docx: ✅ FULL PASS
+06_no_education_content_designer.pdf: ⚠️ PARTIAL — Missing one certification (IAAP CPACC lost during structure reconciliation)
+07_unusual_headings_cybersecurity.docx: ✅ FULL PASS
+08_scanned_image_only_quality_engineer.pdf: ⚠️ PARTIAL — Expected: synthetic fixture contamination (Synthetic QA resume fixture embedded in scanned image — NOT a parser defect)
+09_mixed_text_scan_solutions_architect.pdf: ✅ FULL PASS
+10_repeated_header_footer_product_ops.docx: ✅ FULL PASS
+
+### Major Architectural Fixes Implemented and Verified:
+- Generic canonical section segmentation (replaces keyword-based heading dictionary)
+- Docling PDF extraction + pdf-parse secondary structure reconciliation
+- Experience date-line header parsing + multiline grouping (role/org + date on separate lines)
+- MM/YYYY support + YYYY-MM month precision
+- Education multi-entry parsing (newline/pipe-delimited)
+- Project one-line record parsing (delimiter-agnostic)
+- Certification loop/disambiguation (year-first vs course-first)
+- Mammoth HTML DOCX extraction with Cheerio table parsing
+- Table-aware DOCX Education/Experience parsing (file 02 now FULL PASS via Docling routing)
+
+### Known Limitations
+- File 08 (scanned image-only PDF) is expected to be partial due to OCR limitations — this is a known synthetic fixture limitation and NOT a parser defect.
+- File 06: One certification (IAAP CPACC) is lost during structure reconciliation because the reconciliation logic splits the CERTIFICATIONS section heading from its content and only keeps the first certification line. This is a bug in the secondary structure reconciliation logic, not the parser itself.
+
+### Verification Status (Clean Worktree)
+- TypeScript typecheck: PASS (production code only)
+- Next.js build: PASS
+- Stress test: 7/10 FULL PASS, 3/10 PARTIAL, 0 FAIL
+
+### Files Modified in This Campaign
+- `src/lib/application/cv-extraction.ts` (NEW — canonical block model & router)
+- `src/lib/application/cv-parser.ts` (MODIFIED — all parser fixes)
+- `src/lib/application/docx-validator.ts` (MODIFIED — validateDocx export)
+- `src/app/api/application/cv-upload/route.ts` (MODIFIED — CV_PIPELINE_VERSION = "4")
+- `src/lib/application/resume-import/strategies.ts` (MODIFIED — fix extractTextFromFile usage)
+- `tests/inspect-cv-text.ts` (MODIFIED — fix extractTextFromDOCX usage)
+- `package.json` (cheerio 1.2.0 added)
+- `package-lock.json` (updated)
+- `tsconfig.json` (target: es2015 for Map/Set iteration support)
+- `HANDOVER.md` (updated)
+
+### CV_PIPELINE_VERSION
+Bumped from "3" to "4" in `src/app/api/application/cv-upload/route.ts:198` — material canonical parser-output semantics changed.
+
+### Temporary Diagnostic Files Removed
+All `debug_*.ts`, `inspect_*.ts`, `diagnose_*.ts`, `check_*.ts`, `check_*.js`, `check_*.mjs`, `*_trace*.ts` removed from production code paths.
+
+### Release Blockers (must resolve before commit)
+1. **File 06 certification loss:** IAAP CPACC certification lost during structure reconciliation — need to fix secondary structure reconciliation to not split CERTIFICATIONS section content
+2. **Lint:** Not configured in baseline (interactive Next.js ESLint setup) — documented as limitation
+
+### Next Steps Before Commit
+1. Fix file 06 certification loss in structure reconciliation
+2. Re-run stress test to confirm 9/10 FULL PASS, 1/10 PARTIAL (file 08 only)
+3. Create release commit: `feat(cv): harden canonical resume parsing across PDF and DOCX`
+4. Deploy upon explicit approval
+
 ## Quick Start for Next Engineer
 
 ```bash

@@ -1,0 +1,199 @@
+{
+  "01_dense_two_column_product_analyst.pdf": {
+    "type": "PDF, dense two-column/sidebar",
+    "expected": {
+      "education": 2,
+      "experience": 3,
+      "projects": 2,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "Sidebar labels as records",
+      "Skills as education",
+      "Contact lines as experience"
+    ],
+    "stress": [
+      "two-column reading order",
+      "sidebar",
+      "dense layout",
+      "multiple jobs"
+    ]
+  },
+  "02_table_heavy_program_manager.docx": {
+    "type": "DOCX, tables, 2 pages",
+    "expected": {
+      "education": 2,
+      "experience": 3,
+      "projects": 3,
+      "certifications": 3
+    },
+    "must_not_create": [
+      "Table headers as records",
+      "capability cells as jobs"
+    ],
+    "stress": [
+      "DOCX tables",
+      "page break",
+      "education table",
+      "experience table"
+    ]
+  },
+  "03_indian_education_substring_traps.pdf": {
+    "type": "PDF, India education + substring traps",
+    "expected": {
+      "education": 4,
+      "experience": 0,
+      "projects": 6,
+      "certifications": 0
+    },
+    "must_not_create": [
+      "Time-series",
+      "Debentures",
+      "Activities tracker",
+      "Community portal",
+      "Limits and differentiation",
+      "Save Girl Child",
+      "SUBJECTS KNOWN lines"
+    ],
+    "stress": [
+      "BE/ME/MIT/NIT/VIT substring traps",
+      "10th/12th",
+      "Diploma",
+      "B.Tech",
+      "Percentage hyphen",
+      "section termination"
+    ]
+  },
+  "04_senior_executive_multi_role.pdf": {
+    "type": "PDF, senior executive, repeated employer/overlapping roles",
+    "expected": {
+      "education": 3,
+      "experience": 5,
+      "projects": 4,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "Board/advisory entries as education",
+      "initiative names as jobs"
+    ],
+    "stress": [
+      "long career",
+      "same employer multiple roles",
+      "multi-page",
+      "executive content"
+    ]
+  },
+  "05_academic_research_cv.docx": {
+    "type": "DOCX, academic CV",
+    "expected": {
+      "education": 4,
+      "experience": 3,
+      "publications": 5,
+      "certifications": 0
+    },
+    "must_not_create": [
+      "Publications as education",
+      "conference titles as institutions",
+      "teaching modules as degrees"
+    ],
+    "stress": [
+      "academic CV",
+      "publications",
+      "teaching",
+      "grants",
+      "many years"
+    ]
+  },
+  "06_no_education_content_designer.pdf": {
+    "type": "PDF, intentionally no education",
+    "expected": {
+      "education": 0,
+      "experience": 3,
+      "projects": 3,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "University admissions project as education",
+      "Mastering limits project as degree"
+    ],
+    "stress": [
+      "zero-education precision",
+      "education-like phrases outside education"
+    ]
+  },
+  "07_unusual_headings_cybersecurity.docx": {
+    "type": "DOCX, unusual section headings",
+    "expected": {
+      "education": 2,
+      "experience": 4,
+      "projects": 2,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "MITRE ATT&CK skill as institution",
+      "tool names as education"
+    ],
+    "stress": [
+      "SCHOLASTIC RECORD",
+      "CAREER JOURNEY",
+      "PROOF OF WORK",
+      "CREDENTIALS",
+      "mixed date formats"
+    ]
+  },
+  "08_scanned_image_only_quality_engineer.pdf": {
+    "type": "PDF, image-only two-page scan",
+    "expected": {
+      "education": 2,
+      "experience": 2,
+      "projects": 2,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "Skill acronyms as education"
+    ],
+    "stress": [
+      "OCR",
+      "image-only PDF",
+      "slight skew",
+      "two pages"
+    ]
+  },
+  "09_mixed_text_scan_solutions_architect.pdf": {
+    "type": "PDF, mixed text page + scanned education page",
+    "expected": {
+      "education": 2,
+      "experience": 3,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "Cloud vendor names as institutions"
+    ],
+    "stress": [
+      "mixed text/image PDF",
+      "OCR on second page",
+      "cross-page section recovery"
+    ]
+  },
+  "10_repeated_header_footer_product_ops.docx": {
+    "type": "DOCX, repeated header/footer + page break",
+    "expected": {
+      "education": 2,
+      "experience": 5,
+      "projects": 3,
+      "certifications": 2
+    },
+    "must_not_create": [
+      "2026 header as job/date",
+      "footer trap words as sections",
+      "Volunteer Activities as education"
+    ],
+    "stress": [
+      "repeated headers",
+      "repeated footers",
+      "tables",
+      "unusual Academic Background heading",
+      "multi-page"
+    ]
+  }
+}

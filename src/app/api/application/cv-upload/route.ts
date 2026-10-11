@@ -163,16 +163,16 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
-    } else if (ext === ".docx") {
-      // Full DOCX validation: ZIP structure + required entries + zip bomb protection
-      const docxResult = validateDocx(buffer);
-      if (!docxResult.valid) {
-        return NextResponse.json(
-          { error: docxResult.error || "Invalid DOCX file.", code: "CV_FILE_INVALID" },
-          { status: 400 },
-        );
-      }
-    }
+     } else if (ext === ".docx") {
+       // Full DOCX validation: ZIP structure + required entries + zip bomb protection
+       const isValidDocx = await validateDocx(buffer);
+       if (!isValidDocx) {
+         return NextResponse.json(
+           { error: "Invalid DOCX file.", code: "CV_FILE_INVALID" },
+           { status: 400 },
+         );
+       }
+     }
 
     // ===== SHA-256 DEDUP =====
     const fileHash = createHash("sha256").update(buffer).digest("hex");
@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
     // CV_PARSER_FALLBACK are superseded — the pipeline always degrades
     // gracefully. Bump CV_PIPELINE_VERSION on chain changes so cached
     // metas re-parse.
-    const CV_PIPELINE_VERSION = "3";
+    const CV_PIPELINE_VERSION = "4";
 
     if (existingMeta) {
       // Idempotent reuse ONLY when the stored parse came from the same

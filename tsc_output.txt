@@ -1,0 +1,82 @@
+full_10_file_test.ts(51,17): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ '01_dense_two_column_product_analyst.pdf': { education: number; experience: number; projects: number; certifications: number; }; '02_table_heavy_program_manager.docx': { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; '10_repeated_header_footer_product_ops.docx':...'.
+  No index signature with a parameter of type 'string' was found on type '{ '01_dense_two_column_product_analyst.pdf': { education: number; experience: number; projects: number; certifications: number; }; '02_table_heavy_program_manager.docx': { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; '10_repeated_header_footer_product_ops.docx':...'.
+full_10_file_test.ts(97,17): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ '01_dense_two_column_product_analyst.pdf': { education: number; experience: number; projects: number; certifications: number; }; '02_table_heavy_program_manager.docx': { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; '10_repeated_header_footer_product_ops.docx':...'.
+  No index signature with a parameter of type 'string' was found on type '{ '01_dense_two_column_product_analyst.pdf': { education: number; experience: number; projects: number; certifications: number; }; '02_table_heavy_program_manager.docx': { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; '10_repeated_header_footer_product_ops.docx':...'.
+full_10_file_test.ts(117,15): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ '01_dense_two_column_product_analyst.pdf': { education: number; experience: number; projects: number; certifications: number; }; '02_table_heavy_program_manager.docx': { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; '10_repeated_header_footer_product_ops.docx':...'.
+  No index signature with a parameter of type 'string' was found on type '{ '01_dense_two_column_product_analyst.pdf': { education: number; experience: number; projects: number; certifications: number; }; '02_table_heavy_program_manager.docx': { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; '10_repeated_header_footer_product_ops.docx':...'.
+full_10_file_test.ts(187,32): error TS2367: This comparison appears to be unintentional because the types '"FULL PASS" | "PARTIAL"' and '"FAIL"' have no overlap.
+full_10_file_test.ts(211,19): error TS2367: This comparison appears to be unintentional because the types '"FULL PASS" | "PARTIAL"' and '"FAIL"' have no overlap.
+full_10_file_test.ts(310,34): error TS2802: Type 'Map<string, { filename: string; format: string; extraction: string; segmentation: string; expected: any; actual: { education: number; experience: number; projects: number; certifications: number; }; ... 7 more ...; ocrUsed: boolean; }[]>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+full_10_file_test.ts(312,39): error TS7006: Parameter 'f' implicitly has an 'any' type.
+scripts/affinda-benchmark/run-benchmark.ts(173,5): error TS2322: Type 'ExtractedDocument' is not assignable to type 'string'.
+src/lib/application/cv-extraction.ts(132,27): error TS2802: Type 'Map<string, number>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-extraction.ts(145,38): error TS2802: Type 'Map<number, CanonicalBlock[]>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-extraction.ts(146,46): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(149,36): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(149,58): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(149,61): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(151,40): error TS7006: Parameter 'l' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(152,41): error TS7006: Parameter 'l' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(371,26): error TS2322: Type 'ArrayBuffer | SharedArrayBuffer' is not assignable to type 'BlobPart'.
+  Type 'SharedArrayBuffer' is not assignable to type 'BlobPart'.
+    Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+src/lib/application/cv-extraction.ts(665,11): error TS2322: Type '"docling"' is not assignable to type '"rapidocr" | "mammoth" | "docling-native" | "docling-ocr" | "mixed-native-ocr"'.
+src/lib/application/cv-extraction.ts(677,9): error TS2322: Type '"docling"' is not assignable to type '"rapidocr" | "mammoth" | "docling-native" | "docling-ocr" | "mixed-native-ocr"'.
+src/lib/application/cv-extraction.ts(708,11): error TS2322: Type '"mixed"' is not assignable to type '"rapidocr" | "mammoth" | "docling-native" | "docling-ocr" | "mixed-native-ocr"'.
+src/lib/application/cv-extraction.ts(721,7): error TS2740: Type 'Promise<CanonicalBlock[]>' is missing the following properties from type 'CanonicalBlock[]': length, pop, push, concat, and 35 more.
+src/lib/application/cv-extraction.ts(734,7): error TS2322: Type '"rapidocr" | "mammoth" | "docling-native" | "docling-ocr" | "mixed-native-ocr"' is not assignable to type '"native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed"'.
+  Type '"docling-native"' is not assignable to type '"native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed"'.
+src/lib/application/cv-extraction.ts(762,27): error TS2802: Type 'Map<string, CanonicalBlock[]>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-extraction.ts(767,34): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(767,37): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(800,27): error TS2802: Type 'Map<string, CanonicalBlock[]>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-extraction.ts(803,37): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(807,34): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(812,34): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(819,40): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(826,30): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/lib/application/cv-extraction.ts(885,13): error TS2367: This comparison appears to be unintentional because the types '"PARAGRAPH"' and '"HEADING"' have no overlap.
+src/lib/application/cv-extraction.ts(914,17): error TS2322: Type '"secondary_structure_recovery"' is not assignable to type '"native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html"'.
+src/lib/application/cv-extraction.ts(1202,9): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-extraction.ts(1203,9): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-extraction.ts(1204,9): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-extraction.ts(1205,32): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-extraction.ts(1337,4): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+src/lib/application/cv-extraction.ts(1338,4): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+src/lib/application/cv-extraction.ts(1344,4): error TS2484: Export declaration conflicts with exported declaration of 'CanonicalBlock'.
+src/lib/application/cv-extraction.ts(1345,4): error TS2484: Export declaration conflicts with exported declaration of 'CanonicalExtractedDocument'.
+src/lib/application/cv-extraction.ts(1346,4): error TS2484: Export declaration conflicts with exported declaration of 'CanonicalBlockType'.
+src/lib/application/cv-extraction.ts(1347,4): error TS2484: Export declaration conflicts with exported declaration of 'BoundingBox'.
+src/lib/application/cv-extraction.ts(1348,4): error TS2484: Export declaration conflicts with exported declaration of 'BlockStyle'.
+src/lib/application/cv-extraction.ts(1349,4): error TS2484: Export declaration conflicts with exported declaration of 'ExtractionQualitySignals'.
+src/lib/application/cv-extraction.ts(1350,4): error TS2484: Export declaration conflicts with exported declaration of 'ExtractionRoute'.
+src/lib/application/cv-parser.ts(296,5): error TS2322: Type 'string' is not assignable to type 'ExtractedDocument'.
+src/lib/application/cv-parser.ts(841,10): error TS2393: Duplicate function implementation.
+src/lib/application/cv-parser.ts(848,27): error TS2339: Property 'metadata' does not exist on type 'TextBlock'.
+src/lib/application/cv-parser.ts(853,33): error TS2345: Argument of type 'TextBlock' is not assignable to parameter of type 'CanonicalBlock'.
+  Type 'TextBlock' is missing the following properties from type 'CanonicalBlock': sourceStrategy, confidence
+src/lib/application/cv-parser.ts(858,40): error TS2802: Type 'Map<string, CanonicalBlock[]>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-parser.ts(880,31): error TS2802: Type 'MapIterator<number>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-parser.ts(920,10): error TS2393: Duplicate function implementation.
+src/lib/application/cv-parser.ts(927,27): error TS2339: Property 'metadata' does not exist on type 'TextBlock'.
+src/lib/application/cv-parser.ts(932,33): error TS2345: Argument of type 'TextBlock' is not assignable to parameter of type 'CanonicalBlock'.
+  Type 'TextBlock' is missing the following properties from type 'CanonicalBlock': sourceStrategy, confidence
+src/lib/application/cv-parser.ts(937,40): error TS2802: Type 'Map<string, CanonicalBlock[]>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-parser.ts(959,31): error TS2802: Type 'MapIterator<number>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+src/lib/application/cv-parser.ts(1193,9): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-parser.ts(1194,9): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-parser.ts(1195,9): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-parser.ts(1196,32): error TS18047: 'currentExp' is possibly 'null'.
+src/lib/application/cv-parser.ts(1750,7): error TS2322: Type '"native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed"' is not assignable to type '"docling" | "rapidocr" | "mammoth" | "mixed" | "txt" | "pdf-parse" | "legacy" | "ocr"'.
+  Type '"native"' is not assignable to type '"docling" | "rapidocr" | "mammoth" | "mixed" | "txt" | "pdf-parse" | "legacy" | "ocr"'.
+src/lib/application/resume-import/strategies.ts(69,7): error TS2345: Argument of type 'string | ExtractedDocument' is not assignable to parameter of type 'string'.
+  Type 'ExtractedDocument' is not assignable to type 'string'.
+src/lib/application/resume-import/strategies.ts(70,32): error TS2339: Property 'length' does not exist on type 'string | ExtractedDocument'.
+  Property 'length' does not exist on type 'ExtractedDocument'.
+src/lib/application/resume-import/strategies.ts(123,7): error TS2322: Type 'ExtractedDocument' is not assignable to type 'string'.
+tests/inspect-cv-text.ts(13,48): error TS2339: Property 'trim' does not exist on type 'ExtractedDocument'.
+tests/inspect-cv-text.ts(14,57): error TS2339: Property 'substring' does not exist on type 'ExtractedDocument'.
+tests/inspect-docx-mammoth.ts(10,37): error TS2339: Property 'valid' does not exist on type 'Promise<boolean>'.
+tests/inspect-docx-mammoth.ts(11,32): error TS2339: Property 'error' does not exist on type 'Promise<boolean>'.
+tests/inspect-docx-mammoth.ts(12,14): error TS2339: Property 'entries' does not exist on type 'Promise<boolean>'.
+tests/inspect-docx-mammoth.ts(14,28): error TS2339: Property 'entries' does not exist on type 'Promise<boolean>'.

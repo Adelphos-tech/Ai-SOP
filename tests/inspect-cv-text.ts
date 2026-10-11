@@ -9,7 +9,8 @@ async function main() {
   console.log("=== DOCX: kunj modh (1) (1).docx ===");
   console.log("File size:", docxBuf.length, "bytes");
   try {
-    const text = await extractTextFromDOCX(docxBuf);
+    const result = await extractTextFromDOCX(docxBuf);
+    const text = result.fullText;
     console.log("Extracted text length:", text.trim().length, "chars");
     console.log("First 500 chars:", JSON.stringify(text.substring(0, 500)));
   } catch (e: any) {

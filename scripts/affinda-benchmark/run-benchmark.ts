@@ -168,12 +168,14 @@ interface FileResult {
 }
 
 async function extractSourceText(buffer: Buffer, filename: string): Promise<string> {
-  try {
-    const { extractTextFromFile } = await import("../../src/lib/application/cv-parser");
-    return await extractTextFromFile(buffer, filename);
-  } catch {
-    return "";
-  }
+   try {
+     const { extractTextFromFile } = await import("../../src/lib/application/cv-parser");
+     const doc = await extractTextFromFile(buffer, filename);
+     // Convert ExtractedDocument to plain text by concatenating block texts
+     return doc.blocks.map(b => b.text).join('\n');
+   } catch {
+     return "";
+   }
 }
 
 async function runEntry(entry: CorpusEntry): Promise<FileResult> {
