@@ -124,8 +124,8 @@ jobs:
       - name: Install Python dependencies for CV parse classification tests
         run: pip install unstructured[pdf,docx] --quiet
 
-      - name: Install system dependencies for PDF processing
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: Install system dependencies for PDF processing (Tesseract OCR)
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
 
       - name: Run CV parse classification tests
         run: npx tsx tests/phase-cv-parse-classification-tests.ts
