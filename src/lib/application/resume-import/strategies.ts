@@ -13,7 +13,8 @@
  */
 import { parseWithDocling, ocrWithService } from "../docling-client";
 import { mapDoclingToParsedCV } from "../cv-mapper-docling";
-import { parseCVText, parseCVFile, extractTextFromFile, createCVParseFailure } from "../cv-parser";
+import { parseCVText, parseCVFile, parseCVFromDocument, extractTextFromFile, createCVParseFailure } from "../cv-parser";
+import { extractCanonicalBlocks } from "../cv-extraction";
 import { evaluateCoverage } from "./coverage";
 import type {
   ResumeParseCandidate, ResumeParserStrategy,
@@ -208,6 +209,54 @@ export function needsOcrFallback(
 }
 
 // ============================================================
+// E. Unstructured OSS structural extraction — structural fallback
+//    Preserves document structure and reading order. Does NOT perform
+//    CV semantic parsing - that remains in D-Vivid parsers.
+// ============================================================
+
+export const unstructuredStructuralStrategy: ResumeParserStrategy = {
+  id: "UNSTRUCTURED_STRUCTURAL",
+  timeoutMs: parseInt(process.env.CV_PARSER_TIMEOUT_MS || "120000", 10),
+  async parse(buffer, filename) {
+    const started = Date.now();
+    // Use extractCanonicalBlocks with unstructured route
+    const canonicalDoc = await extractCanonicalBlocks(buffer, filename);
+    const rawText = canonicalDoc.blocks.map(b => b.text).join("\n");
+    
+    // Parse the canonical blocks using D-Vivid's existing parser
+    const parsed = parseCVFromDocument({
+      blocks: canonicalDoc.blocks.map(b => ({
+        text: b.text,
+        page: b.page,
+        bbox: b.bbox ? { x0: b.bbox.l, y0: b.bbox.t, x1: b.bbox.r, y1: b.bbox.b } : undefined,
+        fontSize: b.style?.fontSize,
+        isBold: b.style?.isBold,
+        isItalic: b.style?.isItalic,
+        fontName: b.style?.fontName,
+        columnIndex: undefined,
+        blockType: b.blockType.toLowerCase() as any,
+        order: b.order,
+        row: b.row,
+        column: b.column,
+        metadata: b.metadata,
+      })),
+      fullText: rawText,
+      pageCount: canonicalDoc.pageCount,
+      extractor: canonicalDoc.sourceStrategy,
+      ocrUsed: canonicalDoc.ocrUsed,
+      warnings: canonicalDoc.extractionWarnings,
+    });
+    
+    return makeCandidate("UNSTRUCTURED_STRUCTURAL", parsed, rawText, {
+      rawTextLength: rawText.length,
+      blockCount: canonicalDoc.blocks.length,
+      engine: "unstructured",
+      mapperVersion: "1",
+    });
+  },
+};
+
+// ============================================================
 // STRATEGY ORDERING (per file type — empirical, not arbitrary)
 // ============================================================
 
@@ -217,7 +266,7 @@ export function strategiesFor(filename: string): ResumeParserStrategy[] {
     case "docx":
       return [mammothSemanticStrategy, doclingMapperStrategy, textExtractionStrategy];
     case "pdf":
-      return [doclingMapperStrategy, mammothSemanticStrategy, textExtractionStrategy];
+      return [doclingMapperStrategy, unstructuredStructuralStrategy, mammothSemanticStrategy, textExtractionStrategy];
     case "txt":
       return [mammothSemanticStrategy];
     default:

@@ -16,6 +16,7 @@ export const RESUME_STRATEGY_IDS = [
   "DOCLING_MAPPER",      // docling blocks -> cv-mapper-docling
   "TEXT_EXTRACTION",     // raw text only, no semantic structure
   "OCR_TEXT_EXTRACTION", // free local OCR (rapidocr) — image-only fallback only
+  "UNSTRUCTURED_STRUCTURAL", // unstructured OSS structural extraction — preserves document structure
 ] as const;
 export type ResumeStrategyId = (typeof RESUME_STRATEGY_IDS)[number];
 

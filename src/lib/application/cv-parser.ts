@@ -216,7 +216,7 @@ export interface ExtractedDocument {
   blocks: TextBlock[];
   fullText: string;
   pageCount: number;
-  extractor: "legacy" | "native" | "docling" | "rapidocr" | "pdf-parse" | "mammoth" | "mammoth_html" | "ocr" | "mixed" | "txt";
+  extractor: "legacy" | "native" | "docling" | "rapidocr" | "pdf-parse" | "mammoth" | "mammoth_html" | "ocr" | "mixed" | "txt" | "unstructured";
   ocrUsed: boolean;
   warnings: string[];
 }

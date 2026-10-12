@@ -19,7 +19,9 @@ export type CanonicalBlockType =
   | "LIST_ITEM"
   | "TEXTBOX"
   | "OCR_BLOCK"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  | "HEADER"
+  | "FOOTER";
 
 /** Bounding box: [left, top, right, bottom] in points (1/72 inch) or pixels */
 export interface BoundingBox {
@@ -48,7 +50,7 @@ export interface CanonicalBlock {
   row?: number | null;       // for table cells
   column?: number | null;    // for table cells
   style?: BlockStyle | null;
-  sourceStrategy: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html";
+  sourceStrategy: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "unstructured";
   confidence: number;        // 0-1
   metadata?: Record<string, unknown>;
 }
@@ -58,7 +60,7 @@ export interface CanonicalExtractedDocument {
   blocks: CanonicalBlock[];
   pageCount: number;
   ocrUsed: boolean;
-  sourceStrategy: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed";
+  sourceStrategy: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed" | "unstructured";
   extractionWarnings: string[];
   durationMs: number;
   sourceHash: string;
@@ -85,7 +87,18 @@ export type ExtractionRoute =
   | { strategy: "docling-native"; reason: string }
   | { strategy: "docling-ocr"; reason: string }
   | { strategy: "rapidocr"; reason: string }
-  | { strategy: "mixed-native-ocr"; reason: string; ocrPages: number[] };
+  | { strategy: "mixed-native-ocr"; reason: string; ocrPages: number[] }
+  | { strategy: "unstructured"; reason: string };
+
+/** Detailed extraction strategy type */
+export type ExtractionStrategyType =
+  | "mammoth"
+  | "mammoth_html"
+  | "docling-native"
+  | "docling-ocr"
+  | "rapidocr"
+  | "mixed-native-ocr"
+  | "unstructured";
 
 /** Docling service endpoints */
 const DOCLING_BASE_URL = process.env.CV_PARSER_SERVICE_URL || "http://127.0.0.1:8099";
@@ -210,47 +223,221 @@ function decideExtractionRoute(
     return { strategy: "mammoth_html", reason: "DOCX without complex tables uses Mammoth HTML extraction" };
   }
 
-  // PDF routing
-  if (format === "pdf") {
-    // Image-only or near-empty
-    if (quality.totalChars <= 10 || quality.emptyPages === quality.totalPages) {
-      return { strategy: "rapidocr", reason: "PDF appears image-only or scanned" };
-    }
-
-    // Mixed document: some pages healthy, some need OCR
-    const ocrPages: number[] = [];
-    for (let i = 0; i < quality.charsPerPage.length; i++) {
-      if (quality.charsPerPage[i] < 50) {
-        ocrPages.push(i + 1);
+    // PDF routing
+    if (format === "pdf") {
+      // Image-only or near-empty
+      if (quality.totalChars <= 10 || quality.emptyPages === quality.totalPages) {
+        return { strategy: "rapidocr", reason: "PDF appears image-only or scanned" };
       }
-    }
-    
-    if (ocrPages.length > 0 && ocrPages.length < quality.totalPages) {
+
+      // Mixed document: some pages healthy, some need OCR
+      const ocrPages: number[] = [];
+      for (let i = 0; i < quality.charsPerPage.length; i++) {
+        if (quality.charsPerPage[i] < 50) {
+          ocrPages.push(i + 1);
+        }
+      }
+
+      if (ocrPages.length > 0 && ocrPages.length < quality.totalPages) {
+        return { 
+          strategy: "mixed-native-ocr", 
+          reason: `Mixed PDF: ${ocrPages.length}/${quality.totalPages} pages need OCR`,
+          ocrPages
+        };
+      }
+
+      // All pages need OCR
+      if (ocrPages.length === quality.totalPages) {
+        return { strategy: "rapidocr", reason: "All PDF pages appear scanned/image-only" };
+      }
+
+      // Suspicious reading order (multi-column, etc.) -> use Docling
+      if (quality.suspiciousReadingOrder || quality.interleavedColumns) {
+        return { 
+          strategy: "docling-native", 
+          reason: "PDF has suspicious reading order or multi-column layout" 
+        };
+      }
+
+      // Structural extraction fallback -> use Unstructured
       return { 
-        strategy: "mixed-native-ocr", 
-        reason: `Mixed PDF: ${ocrPages.length}/${quality.totalPages} pages need OCR`,
-        ocrPages
+        strategy: "unstructured", 
+        reason: "Using Unstructured OSS for structural preservation" 
       };
-    }
 
-    // All pages need OCR
-    if (ocrPages.length === quality.totalPages) {
-      return { strategy: "rapidocr", reason: "All PDF pages appear scanned/image-only" };
+      // Simple text PDF - native extraction sufficient
+      return { strategy: "docling-native", reason: "Text-based PDF with healthy extraction" };
     }
-
-    // Suspicious reading order (multi-column, etc.) -> use Docling
-    if (quality.suspiciousReadingOrder || quality.interleavedColumns) {
-      return { 
-        strategy: "docling-native", 
-        reason: "PDF has suspicious reading order or multi-column layout" 
-      };
-    }
-
-    // Simple text PDF - native extraction sufficient
-    return { strategy: "docling-native", reason: "Text-based PDF with healthy extraction" };
-  }
 
   return { strategy: "docling-native", reason: "Default to Docling" };
+}
+
+// ============================================================
+// UNSTRUCTURED OSS STRUCTURAL EXTRACTION (for PDF)
+// ============================================================
+
+/**
+ * Extract ordered structural elements from PDF using Unstructured OSS.
+ * Preserves document structure and reading order.
+ * Does NOT perform CV semantic parsing - that remains in D-Vivid.
+ */
+async function extractWithUnstructured(buffer: Buffer, filename: string): Promise<CanonicalExtractedDocument> {
+  // This is a Node.js environment - we need to call Python via subprocess
+  // or use a native Node.js port. For now, we use a temporary file approach.
+  const { writeFile, unlink } = await import("fs/promises");
+  const { join } = await import("path");
+  const { tmpdir } = await import("os");
+  const { randomBytes } = await import("crypto");
+  const { spawn } = await import("child_process");
+  
+  const tmpFile = join(tmpdir(), `cv-${randomBytes(8).toString("hex")}.pdf`);
+  
+  try {
+    await writeFile(tmpFile, buffer);
+    
+    // Call Unstructured via Python subprocess
+    const elements = await new Promise<any[]>((resolve, reject) => {
+      const pythonScript = `
+import sys
+import json
+import warnings
+import os
+
+# Suppress all warnings
+warnings.filterwarnings("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# Redirect stderr to devnull to suppress any C-level output
+import sys
+# sys.stderr = open(os.devnull, 'w')
+
+import unstructured.partition.pdf as partition_pdf
+
+file_path = sys.argv[1]
+elements = partition_pdf.partition_pdf(filename=file_path)
+result = []
+for el in elements:
+    d = {
+        "type": type(el).__name__,
+        "text": getattr(el, "text", ""),
+        "page_number": getattr(el.metadata, "page_number", 1) if hasattr(el, "metadata") else 1,
+    }
+    result.append(d)
+json.dump(result, sys.stdout, separators=(',', ':'))
+sys.stdout.flush()
+`;
+      const py = spawn("python3", ["-c", pythonScript, tmpFile], {
+        env: {
+          ...process.env,
+          PYTHONWARNINGS: "ignore",
+          TRANSFORMERS_VERBOSITY: "error",
+          TOKENIZERS_PARALLELISM: "false",
+        },
+      });
+      let stdout = "";
+      let stderr = "";
+      py.stdout.on("data", (data) => { stdout += data.toString(); });
+      py.stderr.on("data", (data) => { stderr += data.toString(); });
+      py.on("close", (code) => {
+        if (code !== 0) {
+          reject(new Error(`Unstructured extraction failed: ${stderr}`));
+        } else {
+          // Filter out non-JSON lines from stdout (e.g., warnings)
+          const lines = stdout.trim().split('\n');
+          let jsonLine = '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+              jsonLine = trimmed;
+              break;
+            }
+          }
+          if (!jsonLine) {
+            reject(new Error(`No JSON found in Unstructured output: ${stdout}`));
+            return;
+          }
+          try {
+            const parsed = JSON.parse(jsonLine);
+            resolve(parsed);
+          } catch (e) {
+            reject(new Error(`Failed to parse Unstructured output: ${jsonLine}`));
+          }
+        }
+      });
+    });
+    
+    // Convert Unstructured elements to D-Vivid canonical blocks
+    const blocks: CanonicalBlock[] = elements.map((el, idx) => {
+      // Map Unstructured element types to canonical block types
+      let blockType: CanonicalBlockType = "PARAGRAPH";
+      if (el.type === "Title") blockType = "HEADING";
+      else if (el.type === "ListItem") blockType = "LIST_ITEM";
+      else if (el.type === "Header") blockType = "HEADER";
+      else if (el.type === "Footer") blockType = "FOOTER";
+      else if (el.type === "NarrativeText") blockType = "PARAGRAPH";
+      else if (el.type === "Text") blockType = "PARAGRAPH";
+      
+      return {
+        text: el.text || "",
+        page: el.page_number || 1,
+        order: idx,
+        blockType,
+        bbox: null,
+        row: null,
+        column: null,
+        style: null,
+        sourceStrategy: "unstructured" as const,
+        confidence: 0.8,
+        metadata: { unstructuredType: el.type },
+      };
+    })
+    // Generic filter: exclude Header/Footer elements that are page artifacts
+    // (page numbers, repeated document identifiers, empty content)
+    // Do NOT filter section headings that Unstructured may misclassify as Header/Footer.
+    .filter(b => {
+      // Keep all non-Header/Footer elements
+      if (b.blockType !== "HEADER" && b.blockType !== "FOOTER") return true;
+      
+      // For Header/Footer elements, filter only clear page artifacts
+      const text = b.text.trim().toLowerCase();
+      
+      // Filter: page numbers (generic pattern)
+      if (/^page\s+\d+$/i.test(text)) return false;  // exact "Page N" pattern
+      
+      // Filter: very short text (likely page artifacts)
+      if (text.length <= 3) return false;
+      
+      // Filter: repeated document identifiers (appears on multiple pages)
+      // We can't easily detect multi-page repetition here, but we can
+      // filter out very short repetitive text
+      if (text.length <= 10 && /^(page|synthetic|fixture)/i.test(text)) return false;
+      
+      // Keep section headings that Unstructured may misclassify as Header/Footer
+      // These typically have meaningful length and semantic content
+      return true;
+    })
+    .filter(b => b.text.trim().length > 0);
+    
+    return {
+      blocks,
+      pageCount: Math.max(...elements.map(e => e.page_number || 1), 1),
+      ocrUsed: false,
+      sourceStrategy: "unstructured",
+      extractionWarnings: [],
+      durationMs: 0,
+      sourceHash: require("crypto").createHash("sha256").update(buffer).digest("hex"),
+    };
+  } finally {
+    // Cleanup temp file
+    try {
+      await unlink(tmpFile);
+    } catch {}
+  }
 }
 
 // ============================================================
@@ -654,7 +841,7 @@ async function extractCanonicalBlocks(
 // STEP 3: Apply routing decision
     let finalBlocks: CanonicalBlock[];
     let finalOcrUsed = initialOcrUsed;
-    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" | "mammoth_html" = "docling-native";
+    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" | "mammoth_html" | "unstructured" = "docling-native";
     let finalDurationMs = initialDurationMs;
     const ocrPages: number[] = [];
 
@@ -723,6 +910,16 @@ async function extractCanonicalBlocks(
         }
         break;
 
+      case "unstructured":
+        // Unstructured structural extraction for PDF
+        const unstructuredResult = await extractWithUnstructured(buffer, filename);
+        finalBlocks = unstructuredResult.blocks;
+        pageCount = unstructuredResult.pageCount;
+        finalOcrUsed = unstructuredResult.ocrUsed;
+        finalStrategy = "unstructured";
+        finalDurationMs = unstructuredResult.durationMs;
+        break;
+
       default:
         finalBlocks = initialBlocks;
     }
@@ -738,16 +935,18 @@ async function extractCanonicalBlocks(
     // STEP 6: Header/footer deduplication using layout metadata
     finalBlocks = deduplicateHeadersFootersCanonical(finalBlocks, pageCount);
 
-     // Map detailed extraction strategy to the sourceStrategy type expected by the rest of the system
-     let sourceStrategyForDoc: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed";
-     if (finalStrategy === "docling-native" || finalStrategy === "docling-ocr") {
-       sourceStrategyForDoc = "docling";
-     } else if (finalStrategy === "mixed-native-ocr") {
-       sourceStrategyForDoc = "mixed";
-     } else {
-       // finalStrategy is guaranteed to be one of: mammoth, rapidocr
-       sourceStrategyForDoc = finalStrategy as any;
-     }
+// Map detailed extraction strategy to the sourceStrategy type expected by the rest of the system
+      let sourceStrategyForDoc: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html" | "mixed" | "unstructured";
+      if (finalStrategy === "docling-native" || finalStrategy === "docling-ocr") {
+        sourceStrategyForDoc = "docling";
+      } else if (finalStrategy === "mixed-native-ocr") {
+        sourceStrategyForDoc = "mixed";
+      } else if (finalStrategy === "unstructured") {
+        sourceStrategyForDoc = "unstructured";
+      } else {
+        // finalStrategy is guaranteed to be one of: mammoth, rapidocr
+        sourceStrategyForDoc = finalStrategy as any;
+      }
      
      return {
        blocks: finalBlocks,

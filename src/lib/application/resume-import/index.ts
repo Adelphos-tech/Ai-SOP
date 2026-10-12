@@ -88,14 +88,10 @@ export async function importResume(
         coverage: candidate.coverage.status,
         durationMs,
       });
-      // Early exit only on a CLEAN GOOD result — a GOOD-coverage
-      // candidate with malformed/duplicated/polluted records keeps the
-      // chain running so plausibility ranking can compare candidates.
-      if (candidate.coverage.status === "GOOD") {
-        const diag = computeCandidateDiagnostics(candidate.parsed, candidate.coverage.status);
-        candidate.candidateDiagnostics = diag;
-        if (isCleanlyGood(diag)) break;
-      }
+      // Compute diagnostics for all candidates — no early exit.
+      // The full strategy chain runs; selection happens after all strategies complete.
+      const diag = computeCandidateDiagnostics(candidate.parsed, candidate.coverage.status);
+      candidate.candidateDiagnostics = diag;
     } catch (e: any) {
       const durationMs = Date.now() - started;
       lastError = e;
