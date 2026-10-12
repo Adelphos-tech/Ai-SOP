@@ -121,6 +121,9 @@ jobs:
       - name: Run CV provenance regression test
         run: npx tsx tests/cv-provenance-verification.test.ts
 
+      - name: Install Python dependencies for CV parse classification tests
+        run: pip install unstructured[pdf,docx] --quiet
+
       - name: Run CV parse classification tests
         run: npx tsx tests/phase-cv-parse-classification-tests.ts
 
