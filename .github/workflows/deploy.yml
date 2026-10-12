@@ -118,6 +118,9 @@ jobs:
       - name: Run Phase 38 tests
         run: npx tsx tests/phase-38-prompt-contract-tests.ts
 
+      - name: Run CV provenance regression test
+        run: npx tsx tests/cv-provenance-verification.test.ts
+
       - name: Run CV parse classification tests
         run: npx tsx tests/phase-cv-parse-classification-tests.ts
 
@@ -131,9 +134,6 @@ jobs:
 
       - name: Test production CV upload endpoint
         run: node tests/cv-production-upload.cjs
-
-      - name: Run CV provenance regression test
-        run: npx tsx tests/cv-provenance-verification.test.ts
 
       - name: Archive tested build
         run: tar --exclude=.next/cache -czf next-build.tar.gz .next
