@@ -11,12 +11,13 @@ import { createStudent, getStudent, getStudentProfile, saveStudentProfile, saveS
 import { mergePersonalData, PERSONAL_DATA_PROVENANCE_KEYS } from "../src/lib/application/cv-merge";
 import { randomUUID } from "crypto";
 
-// Hard safety guard
-process.env.SOP_DB_HOST = "127.0.0.1";
-process.env.SOP_DB_PORT = "3306";
-process.env.SOP_DB_USER = "root";
-process.env.SOP_DB_PASSWORD = "";
-process.env.SOP_DB_NAME = "sop_ai_app_test";
+// Use CI-provided environment variables for test database
+// These are set in .github/workflows/deploy.yml
+process.env.SOP_DB_HOST = process.env.SOP_TEST_DB_HOST || "127.0.0.1";
+process.env.SOP_DB_PORT = process.env.SOP_TEST_DB_PORT || "3306";
+process.env.SOP_DB_USER = process.env.SOP_TEST_DB_USER || "sop_test";
+process.env.SOP_DB_PASSWORD = process.env.SOP_TEST_DB_PASSWORD || "";
+process.env.SOP_DB_NAME = process.env.SOP_TEST_DB_NAME || "sop_ai_app_test";
 
 let pass = 0, fail = 0;
 async function check(name: string, fn: () => Promise<void> | void) {
