@@ -30,6 +30,53 @@ import {
   AuthError,
 } from "@/lib/auth/consultant-session";
 
+// Scalar CV fields that support provenance tracking
+const SCALAR_CV_FIELDS = ["email", "phone", "currentCity", "currentCountry"] as const;
+
+/**
+ * Update personalDataProvenance based on manual edits.
+ * If a scalar CV field value changed from the existing profile, mark as "manual".
+ * If unchanged, preserve existing provenance.
+ */
+function updateProvenanceForManualEdits(
+  incomingPersonalData: Record<string, any> | undefined,
+  existingProfile: any,
+  existingProvenance: Record<string, string> | undefined
+): Record<string, string> {
+  const incomingPd = incomingPersonalData || {};
+  const existingPd = existingProfile?.personalData || {};
+  const existingProv = existingProfile?.personalDataProvenance || {};
+
+  // Now build the output provenance - default to existing, override for manual changes
+  const provOut: Record<string, string> = { ...existingProv };
+
+  for (const field of ["email", "phone", "currentCity", "currentCountry"]) {
+    const incomingVal = incomingPd[field];
+    const existingVal = existingPd[field];
+    const hasIncomingVal = incomingVal && String(incomingVal).trim().length > 0;
+    const hasExistingVal = existingVal && String(existingVal).trim().length > 0;
+
+    if (!hasIncomingVal) {
+      // No incoming value - keep existing provenance
+      continue;
+    }
+
+    if (hasExistingVal) {
+      const valChanged = String(incomingPd[field]).trim() !== String(existingPd[field]).trim();
+      if (valChanged) {
+        // Value changed - this is a manual edit
+        provOut[field] = "manual";
+      }
+      // else unchanged - preserve existing provenance (already copied)
+    } else {
+      // No existing value, new value provided - this is a manual entry
+      provOut[field] = "manual";
+    }
+  }
+
+  return provOut;
+}
+
 export async function GET(request: NextRequest) {
   try {
     // Auth
@@ -162,6 +209,15 @@ export async function PUT(request: NextRequest) {
         const existingStudentScope = stripApplicationScopeFields(existing);
         profileToSave = { ...existingStudentScope, ...studentScopeFields };
       }
+      // Update personalDataProvenance for manual edits to scalar CV fields
+      const existingProfile = await getStudentProfile(body.studentId) || {};
+      const updatedProvenance = updateProvenanceForManualEdits(
+        profileToSave.personalData,
+        existingProfile,
+        existingProfile.personalDataProvenance
+      );
+      profileToSave.personalDataProvenance = updatedProvenance;
+
       const saved = await saveStudentProfileConditional(
         body.studentId,
         profileToSave,
@@ -218,8 +274,17 @@ export async function PUT(request: NextRequest) {
       profileToSave = { ...existingStudentScope, ...studentScopeFields, _revision: currentRev + 1 };
       savedContextData = buildContextDataForSave(application, appScopeFields, profileToSave);
     }
-    await saveStudentProfile(body.studentId, profileToSave);
-    if (application && savedContextData) {
+    // Update personalDataProvenance for manual edits to scalar CV fields
+      const existingProfileForNonConditional = await getStudentProfile(body.studentId) || {};
+      const updatedProvenanceNonConditional = updateProvenanceForManualEdits(
+        profileToSave.personalData,
+        existingProfileForNonConditional,
+        existingProfileForNonConditional.personalDataProvenance
+      );
+      profileToSave.personalDataProvenance = updatedProvenanceNonConditional;
+
+      await saveStudentProfile(body.studentId, profileToSave);
+      if (application && savedContextData) {
       await saveApplicationContext(application.id, savedContextData);
     }
 

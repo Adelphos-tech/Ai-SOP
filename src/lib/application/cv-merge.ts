@@ -8,28 +8,75 @@ const PERSONAL_KEYS = [
   "currentCity", "currentCountry", "dateOfBirth", "nationality",
 ] as const;
 
+// Personal data provenance keys - tracks ownership of scalar CV fields
+export const PERSONAL_DATA_PROVENANCE_KEYS = [
+  "email", "phone", "currentCity", "currentCountry"
+] as const;
+
 /**
- * Merge parsed-CV personal data into the existing personalData.
- * Merge mode fills empty fields only; overwrite prefers parsed values.
- * IMPORTANT: every canonical key must prefer existing→parsed — fields
- * like nationality/dateOfBirth must never be dropped unconditionally.
+ * Merge parsed-CV personal data into the existing personalData with provenance tracking.
+ *
+ * Provenance rules:
+ * - CV-applied fields are marked with importId (cv-...)
+ * - Manually edited fields are marked with "manual"
+ * - Legacy populated fields with NO provenance are treated as manual (safe default)
+ * - CV re-upload replaces only fields with CV provenance
+ * - Manual and legacy fields are never overwritten by CV data
+ * - Empty legacy fields may be populated from CV and receive CV provenance
  */
 export function mergePersonalData(
   existingPd: Record<string, any> | undefined,
   parsedPd: Record<string, any> | undefined,
   overwrite: boolean,
-): Record<string, any> {
+  importId: string,
+  personalDataProvenance: Record<string, string> | undefined = {}
+): { personalData: Record<string, any>; personalDataProvenance: Record<string, string> } {
   const existing = existingPd || {};
   const parsed = parsedPd || {};
   const merged: Record<string, any> = {};
+  const provOut: Record<string, string> = {};
+
   for (const k of PERSONAL_KEYS) {
-    merged[k] = overwrite ? (parsed[k] || existing[k]) : (existing[k] || parsed[k]);
+    const existingVal = existing[k];
+    const parsedVal = parsed[k];
+    const hasExistingVal = existingVal && String(existingVal).trim().length > 0;
+    const hasParsedVal = parsedVal && String(parsedVal).trim().length > 0;
+    const existingProv = personalDataProvenance?.[k];
+
+    if (!hasParsedVal) {
+      // No CV value - keep existing value and provenance
+      merged[k] = existingVal;
+      if (existingProv) provOut[k] = existingProv;
+      continue;
+    }
+
+    // Determine if existing value should be preserved:
+    // - manual provenance → always preserve (explicit manual edit)
+    // - missing provenance + existing value → preserve (legacy populated field, safe default)
+    // - cv-* provenance → allow CV replacement
+    const isManualOrLegacy = existingProv === "manual" || (!existingProv && hasExistingVal);
+
+    if (hasExistingVal && isManualOrLegacy) {
+      // Manual or legacy field - preserve existing value
+      merged[k] = existingVal;
+      provOut[k] = existingProv === "manual" ? "manual" : "legacy";
+      continue;
+    }
+
+    // CV value replaces existing CV provenance or empty field
+    merged[k] = parsedVal;
+    provOut[k] = importId;
   }
+
   // Preserve any extra existing keys not in the canonical list.
   for (const [k, v] of Object.entries(existing)) {
-    if (!PERSONAL_KEYS.includes(k as any)) merged[k] = v;
+    if (!PERSONAL_KEYS.includes(k as any)) {
+      merged[k] = v;
+      if (personalDataProvenance?.[k]) provOut[k] = personalDataProvenance[k];
+    }
   }
-  return merged;
+
+  return { personalData: merged, personalDataProvenance: provOut };
 }
 
 // ============================================================

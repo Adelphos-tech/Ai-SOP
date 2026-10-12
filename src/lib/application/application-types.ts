@@ -175,6 +175,7 @@ export interface Student {
 
 export interface StudentProfileData {
   personalData?: Record<string, unknown>;
+  personalDataProvenance?: Record<string, string>;
   education?: Record<string, unknown>[];
   englishTesting?: Record<string, unknown>;
   experience?: Record<string, unknown>[];

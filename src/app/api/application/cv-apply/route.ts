@@ -122,36 +122,49 @@ export async function POST(request: NextRequest) {
     const merged: any = { ...existingProfile };
 
     // ===== REPLACE-PREVIOUS-CV-IMPORT MODE =====
-    // Removes items provably imported by a prior CV apply (id "cv-*")
+    // Automatically removes items provably imported by a prior CV apply (id "cv-*")
     // BEFORE merging the new CV. Manual and unknown-provenance entries
-    // are always preserved — this mode repairs a corrupted profile
-    // (e.g. a wrong-person CV applied earlier) without destroying
-    // consultant-entered data. Skills are removed via skillProvenance
-    // (cv-* importId), so prior-CV skills do not linger.
-    if (body.replaceCvDerived === true) {
+    // are always preserved. This ensures a new CV import REPLACES prior CV data
+    // rather than appending. Explicit body.replaceCvDerived=false can disable.
+    const shouldReplaceCvDerived = body.replaceCvDerived !== false;
+    if (shouldReplaceCvDerived) {
+      let hasCvDerived = false;
       for (const key of ["education", "experience", "projects", "achievements"] as const) {
         if (Array.isArray(merged[key])) {
+          const beforeLen = merged[key].length;
           merged[key] = merged[key].filter(
             (item: any) => !String(item?.id ?? "").startsWith("cv-"),
           );
+          if (beforeLen !== merged[key].length) hasCvDerived = true;
         }
       }
       // Skills: drop only entries whose provenance importId is cv-*.
       // Skills with no provenance record are treated as manual and kept.
       merged.skills = removeCvDerivedSkills(merged.skills, existingProfile.skillProvenance as any);
-      emitEvent("cv_replace_derived", {
-        studentId: body.studentId,
-        actorId: consultant.id,
-        removedCvItems:
-          (existingProfile.education || []).length - merged.education.length +
-          (existingProfile.experience || []).length - merged.experience.length +
-          (existingProfile.projects || []).length - merged.projects.length +
-          (existingProfile.achievements || []).length - merged.achievements.length,
-      }, "warn");
+      if (hasCvDerived) {
+        emitEvent("cv_replace_derived", {
+          studentId: body.studentId,
+          actorId: consultant.id,
+          removedCvItems:
+            (existingProfile.education || []).length - merged.education.length +
+            (existingProfile.experience || []).length - merged.experience.length +
+            (existingProfile.projects || []).length - merged.projects.length +
+            (existingProfile.achievements || []).length - merged.achievements.length,
+        }, "warn");
+      }
     }
 
     // ===== Personal Data =====
-    merged.personalData = mergePersonalData(merged.personalData, parsed.personalData, overwrite);
+    // Use new provenance-aware merge that tracks CV vs manual ownership
+    const personalDataResult = mergePersonalData(
+      merged.personalData,
+      parsed.personalData,
+      overwrite,
+      cvImportId,
+      (existingProfile as any).personalDataProvenance
+    );
+    merged.personalData = personalDataResult.personalData;
+    merged.personalDataProvenance = personalDataResult.personalDataProvenance;
 
     // ===== Education =====
     if (Array.isArray(parsed.education) && parsed.education.length > 0) {

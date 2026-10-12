@@ -132,6 +132,9 @@ jobs:
       - name: Test production CV upload endpoint
         run: node tests/cv-production-upload.cjs
 
+      - name: Run CV provenance regression test
+        run: npx tsx tests/cv-provenance-verification.test.ts
+
       - name: Archive tested build
         run: tar --exclude=.next/cache -czf next-build.tar.gz .next
 
