@@ -88,7 +88,8 @@ export type ExtractionRoute =
   | { strategy: "docling-ocr"; reason: string }
   | { strategy: "rapidocr"; reason: string }
   | { strategy: "mixed-native-ocr"; reason: string; ocrPages: number[] }
-  | { strategy: "unstructured"; reason: string };
+  | { strategy: "unstructured"; reason: string }
+  | { strategy: "native"; reason: string };
 
 /** Detailed extraction strategy type */
 export type ExtractionStrategyType =
@@ -98,7 +99,8 @@ export type ExtractionStrategyType =
   | "docling-ocr"
   | "rapidocr"
   | "mixed-native-ocr"
-  | "unstructured";
+  | "unstructured"
+  | "native";
 
 /** Docling service endpoints */
 const DOCLING_BASE_URL = process.env.CV_PARSER_SERVICE_URL || "http://127.0.0.1:8099";
@@ -253,20 +255,23 @@ function decideExtractionRoute(
 
       // Suspicious reading order (multi-column, etc.) -> use Docling
       if (quality.suspiciousReadingOrder || quality.interleavedColumns) {
-        return { 
-          strategy: "docling-native", 
-          reason: "PDF has suspicious reading order or multi-column layout" 
+        return {
+          strategy: "docling-native",
+          reason: "PDF has suspicious reading order or multi-column layout"
         };
       }
 
-      // Structural extraction fallback -> use Unstructured
-      return { 
-        strategy: "unstructured", 
-        reason: "Using Unstructured OSS for structural preservation" 
-      };
+      // Simple text PDF with healthy native extraction — preserve pdf-parse line breaks
+      // instead of losing them through Unstructured (which can flatten pdf-lib PDFs to a single block).
+      if (quality.totalChars > 50 && nativeBlocks.length >= 2) {
+        return { strategy: "native", reason: "Text-based PDF with healthy native extraction" };
+      }
 
-      // Simple text PDF - native extraction sufficient
-      return { strategy: "docling-native", reason: "Text-based PDF with healthy extraction" };
+      // Structural extraction fallback -> use Unstructured
+      return {
+        strategy: "unstructured",
+        reason: "Using Unstructured OSS for structural preservation"
+      };
     }
 
   return { strategy: "docling-native", reason: "Default to Docling" };
@@ -841,7 +846,7 @@ async function extractCanonicalBlocks(
 // STEP 3: Apply routing decision
     let finalBlocks: CanonicalBlock[];
     let finalOcrUsed = initialOcrUsed;
-    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" | "mammoth_html" | "unstructured" = "docling-native";
+    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" | "mammoth_html" | "unstructured" | "native" = "docling-native";
     let finalDurationMs = initialDurationMs;
     const ocrPages: number[] = [];
 
@@ -876,6 +881,30 @@ async function extractCanonicalBlocks(
         finalDurationMs = ocrResult.durationMs;
         break;
 
+      case "native":
+        // Healthy native extraction (pdf-parse) — preserve line breaks
+        if (initialStrategy !== "native") {
+          const { extractTextFromPDF } = await import("./cv-parser");
+          const text = await extractTextFromPDF(buffer);
+          finalBlocks = text.split("\n").map((line, idx) => ({
+            text: line.trim(),
+            page: 1,
+            order: idx,
+            blockType: "PARAGRAPH" as CanonicalBlockType,
+            bbox: null,
+            row: null,
+            column: null,
+            style: null,
+            sourceStrategy: "native" as const,
+            confidence: 0.5,
+            metadata: {},
+          })).filter(b => b.text.length > 0);
+        } else {
+          finalBlocks = initialBlocks;
+        }
+        finalStrategy = "native";
+        break;
+
       case "rapidocr":
         // Use Docling OCR endpoint or RapidOCR fallback
         try {
@@ -886,9 +915,12 @@ async function extractCanonicalBlocks(
           finalStrategy = "rapidocr";
           finalDurationMs = ocrResult.durationMs;
         } catch {
-          // Try direct RapidOCR call
-          warnings.push("Docling OCR failed, attempting direct RapidOCR");
-          throw new Error("RapidOCR fallback not yet implemented in Node layer");
+          // OCR not available — return initial blocks and let downstream classify
+          // (image-only PDFs will have empty blocks → IMAGE_ONLY_PDF;
+          //  near-empty PDFs will have minimal blocks → INSUFFICIENT_TEXT)
+          warnings.push("OCR unavailable, falling back to native extraction for classification");
+          finalBlocks = initialBlocks;
+          finalStrategy = "native";
         }
         break;
 
