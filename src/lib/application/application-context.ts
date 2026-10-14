@@ -26,6 +26,8 @@
 //                 intake writes never touch shared app-scope keys
 // ============================================================
 
+import { COUNTRY_QUESTIONNAIRES } from "@/lib/application/country-questionnaire";
+
 /**
  * Intake profile keys that belong to one application only.
  * `application` is the legacy StudentProfile blob written by the old
@@ -99,6 +101,21 @@ export interface ResolvedApplicationContext {
 
 function isAppScopeKey(key: string): boolean {
   return (APPLICATION_SCOPE_FIELDS as readonly string[]).includes(key);
+}
+
+/**
+ * Normalize a country value (code or full name) to a canonical country code.
+ * Returns null if the value cannot be resolved to a known country.
+ */
+function normalizeCountryCode(value: string): string | null {
+  if (!value || typeof value !== "string") return null;
+  const lower = value.trim().toLowerCase();
+  if (!lower) return null;
+  for (const [code, questionnaire] of Object.entries(COUNTRY_QUESTIONNAIRES)) {
+    if (code.toLowerCase() === lower) return code;
+    if (questionnaire.countryName.toLowerCase() === lower) return code;
+  }
+  return null;
 }
 
 /** Deterministic serialization — object keys sorted recursively so
@@ -177,11 +194,16 @@ export function resolveApplicationContext(
     // Country Questions cross-application fix:
     // If the stored countryQuestionnaire countryCode doesn't match
     // the application's country, discard it.
+    // Normalization handles both codes ("USA") and full names ("United States").
     let validatedAppFields = { ...appScopeFields };
     if (appScopeFields.countryQuestionnaire && application?.country) {
       const storedCountryCode = (appScopeFields.countryQuestionnaire as any)?.countryCode;
-      const appCountryCode = application.country; // application.country is the country code
-      if (storedCountryCode && storedCountryCode !== appCountryCode) {
+      const appCountryCode = application.country;
+      const storedNormalized = normalizeCountryCode(storedCountryCode);
+      const appNormalized = normalizeCountryCode(appCountryCode);
+      // Only discard when we can definitively prove a mismatch.
+      // Unknown values (null) are preserved to avoid data loss.
+      if (storedNormalized && appNormalized && storedNormalized !== appNormalized) {
         // Country mismatch — treat Country Questions as unset for this application
         delete validatedAppFields.countryQuestionnaire;
       }
