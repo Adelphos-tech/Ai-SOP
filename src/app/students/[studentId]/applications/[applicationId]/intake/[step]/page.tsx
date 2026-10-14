@@ -829,18 +829,28 @@ function StudentDetailsSection() {
           } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Education</button>
         </div>
         {edu.fields.length === 0 ? (
-          <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No education records yet. Click "Add Education" to start.</p>
+          <div className="py-8 px-4 bg-dvivid-surface-alt rounded-card border border-dvivid-border border-dashed flex flex-col items-center gap-3 text-center">
+            <svg className="w-8 h-8 text-dvivid-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 14l9-5-9-5-9 5 9 5z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
+            </svg>
+            <p className="text-sm text-dvivid-text-muted">No education records yet.</p>
+            <p className="text-xs text-dvivid-text-secondary">Click <span className="font-medium text-dvivid-primary">Add Education</span> to get started.</p>
+          </div>
         ) : (
           <div className="space-y-4">
             {edu.fields.map((f, i) => (
-              <div key={f._key} className="border border-dvivid-border rounded-input p-4 relative">
+              <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
                 <input type="hidden" {...register(`education.${i}.id` as any)} />
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-dvivid-text-secondary">Education #{i + 1}</span>
-                  <button type="button" onClick={() => edu.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                <div className="flex items-center justify-between mb-4 pb-3 border-b border-dvivid-border-light">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
+                    <span className="text-sm font-semibold text-dvivid-text-primary">Education</span>
+                  </div>
+                  <button type="button" onClick={() => edu.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <FormField label="Degree Level">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField label="Degree Level" required>
                     <select className={inputClass} {...register(`education.${i}.level` as any)}>
                       <option value="">Select level</option>
                       <option value="10th">10th Grade</option>
@@ -851,7 +861,7 @@ function StudentDetailsSection() {
                       <option value="PhD">PhD</option>
                     </select>
                   </FormField>
-                  <FormField label="Institution / University">
+                  <FormField label="Institution / University" required>
                     <input className={inputClass} placeholder="IIT Bombay" {...register(`education.${i}.institution` as any)} />
                   </FormField>
                   <FormField label="Field / Major">
@@ -887,13 +897,21 @@ function StudentDetailsSection() {
 // ============================================================
 function FieldMotivationSection() {
   return (
-    <div className="space-y-4">
-      <FormField label="Why did you choose this field of study?" helper="This is optional but helps the AI understand your motivation.">
-        <Area name="fieldMotivation" rows={8} placeholder="I first became interested in computer science when..." />
-      </FormField>
-      <div className="bg-dvivid-primary-light/30 rounded-input p-4 space-y-2">
-        <p className="text-sm font-medium text-dvivid-text-primary">Helper prompts (optional):</p>
-        <ul className="text-sm text-dvivid-text-secondary space-y-1 list-disc list-inside">
+    <div className="space-y-6">
+      <div className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
+        <FormField label="Why did you choose this field of study?" helper="Optional — helps the AI understand your motivation.">
+          <Area name="fieldMotivation" rows={8} placeholder="I first became interested in computer science when..." />
+        </FormField>
+      </div>
+
+      <div className="bg-dvivid-surface-alt border border-dvivid-border rounded-card p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <svg className="w-5 h-5 text-dvivid-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+          </svg>
+          <p className="text-sm font-semibold text-dvivid-text-primary">Helper prompts</p>
+        </div>
+        <ul className="text-sm text-dvivid-text-secondary space-y-2 list-disc list-inside">
           <li>What first interested you in this field?</li>
           <li>Was there a course, project, person or experience that influenced you?</li>
           <li>Why do you enjoy studying this subject?</li>
@@ -925,18 +943,27 @@ function AcademicsProjectsSection() {
           } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Project</button>
         </div>
         {projects.fields.length === 0 ? (
-          <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No projects yet.</p>
+          <div className="py-8 px-4 bg-dvivid-surface-alt rounded-card border border-dvivid-border border-dashed flex flex-col items-center gap-3 text-center">
+            <svg className="w-8 h-8 text-dvivid-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+            </svg>
+            <p className="text-sm text-dvivid-text-muted">No projects yet.</p>
+            <p className="text-xs text-dvivid-text-secondary">Click <span className="font-medium text-dvivid-primary">Add Project</span> to get started.</p>
+          </div>
         ) : (
           <div className="space-y-4">
             {projects.fields.map((f, i) => (
-              <div key={f._key} className="border border-dvivid-border rounded-input p-4">
+              <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
                 <input type="hidden" {...register(`projects.${i}.id` as any)} />
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-dvivid-text-secondary">Project #{i + 1}</span>
-                  <button type="button" onClick={() => projects.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                <div className="flex items-center justify-between mb-4 pb-3 border-b border-dvivid-border-light">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
+                    <span className="text-sm font-semibold text-dvivid-text-primary">Project</span>
+                  </div>
+                  <button type="button" onClick={() => projects.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <FormField label="Project Name"><input className={inputClass} {...register(`projects.${i}.name` as any)} /></FormField>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField label="Project Name" required><input className={inputClass} {...register(`projects.${i}.name` as any)} /></FormField>
                   <FormField label="Project Type"><input className={inputClass} placeholder="Academic / Personal / Research" {...register(`projects.${i}.type` as any)} /></FormField>
                   <FormField label="Your Role"><input className={inputClass} {...register(`projects.${i}.role` as any)} /></FormField>
                   <FormField label="Tools / Technologies"><input className={inputClass} {...register(`projects.${i}.technologies` as any)} /></FormField>
@@ -961,18 +988,27 @@ function AcademicsProjectsSection() {
           <button type="button" onClick={() => subjects.append({ id: crypto.randomUUID(), name: "", topics: "", relevance: "" } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Subject</button>
         </div>
         {subjects.fields.length === 0 ? (
-          <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No subjects yet.</p>
+          <div className="py-8 px-4 bg-dvivid-surface-alt rounded-card border border-dvivid-border border-dashed flex flex-col items-center gap-3 text-center">
+            <svg className="w-8 h-8 text-dvivid-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+            <p className="text-sm text-dvivid-text-muted">No subjects yet.</p>
+            <p className="text-xs text-dvivid-text-secondary">Click <span className="font-medium text-dvivid-primary">Add Subject</span> to get started.</p>
+          </div>
         ) : (
           <div className="space-y-3">
             {subjects.fields.map((f, i) => (
-              <div key={f._key} className="border border-dvivid-border rounded-input p-3">
+              <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
                 <input type="hidden" {...register(`subjects.${i}.id` as any)} />
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-dvivid-text-secondary">Subject #{i + 1}</span>
-                  <button type="button" onClick={() => subjects.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-dvivid-border-light">
+                  <div className="flex items-center gap-2">
+                    <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
+                    <span className="text-sm font-semibold text-dvivid-text-primary">Subject</span>
+                  </div>
+                  <button type="button" onClick={() => subjects.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <FormField label="Subject Name"><input className={inputClass} {...register(`subjects.${i}.name` as any)} /></FormField>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <FormField label="Subject Name" required><input className={inputClass} {...register(`subjects.${i}.name` as any)} /></FormField>
                   <FormField label="Important Topics"><input className={inputClass} {...register(`subjects.${i}.topics` as any)} /></FormField>
                   <FormField label="Relevance to Future Study"><input className={inputClass} {...register(`subjects.${i}.relevance` as any)} /></FormField>
                 </div>
@@ -1018,26 +1054,32 @@ function WorkExperienceSection() {
         } as any)} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Experience</button>
       </div>
       {exp.fields.length === 0 ? (
-        <div className="py-4 px-4 bg-gray-50 rounded-input space-y-3">
-          <p className="text-sm text-dvivid-text-muted text-center">No experience records yet.</p>
-          <label className="flex items-center justify-center gap-2 cursor-pointer">
+        <div className="py-8 px-4 bg-dvivid-surface-alt rounded-card border border-dvivid-border border-dashed flex flex-col items-center gap-3 text-center">
+          <svg className="w-8 h-8 text-dvivid-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 13.255A23.931 23.931 0 0112 6.612 23.931 23.931 0 013 13.255m0 0A23.93 23.93 0 0012 21c3.866 0 7.356-2.212 9-5.545m0-5.255A23.93 23.93 0 0012 3c-3.866 0-7.356 2.212-9 5.545" />
+          </svg>
+          <p className="text-sm text-dvivid-text-muted">No experience records yet.</p>
+          <label className="flex items-center justify-center gap-2 cursor-pointer mt-1">
             <input type="checkbox" {...register("noWorkExperience")} />
             <span className="text-sm text-dvivid-text-secondary">
-              This applicant has no work experience (e.g., fresher applying directly after bachelor's)
+              This applicant has no work experience (e.g., fresher)
             </span>
           </label>
         </div>
       ) : (
         <div className="space-y-4">
           {exp.fields.map((f, i) => (
-            <div key={f._key} className="border border-dvivid-border rounded-input p-4">
+            <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
               <input type="hidden" {...register(`experience.${i}.id` as any)} />
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-dvivid-text-secondary">Experience #{i + 1}</span>
-                <button type="button" onClick={() => exp.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-dvivid-border-light">
+                <div className="flex items-center gap-2">
+                  <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
+                  <span className="text-sm font-semibold text-dvivid-text-primary">Experience</span>
+                </div>
+                <button type="button" onClick={() => exp.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <FormField label="Type">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField label="Type" required>
                   <select className={inputClass} {...register(`experience.${i}.type` as any)}>
                     <option value="">Select type</option>
                     <option value="Internship">Internship</option>
@@ -1047,8 +1089,8 @@ function WorkExperienceSection() {
                     <option value="Other">Other Experience</option>
                   </select>
                 </FormField>
-                <FormField label="Organization"><input className={inputClass} {...register(`experience.${i}.organization` as any)} /></FormField>
-                <FormField label="Role"><input className={inputClass} {...register(`experience.${i}.role` as any)} /></FormField>
+                <FormField label="Organization" required><input className={inputClass} {...register(`experience.${i}.organization` as any)} /></FormField>
+                <FormField label="Role" required><input className={inputClass} {...register(`experience.${i}.role` as any)} /></FormField>
                 <FormField label="Location"><input className={inputClass} {...register(`experience.${i}.location` as any)} /></FormField>
                 <FormField label="Start Date"><input type="month" className={inputClass} {...register(`experience.${i}.startDate` as any)} /></FormField>
                 <Controller
@@ -1085,21 +1127,36 @@ function WorkExperienceSection() {
 // ============================================================
 function MastersMotivationSection() {
   return (
-    <div className="space-y-4">
-      <FormField label="Why do you want to pursue a master's degree in this specific field?" required>
-        <Area name="mastersMotivation.whyField" rows={4} placeholder="I want to pursue a master's in this field because..." />
-      </FormField>
-      <FormField label="Why master's now?">
-        <Area name="mastersMotivation.whyNow" rows={3} placeholder="Now is the right time because..." />
-      </FormField>
-      <FormField label="Knowledge/skill gaps you want to address">
-        <Area name="mastersMotivation.skillGaps" rows={3} placeholder="I want to address gaps in..." />
-      </FormField>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="Academic motivation"><Area name="mastersMotivation.academicMotivation" rows={3} /></FormField>
-        <FormField label="Professional motivation"><Area name="mastersMotivation.professionalMotivation" rows={3} /></FormField>
-        <FormField label="Expected learning"><Area name="mastersMotivation.expectedLearning" rows={3} /></FormField>
-        <FormField label="How master's supports career plans"><Area name="mastersMotivation.careerSupport" rows={3} /></FormField>
+    <div className="space-y-6">
+      <div className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
+        <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4 flex items-center gap-2">
+          <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">1</span>
+          Core Motivation
+        </h3>
+        <div className="space-y-4">
+          <FormField label="Why do you want to pursue a master's degree in this specific field?" required>
+            <Area name="mastersMotivation.whyField" rows={4} placeholder="I want to pursue a master's in this field because..." />
+          </FormField>
+          <FormField label="Why master's now?">
+            <Area name="mastersMotivation.whyNow" rows={3} placeholder="Now is the right time because..." />
+          </FormField>
+          <FormField label="Knowledge/skill gaps you want to address">
+            <Area name="mastersMotivation.skillGaps" rows={3} placeholder="I want to address gaps in..." />
+          </FormField>
+        </div>
+      </div>
+
+      <div className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
+        <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4 flex items-center gap-2">
+          <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">2</span>
+          Supporting Motivation
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <FormField label="Academic motivation"><Area name="mastersMotivation.academicMotivation" rows={3} /></FormField>
+          <FormField label="Professional motivation"><Area name="mastersMotivation.professionalMotivation" rows={3} /></FormField>
+          <FormField label="Expected learning"><Area name="mastersMotivation.expectedLearning" rows={3} /></FormField>
+          <FormField label="How master's supports career plans"><Area name="mastersMotivation.careerSupport" rows={3} /></FormField>
+        </div>
       </div>
     </div>
   );
@@ -1139,10 +1196,15 @@ function CountryQuestionsSection({ application }: { application: any }) {
       </FormField>
 
       {countryCode && (
-        <div className="space-y-4">
-          <p className="text-sm text-dvivid-text-secondary">
-            Questions for <span className="font-medium">{questionnaire.countryName}</span>:
-          </p>
+        <div className="bg-dvivid-surface-alt/50 border border-dvivid-border rounded-card p-5 space-y-5">
+          <div className="flex items-center gap-2 pb-3 border-b border-dvivid-border-light">
+            <svg className="w-5 h-5 text-dvivid-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-sm font-medium text-dvivid-text-primary">
+              Questions for <span className="text-dvivid-primary">{questionnaire.countryName}</span>
+            </p>
+          </div>
           {questionnaire.questions.map(q => (
             <FormField key={q.id} label={q.label} required={q.required} helper={q.helper}>
               <Area name={`countryQuestionnaire.answers["${q.id}"]`} rows={4} placeholder={q.placeholder} />
@@ -1174,16 +1236,25 @@ function SubjectRequirementsSection() {
       </div>
 
       {notes.fields.length === 0 ? (
-        <p className="text-sm text-dvivid-text-muted py-4 text-center bg-gray-50 rounded-input">No notes added.</p>
+        <div className="py-8 px-4 bg-dvivid-surface-alt rounded-card border border-dvivid-border border-dashed flex flex-col items-center gap-3 text-center">
+          <svg className="w-8 h-8 text-dvivid-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <p className="text-sm text-dvivid-text-muted">No notes added.</p>
+          <p className="text-xs text-dvivid-text-secondary">Click <span className="font-medium text-dvivid-primary">Add Note</span> to record a requirement.</p>
+        </div>
       ) : (
         <div className="space-y-3">
           {notes.fields.map((f, i) => (
-            <div key={f._key} className="border border-dvivid-border rounded-input p-3">
+            <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
               <input type="hidden" {...register(`subjectRequirements.notes.${i}.id` as any)} />
               <input type="hidden" {...register(`subjectRequirements.notes.${i}.type` as any)} />
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-dvivid-primary-light text-dvivid-primary">Consultant Added</span>
-                <button type="button" onClick={() => notes.remove(i)} className="text-sm text-dvivid-error hover:underline">Remove</button>
+              <div className="flex items-center justify-between mb-3 pb-2 border-b border-dvivid-border-light">
+                <div className="flex items-center gap-2">
+                  <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-dvivid-primary-light text-dvivid-primary font-medium">Consultant Added</span>
+                </div>
+                <button type="button" onClick={() => notes.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
               </div>
               <Area name={`subjectRequirements.notes.${i}.content`} rows={3} placeholder="Enter requirement note..." />
             </div>
@@ -1253,8 +1324,11 @@ function CareerGoalsSection() {
   return (
     <div className="space-y-6">
       {/* Short-term */}
-      <div>
-        <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Short-Term Goal</h3>
+      <div className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
+        <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4 flex items-center gap-2">
+          <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">1</span>
+          Short-Term Goal
+        </h3>
         <div className="space-y-4">
           <FormField label="What role do you want after graduation?" required>
             <Area name="careerGoals.shortTerm.role" rows={2} placeholder="I want to work as a..." />
@@ -1266,8 +1340,11 @@ function CareerGoalsSection() {
       </div>
 
       {/* Long-term */}
-      <div>
-        <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4">Long-Term Goal</h3>
+      <div className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
+        <h3 className="text-sm font-semibold text-dvivid-text-primary mb-4 flex items-center gap-2">
+          <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">2</span>
+          Long-Term Goal
+        </h3>
         <div className="space-y-4">
           <FormField label="Where do you see yourself in 5–10 years?" required>
             <Area name="careerGoals.longTerm.vision" rows={3} placeholder="In 5-10 years, I see myself..." />
