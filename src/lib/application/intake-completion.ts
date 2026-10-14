@@ -5,6 +5,8 @@
 // calculates completion status for each section.
 // ============================================================
 
+import { getCountryQuestionnaire } from "./country-questionnaire";
+
 export interface IntakeSectionDef {
   id: number;
   slug: string;
@@ -85,14 +87,22 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
           (p.mastersMotivation.whyNow || p.mastersMotivation.whyField || p.mastersMotivation.academicMotivation)
         );
         break;
-      case 6: // Country Questions
-        filled = !!(
-          p.countryQuestionnaire &&
-          p.countryQuestionnaire.countryCode &&
-          p.countryQuestionnaire.answers &&
-          Object.keys(p.countryQuestionnaire.answers).length > 0
-        );
+      case 6: { // Country Questions
+        const cq = p.countryQuestionnaire;
+        if (!cq?.countryCode || !cq?.answers || typeof cq.answers !== "object") {
+          filled = false;
+          break;
+        }
+        const questionnaire = getCountryQuestionnaire(cq.countryCode);
+        const requiredQuestions = questionnaire.questions.filter(q => q.required);
+        // All required questions must have non-empty trimmed answers.
+        // Unknown / legacy / "OTHER" countries use DEFAULT_QUESTIONNAIRE.
+        filled = requiredQuestions.every(q => {
+          const ans = cq.answers[q.id];
+          return typeof ans === "string" && ans.trim().length > 0;
+        });
         break;
+      }
       case 7: // Subject Requirements (optional)
         filled = !!(
           p.subjectRequirements &&

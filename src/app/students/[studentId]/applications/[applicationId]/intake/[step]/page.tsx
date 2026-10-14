@@ -850,7 +850,7 @@ function StudentDetailsSection() {
                   <button type="button" onClick={() => edu.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <FormField label="Degree Level" required>
+                  <FormField label="Degree Level">
                     <select className={inputClass} {...register(`education.${i}.level` as any)}>
                       <option value="">Select level</option>
                       <option value="10th">10th Grade</option>
@@ -861,7 +861,7 @@ function StudentDetailsSection() {
                       <option value="PhD">PhD</option>
                     </select>
                   </FormField>
-                  <FormField label="Institution / University" required>
+                  <FormField label="Institution / University">
                     <input className={inputClass} placeholder="IIT Bombay" {...register(`education.${i}.institution` as any)} />
                   </FormField>
                   <FormField label="Field / Major">
@@ -963,7 +963,7 @@ function AcademicsProjectsSection() {
                   <button type="button" onClick={() => projects.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <FormField label="Project Name" required><input className={inputClass} {...register(`projects.${i}.name` as any)} /></FormField>
+                  <FormField label="Project Name"><input className={inputClass} {...register(`projects.${i}.name` as any)} /></FormField>
                   <FormField label="Project Type"><input className={inputClass} placeholder="Academic / Personal / Research" {...register(`projects.${i}.type` as any)} /></FormField>
                   <FormField label="Your Role"><input className={inputClass} {...register(`projects.${i}.role` as any)} /></FormField>
                   <FormField label="Tools / Technologies"><input className={inputClass} {...register(`projects.${i}.technologies` as any)} /></FormField>
@@ -1008,7 +1008,7 @@ function AcademicsProjectsSection() {
                   <button type="button" onClick={() => subjects.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <FormField label="Subject Name" required><input className={inputClass} {...register(`subjects.${i}.name` as any)} /></FormField>
+                  <FormField label="Subject Name"><input className={inputClass} {...register(`subjects.${i}.name` as any)} /></FormField>
                   <FormField label="Important Topics"><input className={inputClass} {...register(`subjects.${i}.topics` as any)} /></FormField>
                   <FormField label="Relevance to Future Study"><input className={inputClass} {...register(`subjects.${i}.relevance` as any)} /></FormField>
                 </div>
@@ -1079,7 +1079,7 @@ function WorkExperienceSection() {
                 <button type="button" onClick={() => exp.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormField label="Type" required>
+                <FormField label="Type">
                   <select className={inputClass} {...register(`experience.${i}.type` as any)}>
                     <option value="">Select type</option>
                     <option value="Internship">Internship</option>
@@ -1089,8 +1089,8 @@ function WorkExperienceSection() {
                     <option value="Other">Other Experience</option>
                   </select>
                 </FormField>
-                <FormField label="Organization" required><input className={inputClass} {...register(`experience.${i}.organization` as any)} /></FormField>
-                <FormField label="Role" required><input className={inputClass} {...register(`experience.${i}.role` as any)} /></FormField>
+                <FormField label="Organization"><input className={inputClass} {...register(`experience.${i}.organization` as any)} /></FormField>
+                <FormField label="Role"><input className={inputClass} {...register(`experience.${i}.role` as any)} /></FormField>
                 <FormField label="Location"><input className={inputClass} {...register(`experience.${i}.location` as any)} /></FormField>
                 <FormField label="Start Date"><input type="month" className={inputClass} {...register(`experience.${i}.startDate` as any)} /></FormField>
                 <Controller

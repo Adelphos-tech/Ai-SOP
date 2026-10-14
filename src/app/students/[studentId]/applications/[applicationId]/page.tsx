@@ -470,25 +470,24 @@ export default function ApplicationWorkspacePage() {
     ? `/students/${studentId}/applications/${applicationId}/intake/missing`
     : `/students/${studentId}/applications/${applicationId}/intake/student-details`;
 
-  // State-aware primary CTA priority
+  // State-aware primary CTA — only shown when intake is complete
+  // (the progress panel handles the incomplete-intake "Continue" button)
   let primaryCta: { label: string; href: string; onClick?: () => void } | null = null;
-  if (!intakeComplete) {
-    const missingSections = readiness?.sections.filter(s => !s.optional && s.status !== "missing") || [];
-    const missingCount = missingSections.length;
-    primaryCta = { label: `Complete ${missingCount} Missing Answer${missingCount !== 1 ? "s" : ""} →`, href: intakeHref };
-  } else if (documents.length === 0) {
-    primaryCta = { label: "+ Add Document →", href: `/students/${studentId}/applications/${applicationId}/documents/new` };
-  } else if (hasNeedsReview(documents)) {
-    const needsReviewDoc = documents.find(d => d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW");
-    primaryCta = { label: "Review Document →", href: needsReviewDoc ? `/students/${studentId}/applications/${applicationId}/documents/${needsReviewDoc.id}` : docWorkspaceHref! };
-  } else if (hasGenerating(documents)) {
-    const genDoc = documents.find(d => d.generationStatus === "GENERATING");
-    primaryCta = { label: "View Generation →", href: genDoc ? `/students/${studentId}/applications/${applicationId}/documents/${genDoc.id}` : docWorkspaceHref! };
-  } else if (hasFailed(documents)) {
-    const failedDoc = documents.find(d => d.generationStatus === "FAILED");
-    primaryCta = { label: "Review / Retry →", href: failedDoc ? `/students/${studentId}/applications/${applicationId}/documents/${failedDoc.id}` : docWorkspaceHref! };
-  } else {
-    primaryCta = { label: "+ Add Document →", href: `/students/${studentId}/applications/${applicationId}/documents/new` };
+  if (intakeComplete) {
+    if (documents.length === 0) {
+      primaryCta = { label: "+ Add Document →", href: `/students/${studentId}/applications/${applicationId}/documents/new` };
+    } else if (hasNeedsReview(documents)) {
+      const needsReviewDoc = documents.find(d => d.reviewStatus === "NEEDS_REVIEW" || d.reviewStatus === "IN_REVIEW");
+      primaryCta = { label: "Review Document →", href: needsReviewDoc ? `/students/${studentId}/applications/${applicationId}/documents/${needsReviewDoc.id}` : docWorkspaceHref! };
+    } else if (hasGenerating(documents)) {
+      const genDoc = documents.find(d => d.generationStatus === "GENERATING");
+      primaryCta = { label: "View Generation →", href: genDoc ? `/students/${studentId}/applications/${applicationId}/documents/${genDoc.id}` : docWorkspaceHref! };
+    } else if (hasFailed(documents)) {
+      const failedDoc = documents.find(d => d.generationStatus === "FAILED");
+      primaryCta = { label: "Review / Retry →", href: failedDoc ? `/students/${studentId}/applications/${applicationId}/documents/${failedDoc.id}` : docWorkspaceHref! };
+    } else {
+      primaryCta = { label: "+ Add Document →", href: `/students/${studentId}/applications/${applicationId}/documents/new` };
+    }
   }
 
   // Compute metrics
@@ -597,41 +596,101 @@ export default function ApplicationWorkspacePage() {
         </div>
       </div>
 
-      {/* Readiness / Missing Information */}
-      {readiness && !intakeComplete && (
-        <div className="mb-6 p-4 bg-dvivid-warning-light border border-dvivid-warning/30 rounded-card">
-          <p className="text-xs font-medium text-dvivid-text-muted uppercase tracking-wide mb-2">Application Information</p>
-          <div>
-            {(() => {
-              const missingSections = readiness.sections.filter(s => !s.optional && s.status !== "complete");
-              const missingCount = missingSections.length;
+      {/* Intake Progress Dashboard */}
+      {readiness && (
+        <div className={`mb-6 rounded-card border p-5 ${
+          intakeComplete
+            ? "bg-dvivid-success-light border-dvivid-success/20"
+            : "bg-white border-dvivid-border"
+        }`}>
+          {/* Header */}
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-xs font-medium text-dvivid-text-muted uppercase tracking-wide mb-1">Application Information</p>
+              <p className="text-sm font-semibold text-dvivid-text-primary">
+                {intakeComplete
+                  ? "✓ All required information complete"
+                  : `${readiness.requiredComplete}/${readiness.requiredTotal} required sections complete`}
+              </p>
+            </div>
+            {!intakeComplete && (
+              <Link href={intakeHref} prefetch={false}>
+                <PrimaryButton>Continue Application →</PrimaryButton>
+              </Link>
+            )}
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full h-2 bg-dvivid-border-light rounded-full overflow-hidden mb-5">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                intakeComplete ? "bg-dvivid-success" : "bg-dvivid-primary"
+              }`}
+              style={{
+                width: `${readiness.requiredTotal > 0 ? Math.round((readiness.requiredComplete / readiness.requiredTotal) * 100) : 0}%`,
+              }}
+            />
+          </div>
+
+          {/* Section grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {readiness.sections.map(section => {
+              const isComplete = section.status === "complete";
+              const isMissing = section.status === "missing";
+              const isOptional = section.optional;
+              const sectionHref = `/students/${studentId}/applications/${applicationId}/intake/${section.slug}`;
+
               return (
-                <div>
-                  <p className="text-sm font-medium text-dvivid-text-primary mb-2">
-                    {missingCount} section{missingCount !== 1 ? "s" : ""} need attention
-                  </p>
-                  <ul className="mb-3 space-y-1">
-                    {missingSections.map(s => (
-                      <li key={s.slug} className="text-sm text-dvivid-text-secondary">
-                        · {s.label}
-                        {s.missingFields?.length > 0 && (
-                          <span className="text-dvivid-warning"> — {s.missingFields.join(", ")}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/missing`} prefetch={false}>
-                    <PrimaryButton>Complete {missingCount} Missing Answer{missingCount !== 1 ? "s" : ""} →</PrimaryButton>
-                  </Link>
-                </div>
+                <Link
+                  key={section.slug}
+                  href={sectionHref}
+                  className={`flex items-start gap-2.5 p-3 rounded-lg transition-colors ${
+                    isMissing
+                      ? "bg-dvivid-warning-light/40 hover:bg-dvivid-warning-light/70"
+                      : isComplete
+                      ? "bg-dvivid-surface-alt hover:bg-dvivid-surface-alt/80"
+                      : "bg-dvivid-surface-alt/50 hover:bg-dvivid-surface-alt"
+                  }`}
+                >
+                  <div className="mt-0.5 flex-shrink-0">
+                    {isComplete ? (
+                      <div className="w-5 h-5 rounded-full bg-dvivid-primary flex items-center justify-center">
+                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                    ) : isMissing ? (
+                      <div className="w-5 h-5 rounded-full border-2 border-dvivid-warning flex items-center justify-center">
+                        <span className="text-[10px] font-bold text-dvivid-warning">{section.sectionId}</span>
+                      </div>
+                    ) : (
+                      <div className="w-5 h-5 rounded-full border-2 border-dvivid-text-muted/40 flex items-center justify-center">
+                        <span className="text-[10px] text-dvivid-text-muted">-{section.sectionId}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium truncate ${
+                      isMissing ? "text-dvivid-text-primary" : "text-dvivid-text-secondary"
+                    }`}>
+                      {section.label}
+                      {isOptional && <span className="text-dvivid-text-muted font-normal"> (opt)</span>}
+                    </p>
+                    {isMissing && section.missingFields && section.missingFields.length > 0 && (
+                      <p className="text-xs text-dvivid-warning mt-0.5 truncate">
+                        Needs: {section.missingFields.join(", ")}
+                      </p>
+                    )}
+                  </div>
+                </Link>
               );
-            })()}
+            })}
           </div>
         </div>
       )}
 
-      {/* State-Aware Primary CTA — suppress when readiness panel already has CTA */}
-      {primaryCta && !(readiness && !intakeComplete) && (
+      {/* State-Aware Primary CTA — shown only when intake is complete */}
+      {primaryCta && (
         <div className="mb-6">
           {primaryCta.onClick ? (
             <PrimaryButton onClick={primaryCta.onClick}>{primaryCta.label}</PrimaryButton>
