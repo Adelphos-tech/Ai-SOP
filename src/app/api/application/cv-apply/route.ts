@@ -20,6 +20,7 @@ import {
 } from "@/lib/application/application-repository";
 import { randomUUID } from "crypto";
 import { mergePersonalData, mergeCvSkills, removeCvDerivedSkills } from "@/lib/application/cv-merge";
+import { generateId } from "@/lib/application/cv-parser";
 import { emitEvent } from "@/lib/observability/events";
 import { classifyIdentityMatch } from "@/lib/application/identity-check";
 import { getProfileReadiness } from "@/lib/application/intake-completion";
@@ -146,10 +147,10 @@ export async function POST(request: NextRequest) {
           studentId: body.studentId,
           actorId: consultant.id,
           removedCvItems:
-            (existingProfile.education || []).length - merged.education.length +
-            (existingProfile.experience || []).length - merged.experience.length +
-            (existingProfile.projects || []).length - merged.projects.length +
-            (existingProfile.achievements || []).length - merged.achievements.length,
+            (existingProfile.education || []).length - (merged.education || []).length +
+            (existingProfile.experience || []).length - (merged.experience || []).length +
+            (existingProfile.projects || []).length - (merged.projects || []).length +
+            (existingProfile.achievements || []).length - (merged.achievements || []).length,
         }, "warn");
       }
     }
@@ -167,22 +168,33 @@ export async function POST(request: NextRequest) {
     merged.personalDataProvenance = personalDataResult.personalDataProvenance;
 
     // ===== Education =====
+    // Every CV-derived record MUST have a cv-prefixed id so replaceCvDerived can
+    // remove it on subsequent imports. If the parser somehow omits an id, generate
+    // one here. Provenance is tracked in educationProvenance for diagnostics.
     if (Array.isArray(parsed.education) && parsed.education.length > 0) {
       const existingEdu = merged.education || [];
+      const existingProv = (merged.educationProvenance || []) as Array<{ id: string; importId: string }>;
       if (overwrite || existingEdu.length === 0) {
-        merged.education = parsed.education.map((e: any) => ({
-          id: e.id || randomUUID(),
-          level: mapDegreeToLevel(e.degree),
-          institution: e.institution || "",
-          degree: e.degree || "",
-          specialization: e.specialization || "",
-          startYear: e.startYear || "",
-          endYear: e.endYear || "",
-          cgpa: e.cgpa || "",
-          cgpaScale: e.cgpaScale || "10",
-          percentage: "",
-          backlogs: "",
-          status: e.endYear ? "Completed" : "Ongoing",
+        merged.education = parsed.education.map((e: any) => {
+          const id = e.id && String(e.id).startsWith("cv-") ? e.id : generateId();
+          return {
+            id,
+            level: mapDegreeToLevel(e.degree),
+            institution: e.institution || "",
+            degree: e.degree || "",
+            specialization: e.specialization || "",
+            startYear: e.startYear || "",
+            endYear: e.endYear || "",
+            cgpa: e.cgpa || "",
+            cgpaScale: e.cgpaScale || "10",
+            percentage: "",
+            backlogs: "",
+            status: e.endYear ? "Completed" : "Ongoing",
+          };
+        });
+        merged.educationProvenance = parsed.education.map((e: any) => ({
+          id: e.id && String(e.id).startsWith("cv-") ? e.id : generateId(),
+          importId: cvImportId,
         }));
       } else {
         for (const newEdu of parsed.education) {
@@ -191,8 +203,9 @@ export async function POST(request: NextRequest) {
             e.degree?.toLowerCase() === newEdu.degree?.toLowerCase()
           );
           if (!isDuplicate) {
+            const id = newEdu.id && String(newEdu.id).startsWith("cv-") ? newEdu.id : generateId();
             existingEdu.push({
-              id: newEdu.id || randomUUID(),
+              id,
               level: mapDegreeToLevel(newEdu.degree),
               institution: newEdu.institution || "",
               degree: newEdu.degree || "",
@@ -205,30 +218,40 @@ export async function POST(request: NextRequest) {
               backlogs: "",
               status: newEdu.endYear ? "Completed" : "Ongoing",
             });
+            existingProv.push({ id, importId: cvImportId });
           }
         }
         merged.education = existingEdu;
+        merged.educationProvenance = existingProv;
       }
     }
 
     // ===== Experience =====
     if (Array.isArray(parsed.experience) && parsed.experience.length > 0) {
       const existingExp = merged.experience || [];
+      const existingProv = (merged.experienceProvenance || []) as Array<{ id: string; importId: string }>;
       if (overwrite || existingExp.length === 0) {
-        merged.experience = parsed.experience.map((e: any) => ({
-          id: e.id || randomUUID(),
-          type: e.type || "Full-time Job",
-          organization: e.organization || "",
-          role: e.role || "",
-          location: e.location || "",
-          startDate: e.startDate || "",
-          endDate: e.endDate || "",
-          currentlyWorking: e.currentlyWorking || false,
-          responsibilities: e.responsibilities || "",
-          achievements: "",
-          skillsUsed: "",
-          keyLearning: "",
-          relevanceToMasters: "",
+        merged.experience = parsed.experience.map((e: any) => {
+          const id = e.id && String(e.id).startsWith("cv-") ? e.id : generateId();
+          return {
+            id,
+            type: e.type || "Full-time Job",
+            organization: e.organization || "",
+            role: e.role || "",
+            location: e.location || "",
+            startDate: e.startDate || "",
+            endDate: e.endDate || "",
+            currentlyWorking: e.currentlyWorking || false,
+            responsibilities: e.responsibilities || "",
+            achievements: "",
+            skillsUsed: "",
+            keyLearning: "",
+            relevanceToMasters: "",
+          };
+        });
+        merged.experienceProvenance = parsed.experience.map((e: any) => ({
+          id: e.id && String(e.id).startsWith("cv-") ? e.id : generateId(),
+          importId: cvImportId,
         }));
       } else {
         for (const newExp of parsed.experience) {
@@ -237,8 +260,9 @@ export async function POST(request: NextRequest) {
             e.role?.toLowerCase() === newExp.role?.toLowerCase()
           );
           if (!isDuplicate) {
+            const id = newExp.id && String(newExp.id).startsWith("cv-") ? newExp.id : generateId();
             existingExp.push({
-              id: newExp.id || randomUUID(),
+              id,
               type: newExp.type || "Full-time Job",
               organization: newExp.organization || "",
               role: newExp.role || "",
@@ -252,25 +276,35 @@ export async function POST(request: NextRequest) {
               keyLearning: "",
               relevanceToMasters: "",
             });
+            existingProv.push({ id, importId: cvImportId });
           }
         }
         merged.experience = existingExp;
+        merged.experienceProvenance = existingProv;
       }
     }
 
     // ===== Projects =====
     if (Array.isArray(parsed.projects) && parsed.projects.length > 0) {
       const existingProj = merged.projects || [];
+      const existingProv = (merged.projectsProvenance || []) as Array<{ id: string; importId: string }>;
       if (overwrite || existingProj.length === 0) {
-        merged.projects = parsed.projects.map((p: any) => ({
-          id: p.id || randomUUID(),
-          name: p.name || "",
-          type: p.type || "Academic",
-          description: p.description || "",
-          role: p.role || "",
-          technologies: p.technologies || "",
-          outcome: "",
-          whatLearned: "",
+        merged.projects = parsed.projects.map((p: any) => {
+          const id = p.id && String(p.id).startsWith("cv-") ? p.id : generateId();
+          return {
+            id,
+            name: p.name || "",
+            type: p.type || "Academic",
+            description: p.description || "",
+            role: p.role || "",
+            technologies: p.technologies || "",
+            outcome: "",
+            whatLearned: "",
+          };
+        });
+        merged.projectsProvenance = parsed.projects.map((p: any) => ({
+          id: p.id && String(p.id).startsWith("cv-") ? p.id : generateId(),
+          importId: cvImportId,
         }));
       } else {
         for (const newProj of parsed.projects) {
@@ -278,8 +312,9 @@ export async function POST(request: NextRequest) {
             p.name?.toLowerCase() === newProj.name?.toLowerCase()
           );
           if (!isDuplicate) {
+            const id = newProj.id && String(newProj.id).startsWith("cv-") ? newProj.id : generateId();
             existingProj.push({
-              id: newProj.id || randomUUID(),
+              id,
               name: newProj.name || "",
               type: newProj.type || "Academic",
               description: newProj.description || "",
@@ -288,9 +323,11 @@ export async function POST(request: NextRequest) {
               outcome: "",
               whatLearned: "",
             });
+            existingProv.push({ id, importId: cvImportId });
           }
         }
         merged.projects = existingProj;
+        merged.projectsProvenance = existingProv;
       }
     }
 

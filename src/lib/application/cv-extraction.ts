@@ -678,26 +678,43 @@ async function extractWithMammothHtml(buffer: Buffer, filename: string): Promise
         const tableId = `table_${blocks.length}_${order}`;
         elem.find('tr').each((rowIndex, tr) => {
           $(tr).find('td, th').each((cellIndex, td) => {
-            const cellText = $(td).text().trim();
+            // Preserve paragraph/line breaks inside table cells so
+            // headings that share a cell with content remain detectable.
+            const html = $(td).html() || "";
+            const cellText = html
+              .replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<\/p>\s*/gi, "\n")
+              .replace(/<\/(ul|ol|li|div|h[1-6]|table|tr|td|th)>\s*/gi, "\n")
+              .replace(/<[^>]+>/g, "")
+              .replace(/&nbsp;/g, " ")
+              .replace(/&amp;/g, "&")
+              .replace(/&lt;/g, "<")
+              .replace(/&gt;/g, ">")
+              .replace(/\n+/g, "\n")
+              .trim();
             if (cellText) {
-              // First row of table is typically the header row
-              const isHeader = rowIndex === 0;
-              blocks.push({
-                text: cellText,
-                page: 1,
-                order: order++,
-                blockType: "PARAGRAPH" as CanonicalBlockType,
-                bbox: null,
-                row: rowIndex,
-                column: cellIndex,
-                style: null,
-                sourceStrategy: "mammoth_html",
-                confidence: 0.7,
-                metadata: { 
-                  tableId: tableId, 
-                  isHeader: isHeader 
-                },
-              });
+              // Split multi-paragraph cells into separate blocks so
+              // section headings are not merged with content.
+              const lines = cellText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+              for (const line of lines) {
+                const isHeader = rowIndex === 0;
+                blocks.push({
+                  text: line,
+                  page: 1,
+                  order: order++,
+                  blockType: "PARAGRAPH" as CanonicalBlockType,
+                  bbox: null,
+                  row: rowIndex,
+                  column: cellIndex,
+                  style: null,
+                  sourceStrategy: "mammoth_html",
+                  confidence: 0.7,
+                  metadata: {
+                    tableId: tableId,
+                    isHeader: isHeader
+                  },
+                });
+              }
             }
           });
         });

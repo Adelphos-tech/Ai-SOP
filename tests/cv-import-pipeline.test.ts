@@ -77,13 +77,15 @@ const timeoutStrategy: ResumeParserStrategy = {
 // ---- tests --------------------------------------------------------------
 
 async function main() {
-await check("1: primary GOOD → PARSED, stops early (no fallback)", async () => {
+await check("1: primary GOOD → PARSED, full chain runs (no early exit)", async () => {
   const r = await importResume(Buffer.from("x"), "cv.docx", "docx", [
     strategy("MAMMOTH_SEMANTIC", GOOD_PARSED),
     strategy("DOCLING_MAPPER", GOOD_PARSED),
   ]);
   assert.equal(r.state, "PARSED");
-  assert.equal(r.attempts.length, 1);
+  // importResume runs the full strategy chain so diagnostics are
+  // computed for every candidate; selection happens after all finish.
+  assert.equal(r.attempts.length, 2);
   assert.equal(r.fallbackUsed, false);
 });
 
