@@ -11,14 +11,21 @@ import { createStudent, getStudent, getStudentProfile, saveStudentProfile, saveS
 import { mergePersonalData, PERSONAL_DATA_PROVENANCE_KEYS } from "../src/lib/application/cv-merge";
 import { randomUUID } from "crypto";
 
-// Hard safety guard
-process.env.SOP_DB_HOST = "127.0.0.1";
-process.env.SOP_DB_PORT = "3306";
-process.env.SOP_DB_USER = "root";
-process.env.SOP_DB_PASSWORD = "";
-process.env.SOP_DB_NAME = "sop_ai_app_test";
+// Respect CI-provided database credentials; only fall back to local defaults
+process.env.SOP_DB_HOST = process.env.SOP_DB_HOST || "127.0.0.1";
+process.env.SOP_DB_PORT = process.env.SOP_DB_PORT || "3306";
+process.env.SOP_DB_USER = process.env.SOP_DB_USER || "root";
+process.env.SOP_DB_PASSWORD = process.env.SOP_DB_PASSWORD || "";
+process.env.SOP_DB_NAME = process.env.SOP_DB_NAME || "sop_ai_app_test";
+
+const DB_NAME = process.env.SOP_DB_NAME;
+if (!DB_NAME || !DB_NAME.toLowerCase().includes("test")) {
+  console.error(`FATAL: Refusing to run against non-test database: "${DB_NAME}"`);
+  process.exit(1);
+}
 
 let pass = 0, fail = 0;
+const createdStudentIds: string[] = [];
 async function check(name: string, fn: () => Promise<void> | void) {
   try { await fn(); pass++; console.log(`PASS  ${name}`); }
   catch (e) { fail++; console.log(`FAIL  ${name}: ${(e as Error).message}`); }
@@ -45,6 +52,7 @@ async function main() {
       profileData: { personalData: { firstName: "Test", lastName: "Student" } }
     });
     studentId = student.id;
+    createdStudentIds.push(studentId);
     assert.ok(studentId);
     console.log(`   Student ID: ${studentId}`);
   });
@@ -585,9 +593,13 @@ async function main() {
   });
 
   // Clean up test students
-  await check("CLEANUP: Delete test students", async () => {
+  await check("CLEANUP: Delete only test-created students", async () => {
     const pool = getDbPool();
-    await pool.execute("DELETE FROM students WHERE email LIKE 'cv-provenance-%@test.local' OR email LIKE 'reg%-%@test.local'");
+    if (createdStudentIds.length > 0) {
+      const placeholders = createdStudentIds.map(() => "?").join(",");
+      await pool.execute(`DELETE FROM students WHERE id IN (${placeholders})`, createdStudentIds);
+      console.log(`   Cleaned up ${createdStudentIds.length} test student(s)`);
+    }
   });
 
   console.log(`\n========== SUMMARY ==========`);
@@ -597,4 +609,7 @@ async function main() {
   process.exit(fail ? 1 : 0);
 }
 
-main().catch(console.error);
+main().catch((e) => {
+  console.error("FATAL:", e);
+  process.exit(1);
+});

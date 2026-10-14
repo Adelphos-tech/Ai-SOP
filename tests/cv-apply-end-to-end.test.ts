@@ -26,14 +26,21 @@ import {
 import { generateId } from "../src/lib/application/cv-parser";
 import { classifyIdentityMatch } from "../src/lib/application/identity-check";
 
-// Hard safety guard
-process.env.SOP_DB_HOST = "127.0.0.1";
-process.env.SOP_DB_PORT = "3306";
-process.env.SOP_DB_USER = "root";
-process.env.SOP_DB_PASSWORD = "";
-process.env.SOP_DB_NAME = "sop_ai_app_test";
+// Respect CI-provided database credentials; only fall back to local defaults
+process.env.SOP_DB_HOST = process.env.SOP_DB_HOST || "127.0.0.1";
+process.env.SOP_DB_PORT = process.env.SOP_DB_PORT || "3306";
+process.env.SOP_DB_USER = process.env.SOP_DB_USER || "root";
+process.env.SOP_DB_PASSWORD = process.env.SOP_DB_PASSWORD || "";
+process.env.SOP_DB_NAME = process.env.SOP_DB_NAME || "sop_ai_app_test";
+
+const DB_NAME = process.env.SOP_DB_NAME;
+if (!DB_NAME || !DB_NAME.toLowerCase().includes("test")) {
+  console.error(`FATAL: Refusing to run against non-test database: "${DB_NAME}"`);
+  process.exit(1);
+}
 
 let pass = 0, fail = 0;
+const createdStudentIds: string[] = [];
 async function check(name: string, fn: () => Promise<void> | void) {
   try { await fn(); pass++; console.log(`PASS  ${name}`); }
   catch (e) { fail++; console.log(`FAIL  ${name}: ${(e as Error).message}`); }
@@ -233,8 +240,9 @@ async function main() {
    * ============================================================ */
   let studentA: string;
   await check("A1: Create empty-profile student", async () => {
-    const s = await createStudent({ firstName: "Jane", lastName: "Doe", email: `jane-${Date.now()}@test.local`, profileData: {} });
+    const s = await createStudent({ firstName: "Jane", lastName: "Doe", email: `jane-${Date.now()}@example-test.local`, profileData: {} });
     studentA = s.id;
+    createdStudentIds.push(studentA);
     const profile = await getStudentProfile(studentA);
     assert.deepEqual(profile, {});
   });
@@ -482,7 +490,8 @@ async function main() {
    * ============================================================ */
   await check("G1: Legacy non-cv records survive CV replace", async () => {
     // Create a fresh student with legacy education (no cv- prefix)
-    const s = await createStudent({ firstName: "Legacy", lastName: "Student", email: `legacy-${Date.now()}@test.local`, profileData: {} });
+    const s = await createStudent({ firstName: "Legacy", lastName: "Student", email: `legacy-${Date.now()}@example-test.local`, profileData: {} });
+    createdStudentIds.push(s.id);
     const rev = await getStudentProfileRevision(s.id);
     const profile = await getStudentProfile(s.id) || {};
     profile.education = [
@@ -504,9 +513,13 @@ async function main() {
   /* ============================================================
    * Cleanup
    * ============================================================ */
-  await check("CLEANUP: Delete test students", async () => {
+  await check("CLEANUP: Delete only test-created students", async () => {
     const pool = getDbPool();
-    await pool.execute("DELETE FROM students WHERE email LIKE ?", [`%@test.local`]);
+    if (createdStudentIds.length > 0) {
+      const placeholders = createdStudentIds.map(() => "?").join(",");
+      await pool.execute(`DELETE FROM students WHERE id IN (${placeholders})`, createdStudentIds);
+      console.log(`   Cleaned up ${createdStudentIds.length} test student(s)`);
+    }
   });
 
   console.log(`\n========== SUMMARY ==========`);
@@ -516,4 +529,7 @@ async function main() {
   process.exit(fail ? 1 : 0);
 }
 
-main();
+main().catch((e) => {
+  console.error("FATAL:", e);
+  process.exit(1);
+});
