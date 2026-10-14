@@ -13,6 +13,7 @@ import {
 import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { FormField, inputClass, TextAreaField } from "@/components/ui/FormField";
 import { IntakeTracker } from "@/components/ui/IntakeTracker";
+import { IntakeSidebar, IntakeMobileNav } from "@/components/ui/IntakeSidebar";
 import { CVUpload } from "@/components/ui/CVUpload";
 import {
   INTAKE_SECTIONS,
@@ -420,144 +421,176 @@ export default function IntakePage() {
         { label: wizardMode ? "Missing Information" : currentSection!.label },
       ]} />
 
+      {/* Mobile section nav (visible only below lg breakpoint) */}
       {!wizardMode && (
-        <IntakeTracker
+        <IntakeMobileNav
           studentId={studentId}
           applicationId={applicationId}
-          currentStep={currentStep}
           completions={completions}
+          readiness={{
+            requiredComplete: readiness.requiredComplete,
+            requiredTotal: readiness.requiredTotal,
+            canGenerate: readiness.canGenerate,
+          }}
         />
       )}
 
-      {/* Save status indicator */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <h1 className="text-page-title text-dvivid-text-primary">
-            {wizardMode ? "Complete missing information" : currentSection!.label}
-          </h1>
-          {currentSection!.optional && (
-            <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-muted">Optional</span>
-          )}
-        </div>
-        <SaveStatusIndicator status={saveStatus} saving={saving} dirty={isDirty} />
-      </div>
-
-      {wizardMode ? (
-        <p className="text-sm text-dvivid-text-secondary mb-6">
-          <span className="font-medium text-dvivid-text-primary">{currentSection!.label}</span> — {missingRequired.length} required answer{missingRequired.length !== 1 ? "s" : ""} remaining. {currentSection!.description}
-          {(() => {
-            const fields = missingRequired.find(s => s.slug === currentSection!.slug)?.missingFields || [];
-            return fields.length > 0 ? (
-              <span className="block mt-1 text-dvivid-warning font-medium">
-                Missing: {fields.join(", ")}
-              </span>
-            ) : null;
-          })()}
-        </p>
-      ) : (
-        <p className="text-sm text-dvivid-text-secondary mb-6">{currentSection!.description}</p>
-      )}
-
-      {error && (
-        <div className="mb-4 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input text-sm text-dvivid-error">
-          {error}
-        </div>
-      )}
-
-      <FormProvider {...methods}>
-        <form onSubmit={e => { e.preventDefault(); handleSubmit(handleSaveAndContinue)(e); }}>
-        {/* CV Upload — only on Section 1 */}
-        {displayStep === 1 && (
-          <div className="mb-6">
-            <CVUpload
-              key={studentId}
-              studentId={studentId}
-              profileRevision={profileRevision}
-              studentIdentity={studentIdentity || undefined}
-              hasCvDerivedData={["education", "experience", "projects", "achievements"].some(
-                k => Array.isArray((liveProfile as any)?.[k]) &&
-                  (liveProfile as any)[k].some((it: any) => String(it?.id ?? "").startsWith("cv-")),
-              )}
-              onApplied={async () => {
-                // Preserve typed-but-unsaved edits before reloading —
-                // a bare loadAll() would silently wipe them.
-                if (isDirty) {
-                  try {
-                    await saveProfile(getValues());
-                  } catch {
-                    // Save failed — don't wipe the user's input; let them retry.
-                    return;
-                  }
-                }
-                loadAll();
-              }}
-            />
-          </div>
+      <div className="flex gap-6 items-start">
+        {/* Desktop sidebar (visible only at lg+) */}
+        {!wizardMode && (
+          <IntakeSidebar
+            studentId={studentId}
+            applicationId={applicationId}
+            completions={completions}
+            readiness={readiness}
+            application={application}
+            studentName={studentIdentity ? `${studentIdentity.firstName || ""} ${studentIdentity.lastName || ""}`.trim() : undefined}
+          />
         )}
 
-        {/* Section content */}
-        <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6 mb-6">
-          {renderSection(displayStep, application)}
-        </div>
-
-        {/* Navigation */}
-        <div className="flex justify-between items-center flex-wrap gap-3">
-          {wizardMode ? (
-            <Link href={`/students/${studentId}/applications/${applicationId}`}>
-              <SecondaryButton>← Back to application</SecondaryButton>
-            </Link>
-          ) : prevSection ? (
-            <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
-              <SecondaryButton>← Back</SecondaryButton>
-            </Link>
-          ) : (
-            <Link href={`/students/${studentId}/applications/${applicationId}`}>
-              <SecondaryButton>← Back</SecondaryButton>
-            </Link>
+        {/* Main content area */}
+        <main className="flex-1 min-w-0">
+          {/* Keep existing tracker for visual continuity */}
+          {!wizardMode && (
+            <IntakeTracker
+              studentId={studentId}
+              applicationId={applicationId}
+              currentStep={currentStep}
+              completions={completions}
+            />
           )}
 
-          <div className="flex gap-3 items-center flex-wrap">
-            {wizardMode ? (
-              <Link
-                href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}
-                className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
-              >
-                Review all information
-              </Link>
-            ) : (
-              <Link
-                href={`/students/${studentId}/applications/${applicationId}`}
-                className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
-              >
-                Exit to application
-              </Link>
-            )}
-            {!wizardMode && currentSection!.optional && (
-              <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
-            )}
-            {wizardMode && missingRequired.length > 1 && (
-              <PrimaryButton type="submit" disabled={saving}>
-                Save & Next Missing Answer →
-              </PrimaryButton>
-            )}
-            {wizardMode && (
-              <PrimaryButton
-                type="button"
-                disabled={saving}
-                onClick={handleSaveAndFinish}
-              >
-                Save & Finish →
-              </PrimaryButton>
-            )}
-            {!wizardMode && (
-              <PrimaryButton type="submit" disabled={saving}>
-                {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
-              </PrimaryButton>
-            )}
+          {/* Save status indicator */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <h1 className="text-page-title text-dvivid-text-primary">
+                {wizardMode ? "Complete missing information" : currentSection!.label}
+              </h1>
+              {currentSection!.optional && (
+                <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-muted">Optional</span>
+              )}
+            </div>
+            <SaveStatusIndicator status={saveStatus} saving={saving} dirty={isDirty} />
           </div>
-        </div>
-        </form>
-      </FormProvider>
+
+          {wizardMode ? (
+            <p className="text-sm text-dvivid-text-secondary mb-6">
+              <span className="font-medium text-dvivid-text-primary">{currentSection!.label}</span> — {missingRequired.length} required answer{missingRequired.length !== 1 ? "s" : ""} remaining. {currentSection!.description}
+              {(() => {
+                const fields = missingRequired.find(s => s.slug === currentSection!.slug)?.missingFields || [];
+                return fields.length > 0 ? (
+                  <span className="block mt-1 text-dvivid-warning font-medium">
+                    Missing: {fields.join(", ")}
+                  </span>
+                ) : null;
+              })()}
+            </p>
+          ) : (
+            <p className="text-sm text-dvivid-text-secondary mb-6">{currentSection!.description}</p>
+          )}
+
+          {error && (
+            <div className="mb-4 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input text-sm text-dvivid-error">
+              {error}
+            </div>
+          )}
+
+          <FormProvider {...methods}>
+            <form onSubmit={e => { e.preventDefault(); handleSubmit(handleSaveAndContinue)(e); }}>
+            {/* CV Upload — only on Section 1 */}
+            {displayStep === 1 && (
+              <div className="mb-6">
+                <CVUpload
+                  key={studentId}
+                  studentId={studentId}
+                  profileRevision={profileRevision}
+                  studentIdentity={studentIdentity || undefined}
+                  hasCvDerivedData={["education", "experience", "projects", "achievements"].some(
+                    k => Array.isArray((liveProfile as any)?.[k]) &&
+                      (liveProfile as any)[k].some((it: any) => String(it?.id ?? "").startsWith("cv-")),
+                  )}
+                  onApplied={async () => {
+                    // Preserve typed-but-unsaved edits before reloading —
+                    // a bare loadAll() would silently wipe them.
+                    if (isDirty) {
+                      try {
+                        await saveProfile(getValues());
+                      } catch {
+                        // Save failed — don't wipe the user's input; let them retry.
+                        return;
+                      }
+                    }
+                    loadAll();
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Section content */}
+            <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6 mb-6">
+              {renderSection(displayStep, application)}
+            </div>
+
+            {/* Navigation */}
+            <div className="flex justify-between items-center flex-wrap gap-3">
+              {wizardMode ? (
+                <Link href={`/students/${studentId}/applications/${applicationId}`}>
+                  <SecondaryButton>← Back to application</SecondaryButton>
+                </Link>
+              ) : prevSection ? (
+                <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
+                  <SecondaryButton>← Back</SecondaryButton>
+                </Link>
+              ) : (
+                <Link href={`/students/${studentId}/applications/${applicationId}`}>
+                  <SecondaryButton>← Back</SecondaryButton>
+                </Link>
+              )}
+
+              <div className="flex gap-3 items-center flex-wrap">
+                {wizardMode ? (
+                  <Link
+                    href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}
+                    className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+                  >
+                    Review all information
+                  </Link>
+                ) : (
+                  <Link
+                    href={`/students/${studentId}/applications/${applicationId}`}
+                    className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+                  >
+                    Exit to application
+                  </Link>
+                )}
+                {!wizardMode && currentSection!.optional && (
+                  <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
+                )}
+                {wizardMode && missingRequired.length > 1 && (
+                  <PrimaryButton type="submit" disabled={saving}>
+                    Save & Next Missing Answer →
+                  </PrimaryButton>
+                )}
+                {wizardMode && (
+                  <PrimaryButton
+                    type="button"
+                    disabled={saving}
+                    onClick={handleSaveAndFinish}
+                  >
+                    Save & Finish →
+                  </PrimaryButton>
+                )}
+                {!wizardMode && (
+                  <PrimaryButton type="submit" disabled={saving}>
+                    {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
+                  </PrimaryButton>
+                )}
+              </div>
+            </div>
+            </form>
+          </FormProvider>
+        </main>
+      </div>
     </PageContainer>
   );
 }
