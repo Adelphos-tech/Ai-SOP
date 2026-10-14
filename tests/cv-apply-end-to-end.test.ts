@@ -18,6 +18,10 @@ import {
   mergePersonalData,
   mergeCvSkills,
   removeCvDerivedSkills,
+  mergeRepeatableRecords,
+  filterCvDerivedProvenance,
+  cvProvenanceIds,
+  updateRepeatableProvenanceForManualEdits,
 } from "../src/lib/application/cv-merge";
 import { generateId } from "../src/lib/application/cv-parser";
 import { classifyIdentityMatch } from "../src/lib/application/identity-check";
@@ -49,12 +53,35 @@ function applyParsedCV(
 ) {
   const merged: any = { ...existingProfile };
 
-  // replaceCvDerived (default true)
-  for (const key of ["education", "experience", "projects", "achievements"] as const) {
-    if (Array.isArray(merged[key])) {
-      merged[key] = merged[key].filter((item: any) => !String(item?.id ?? "").startsWith("cv-"));
-    }
+  // replaceCvDerived (default true) — provenance-aware for repeatable records
+  // Achievements: prefix-only (no provenance companion yet)
+  if (Array.isArray(merged.achievements)) {
+    merged.achievements = merged.achievements.filter(
+      (item: any) => !String(item?.id ?? "").startsWith("cv-"),
+    );
   }
+  // Education / Experience / Projects: remove only if cv-prefix + provenance entry
+  const eduProvIds = cvProvenanceIds(merged.educationProvenance);
+  if (Array.isArray(merged.education)) {
+    merged.education = merged.education.filter(
+      (item: any) => !String(item?.id ?? "").startsWith("cv-") || !eduProvIds.has(item.id),
+    );
+  }
+  const expProvIds = cvProvenanceIds(merged.experienceProvenance);
+  if (Array.isArray(merged.experience)) {
+    merged.experience = merged.experience.filter(
+      (item: any) => !String(item?.id ?? "").startsWith("cv-") || !expProvIds.has(item.id),
+    );
+  }
+  const projProvIds = cvProvenanceIds(merged.projectsProvenance);
+  if (Array.isArray(merged.projects)) {
+    merged.projects = merged.projects.filter(
+      (item: any) => !String(item?.id ?? "").startsWith("cv-") || !projProvIds.has(item.id),
+    );
+  }
+  merged.educationProvenance = filterCvDerivedProvenance(merged.educationProvenance);
+  merged.experienceProvenance = filterCvDerivedProvenance(merged.experienceProvenance);
+  merged.projectsProvenance = filterCvDerivedProvenance(merged.projectsProvenance);
   merged.skills = removeCvDerivedSkills(merged.skills, existingProfile.skillProvenance);
 
   // personalData
@@ -70,58 +97,60 @@ function applyParsedCV(
 
   // education
   if (Array.isArray(parsed.education) && parsed.education.length > 0) {
-    const existingEdu = merged.education || [];
-    const existingProv = merged.educationProvenance || [];
-    for (const newEdu of parsed.education) {
-      const isDup = existingEdu.some((e: any) =>
-        e.institution?.toLowerCase() === newEdu.institution?.toLowerCase() &&
-        e.degree?.toLowerCase() === newEdu.degree?.toLowerCase(),
-      );
-      if (!isDup) {
-        const id = newEdu.id && String(newEdu.id).startsWith("cv-") ? newEdu.id : generateId();
-        existingEdu.push({ ...newEdu, id });
-        existingProv.push({ id, importId: cvImportId });
+    const eduResult = mergeRepeatableRecords(
+      merged.education || [],
+      merged.educationProvenance || [],
+      parsed.education,
+      {
+        overwrite: overwrite || (merged.education || []).length === 0,
+        importId: cvImportId,
+        generateId,
+        isDuplicate: (a: any, b: any) =>
+          a.institution?.toLowerCase() === b.institution?.toLowerCase() &&
+          a.degree?.toLowerCase() === b.degree?.toLowerCase(),
+        transform: (e: any, id: string) => ({ ...e, id }),
       }
-    }
-    merged.education = existingEdu;
-    merged.educationProvenance = existingProv;
+    );
+    merged.education = eduResult.records;
+    merged.educationProvenance = eduResult.provenance;
   }
 
   // experience
   if (Array.isArray(parsed.experience) && parsed.experience.length > 0) {
-    const existingExp = merged.experience || [];
-    const existingProv = merged.experienceProvenance || [];
-    for (const newExp of parsed.experience) {
-      const isDup = existingExp.some((e: any) =>
-        e.organization?.toLowerCase() === newExp.organization?.toLowerCase() &&
-        e.role?.toLowerCase() === newExp.role?.toLowerCase(),
-      );
-      if (!isDup) {
-        const id = newExp.id && String(newExp.id).startsWith("cv-") ? newExp.id : generateId();
-        existingExp.push({ ...newExp, id });
-        existingProv.push({ id, importId: cvImportId });
+    const expResult = mergeRepeatableRecords(
+      merged.experience || [],
+      merged.experienceProvenance || [],
+      parsed.experience,
+      {
+        overwrite: overwrite || (merged.experience || []).length === 0,
+        importId: cvImportId,
+        generateId,
+        isDuplicate: (a: any, b: any) =>
+          a.organization?.toLowerCase() === b.organization?.toLowerCase() &&
+          a.role?.toLowerCase() === b.role?.toLowerCase(),
+        transform: (e: any, id: string) => ({ ...e, id }),
       }
-    }
-    merged.experience = existingExp;
-    merged.experienceProvenance = existingProv;
+    );
+    merged.experience = expResult.records;
+    merged.experienceProvenance = expResult.provenance;
   }
 
   // projects
   if (Array.isArray(parsed.projects) && parsed.projects.length > 0) {
-    const existingProj = merged.projects || [];
-    const existingProv = merged.projectsProvenance || [];
-    for (const newProj of parsed.projects) {
-      const isDup = existingProj.some((p: any) =>
-        p.name?.toLowerCase() === newProj.name?.toLowerCase(),
-      );
-      if (!isDup) {
-        const id = newProj.id && String(newProj.id).startsWith("cv-") ? newProj.id : generateId();
-        existingProj.push({ ...newProj, id });
-        existingProv.push({ id, importId: cvImportId });
+    const projResult = mergeRepeatableRecords(
+      merged.projects || [],
+      merged.projectsProvenance || [],
+      parsed.projects,
+      {
+        overwrite: overwrite || (merged.projects || []).length === 0,
+        importId: cvImportId,
+        generateId,
+        isDuplicate: (a: any, b: any) => a.name?.toLowerCase() === b.name?.toLowerCase(),
+        transform: (p: any, id: string) => ({ ...p, id }),
       }
-    }
-    merged.projects = existingProj;
-    merged.projectsProvenance = existingProv;
+    );
+    merged.projects = projResult.records;
+    merged.projectsProvenance = projResult.provenance;
   }
 
   // skills
@@ -326,6 +355,54 @@ async function main() {
     assert.ok(p.education.some((e: any) => e.id === "manual-123"), "manual edu preserved");
     assert.ok(p.education.some((e: any) => e.institution === "State University"), "CV edu present");
     assert.ok(!p.education.some((e: any) => e.institution === "Graduate Institute"), "old CV edu removed");
+  });
+
+  /* ============================================================
+   * Scenario M — Manual edit to CV-derived record is preserved
+   * ============================================================ */
+  await check("M1: Manually edited CV education record survives re-import", async () => {
+    const profile = await getStudentProfile(studentA);
+    const cvEdu = profile.education.find((e: any) => String(e.id).startsWith("cv-"));
+    assert.ok(cvEdu, "must have a CV-derived education record");
+    const originalId = cvEdu.id;
+
+    // Simulate consultant editing the institution name
+    const revision = await getStudentProfileRevision(studentA);
+    const editedProfile = await getStudentProfile(studentA) || {};
+    const editedEdu = editedProfile.education.find((e: any) => e.id === originalId);
+    editedEdu.institution = "Edited University Name";
+
+    // Simulate save-endpoint provenance update
+    editedProfile.educationProvenance = updateRepeatableProvenanceForManualEdits(
+      editedProfile.education,
+      profile.education,
+      profile.educationProvenance,
+    );
+
+    await saveStudentProfileConditional(studentA, editedProfile, revision);
+
+    // Verify provenance entry was dropped for the edited record
+    const afterEdit = await getStudentProfile(studentA);
+    const provIds = (afterEdit.educationProvenance || []).map((p: any) => p.id);
+    assert.ok(!provIds.includes(originalId), "provenance must be dropped after manual edit");
+
+    // Now re-apply CV A with replaceCvDerived
+    const revision2 = await getStudentProfileRevision(studentA);
+    const existing2 = await getStudentProfile(studentA) || {};
+    const merged = applyParsedCV(existing2, CV_A, false, makeCvImportId());
+    await saveStudentProfileConditional(studentA, merged, revision2);
+
+    // The manually edited record must survive because it has no provenance
+    const afterReimport = await getStudentProfile(studentA);
+    assert.ok(
+      afterReimport.education.some((e: any) => e.id === originalId && e.institution === "Edited University Name"),
+      "manually edited CV record must survive re-import",
+    );
+    // New CV records should also be present
+    assert.ok(
+      afterReimport.education.some((e: any) => e.institution === "State University"),
+      "new CV record must also exist",
+    );
   });
 
   /* ============================================================
