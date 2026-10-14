@@ -118,6 +118,9 @@ jobs:
       - name: Run Phase 38 tests
         run: npx tsx tests/phase-38-prompt-contract-tests.ts
 
+      - name: Run Country Questionnaire persistence tests
+        run: npx tsx tests/country-questionnaire-persistence.test.ts
+
       - name: Run CV provenance regression test
         run: npx tsx tests/cv-provenance-verification.test.ts
 
