@@ -130,9 +130,12 @@ export default function IntakePage() {
   // A field becoming complete while typing MUST NOT move the user.
   const [activeWizardSection, setActiveWizardSection] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [showReview, setShowReview] = useState(false);
   // Stale-request token — a response is only applied if it is still the
   // latest load for the current student/application identity.
   const loadTokenRef = useRef(0);
+  // Prevent duplicate submissions while a save is in flight.
+  const saveInProgressRef = useRef(false);
 
   const methods = useForm<IntakeProfileForm>({
     resolver: zodResolver(IntakeProfileSchema),
@@ -151,11 +154,24 @@ export default function IntakePage() {
     setApplication(null);
     setSaveStatus("idle");
     setError("");
+    setShowReview(false);
     setActiveWizardSection(null);
     setStudentIdentity(null);
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId, applicationId]);
+
+  // Warn before closing the browser tab if there are unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirty || saveInProgressRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
 
   async function loadAll() {
     const token = ++loadTokenRef.current;
@@ -214,13 +230,19 @@ export default function IntakePage() {
     }
   }
 
-  // Save profile — returns readiness data from server response
+  // Save profile — returns readiness data from server response.
+  // Duplicate-submission guard: saveInProgressRef blocks concurrent calls.
   const saveProfile = useCallback(async (values: IntakeProfileForm): Promise<{
     revision: number;
     readiness?: { complete: boolean; missingSections: string[]; missingCount: number };
   }> => {
+    if (saveInProgressRef.current) {
+      throw new Error("Save already in progress.");
+    }
+    saveInProgressRef.current = true;
     setSaving(true);
     setSaveStatus("saving");
+    setError("");
     try {
       const res = await fetch("/api/application/profile", {
         method: "PUT",
@@ -233,7 +255,7 @@ export default function IntakePage() {
         setProfileRevision(revision);
         setSaveStatus("saved");
         reset(values);
-        setTimeout(() => setSaveStatus("idle"), 2000);
+        setTimeout(() => setSaveStatus("idle"), 3000);
         return {
           revision,
           readiness: data?.readiness,
@@ -259,6 +281,7 @@ export default function IntakePage() {
       setSaveStatus("error");
       throw e;
     } finally {
+      saveInProgressRef.current = false;
       setSaving(false);
     }
   }, [studentId, applicationId, profileRevision, reset]);
@@ -343,7 +366,6 @@ export default function IntakePage() {
   // Does NOT require intake to be complete. Preserves incomplete-state warnings in workspace.
   const handleSaveAndFinish = async () => {
     const values = getValues();
-    
     let saveResult;
     try {
       saveResult = await saveProfile(values);
@@ -353,6 +375,16 @@ export default function IntakePage() {
     }
     // Save succeeded — exit to Application Workspace regardless of completeness
     router.push(`/students/${studentId}/applications/${applicationId}`);
+  };
+
+  // Save Draft — persists without navigating. Stays on current section.
+  const handleSaveDraft = async () => {
+    const values = getValues();
+    try {
+      await saveProfile(values);
+    } catch (err: any) {
+      setError(err?.message || "Failed to save draft. Please try again.");
+    }
   };
 
   // Live values for completion/progress — completion stays LIVE but
@@ -531,23 +563,61 @@ export default function IntakePage() {
               {renderSection(displayStep, application)}
             </div>
 
-            {/* Navigation */}
-            <div className="flex justify-between items-center flex-wrap gap-3">
-              {wizardMode ? (
-                <Link href={`/students/${studentId}/applications/${applicationId}`}>
-                  <SecondaryButton>← Back to application</SecondaryButton>
-                </Link>
-              ) : prevSection ? (
-                <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
-                  <SecondaryButton>← Back</SecondaryButton>
-                </Link>
-              ) : (
-                <Link href={`/students/${studentId}/applications/${applicationId}`}>
-                  <SecondaryButton>← Back</SecondaryButton>
-                </Link>
-              )}
+            {/* Navigation / Action Bar */}
+            <div className="flex flex-col gap-3">
+              {/* Primary actions row */}
+              <div className="flex justify-between items-center flex-wrap gap-3">
+                {wizardMode ? (
+                  <Link href={`/students/${studentId}/applications/${applicationId}`}>
+                    <SecondaryButton>← Back to application</SecondaryButton>
+                  </Link>
+                ) : prevSection ? (
+                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
+                    <SecondaryButton>← Back</SecondaryButton>
+                  </Link>
+                ) : (
+                  <Link href={`/students/${studentId}/applications/${applicationId}`}>
+                    <SecondaryButton>← Back</SecondaryButton>
+                  </Link>
+                )}
 
-              <div className="flex gap-3 items-center flex-wrap">
+                <div className="flex gap-3 items-center flex-wrap">
+                  {!wizardMode && (
+                    <SecondaryButton
+                      type="button"
+                      disabled={saving || !isDirty}
+                      onClick={handleSaveDraft}
+                    >
+                      {saving && saveStatus === "saving" ? "Saving..." : "Save Draft"}
+                    </SecondaryButton>
+                  )}
+                  {!wizardMode && currentSection!.optional && (
+                    <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
+                  )}
+                  {wizardMode && missingRequired.length > 1 && (
+                    <PrimaryButton type="submit" disabled={saving}>
+                      Save & Next Missing Answer →
+                    </PrimaryButton>
+                  )}
+                  {wizardMode && (
+                    <PrimaryButton
+                      type="button"
+                      disabled={saving}
+                      onClick={handleSaveAndFinish}
+                    >
+                      Save & Finish →
+                    </PrimaryButton>
+                  )}
+                  {!wizardMode && (
+                    <PrimaryButton type="submit" disabled={saving}>
+                      {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
+                    </PrimaryButton>
+                  )}
+                </div>
+              </div>
+
+              {/* Secondary actions row */}
+              <div className="flex justify-between items-center flex-wrap gap-3 pt-1">
                 {wizardMode ? (
                   <Link
                     href={`/students/${studentId}/applications/${applicationId}/intake/student-details`}
@@ -556,39 +626,42 @@ export default function IntakePage() {
                     Review all information
                   </Link>
                 ) : (
-                  <Link
-                    href={`/students/${studentId}/applications/${applicationId}`}
-                    className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
-                  >
-                    Exit to application
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowReview(true)}
+                      className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary flex items-center gap-1"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                      </svg>
+                      Review Application
+                    </button>
+                    <Link
+                      href={`/students/${studentId}/applications/${applicationId}`}
+                      className="text-sm text-dvivid-text-secondary hover:text-dvivid-primary"
+                    >
+                      Exit to application
+                    </Link>
+                  </div>
                 )}
-                {!wizardMode && currentSection!.optional && (
-                  <SecondaryButton onClick={handleSkip}>Skip for now</SecondaryButton>
-                )}
-                {wizardMode && missingRequired.length > 1 && (
-                  <PrimaryButton type="submit" disabled={saving}>
-                    Save & Next Missing Answer →
-                  </PrimaryButton>
-                )}
-                {wizardMode && (
-                  <PrimaryButton
-                    type="button"
-                    disabled={saving}
-                    onClick={handleSaveAndFinish}
-                  >
-                    Save & Finish →
-                  </PrimaryButton>
-                )}
-                {!wizardMode && (
-                  <PrimaryButton type="submit" disabled={saving}>
-                    {saving ? "Saving..." : nextSection ? "Save & Continue →" : "Save & Finish →"}
-                  </PrimaryButton>
-                )}
+                <span />
               </div>
             </div>
             </form>
           </FormProvider>
+
+          {/* Review Application Panel */}
+          {showReview && (
+            <ReviewApplicationPanel
+              studentId={studentId}
+              applicationId={applicationId}
+              readiness={readiness}
+              completions={completions}
+              application={application}
+              onClose={() => setShowReview(false)}
+            />
+          )}
         </main>
       </div>
     </PageContainer>
@@ -1174,6 +1247,139 @@ function CareerGoalsSection() {
           <FormField label="Impact you want to create?"><Area name="careerGoals.longTerm.impact" rows={2} /></FormField>
           <FormField label="Plans for home country (if applicable)"><Area name="careerGoals.longTerm.homeCountryPlans" rows={2} /></FormField>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// REVIEW APPLICATION PANEL
+// ============================================================
+function ReviewApplicationPanel({
+  studentId,
+  applicationId,
+  readiness,
+  completions,
+  application,
+  onClose,
+}: {
+  studentId: string;
+  applicationId: string;
+  readiness: {
+    requiredComplete: number;
+    requiredTotal: number;
+    optionalComplete: number;
+    optionalTotal: number;
+    canGenerate: boolean;
+    weakAreas: string[];
+  };
+  completions: import("@/lib/application/intake-completion").SectionCompletion[];
+  application: Application | null;
+  onClose: () => void;
+}) {
+  const basePath = `/students/${studentId}/applications/${applicationId}/intake`;
+
+  return (
+    <div className="mt-6 bg-white border border-dvivid-border rounded-card shadow-card p-6">
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-card-title text-dvivid-text-primary">Review Application</h2>
+          <p className="text-sm text-dvivid-text-secondary mt-1">
+            {application?.universityName} · {application?.programName}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-2 rounded-button hover:bg-dvivid-surface-alt text-dvivid-text-secondary"
+          title="Close review"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Overall status */}
+      <div className={`rounded-card p-4 mb-5 ${
+        readiness.canGenerate
+          ? "bg-dvivid-success-light border border-dvivid-success/20"
+          : "bg-dvivid-warning-light border border-dvivid-warning/20"
+      }`}>
+        <div className="flex items-center gap-2 mb-1">
+          {readiness.canGenerate ? (
+            <>
+              <svg className="w-5 h-5 text-dvivid-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="font-semibold text-dvivid-success">Ready for document generation</span>
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5 text-dvivid-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span className="font-semibold text-dvivid-warning">{readiness.weakAreas.length} required section{readiness.weakAreas.length !== 1 ? "s" : ""} incomplete</span>
+            </>
+          )}
+        </div>
+        <p className="text-sm text-dvivid-text-secondary">
+          {readiness.requiredComplete}/{readiness.requiredTotal} required complete
+          {readiness.optionalTotal > 0 && ` · ${readiness.optionalComplete}/${readiness.optionalTotal} optional complete`}
+        </p>
+      </div>
+
+      {/* Section list */}
+      <div className="space-y-2">
+        {completions.map((section) => {
+          const isComplete = section.status === "complete";
+          const isMissing = section.status === "missing";
+          const hasMissingFields = section.missingFields && section.missingFields.length > 0;
+
+          return (
+            <div
+              key={section.slug}
+              className={`flex items-start gap-3 p-3 rounded-lg ${
+                isMissing ? "bg-dvivid-warning-light/50" : "bg-dvivid-surface-alt"
+              }`}
+            >
+              <div className="mt-0.5 flex-shrink-0">
+                {isComplete ? (
+                  <div className="w-5 h-5 rounded-full bg-dvivid-primary flex items-center justify-center">
+                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="w-5 h-5 rounded-full border-2 border-dvivid-warning flex items-center justify-center">
+                    <span className="text-[10px] font-bold text-dvivid-warning">{section.sectionId}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <Link
+                    href={`${basePath}/${section.slug}`}
+                    onClick={onClose}
+                    className="text-sm font-medium text-dvivid-text-primary hover:text-dvivid-primary"
+                  >
+                    {section.label}
+                    {section.optional && <span className="text-dvivid-text-muted font-normal"> (optional)</span>}
+                  </Link>
+                  <span className={`text-xs font-medium ${
+                    isComplete ? "text-dvivid-success" : isMissing ? "text-dvivid-warning" : "text-dvivid-text-muted"
+                  }`}>
+                    {isComplete ? "Complete" : isMissing ? "Incomplete" : "Optional"}
+                  </span>
+                </div>
+                {hasMissingFields && (
+                  <p className="text-xs text-dvivid-warning mt-1">
+                    Missing: {section.missingFields.join(", ")}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
