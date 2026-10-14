@@ -43,6 +43,11 @@ async function check(name: string, fn: () => Promise<void> | void) {
 
 /* ---------- synthetic fixture ---------- */
 
+// Fictitious test identity — must match the synthetic fixture content
+const TEST_FIRST_NAME = "Avery";
+const TEST_LAST_NAME = "Testington";
+const TEST_EMAIL = "avery.testington@example-test.local";
+
 async function generateSyntheticDocx(): Promise<Buffer> {
   const { Document, Packer, Paragraph, TextRun, HeadingLevel } = await import("docx");
 
@@ -50,10 +55,10 @@ async function generateSyntheticDocx(): Promise<Buffer> {
     sections: [{
       children: [
         new Paragraph({
-          text: "Shivang Gangwar",
+          text: `${TEST_FIRST_NAME} ${TEST_LAST_NAME}`,
           heading: HeadingLevel.HEADING_1,
         }),
-        new Paragraph("shivangsingh191@gmail.com"),
+        new Paragraph(TEST_EMAIL),
         new Paragraph({
           text: "EDUCATION",
           heading: HeadingLevel.HEADING_2,
@@ -110,11 +115,11 @@ async function main() {
      * ============================================================ */
     let studentId: string;
     let applicationId = "test-app-" + Date.now();
-    await check("1: Create test student matching real CV identity", async () => {
+    await check("1: Create test student matching synthetic CV identity", async () => {
       const s = await createStudent({
-        firstName: "Shivang",
-        lastName: "Gangwar",
-        email: `shivangsingh191@gmail.com`,
+        firstName: TEST_FIRST_NAME,
+        lastName: TEST_LAST_NAME,
+        email: TEST_EMAIL,
         profileData: {},
       });
       studentId = s.id;
