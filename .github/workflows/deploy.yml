@@ -118,6 +118,9 @@ jobs:
       - name: Run Phase 38 tests
         run: npx tsx tests/phase-38-prompt-contract-tests.ts
 
+      - name: Run CV provenance regression test
+        run: npx tsx tests/cv-provenance-verification.test.ts
+
       - name: Install system dependencies for PDF processing (Tesseract OCR)
         run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
 
@@ -140,9 +143,6 @@ jobs:
 
       - name: Test production CV upload endpoint
         run: node tests/cv-production-upload.cjs
-
-      - name: Run CV provenance regression test
-        run: npx tsx tests/cv-provenance-verification.test.ts
 
       - name: Archive tested build
         run: tar --exclude=.next/cache -czf next-build.tar.gz .next
