@@ -261,8 +261,10 @@ export default function IntakePage() {
           readiness: data?.readiness,
         };
       } else if (res.status === 409) {
-        await loadAll();
-        const msg = "Profile was updated elsewhere (e.g. CV import). Latest data loaded — please re-apply your change and save again.";
+        // CRITICAL: Do NOT call loadAll() here — it would reset() the form
+        // and silently discard the user's unsaved edits. Preserve their work
+        // so they can decide to retry or reload.
+        const msg = "Profile was updated elsewhere (e.g. CV import). Your current edits are preserved — click Save again to overwrite, or Reload to fetch the latest data.";
         setSaveStatus("error");
         setError(msg);
         throw new Error(msg);
@@ -387,6 +389,22 @@ export default function IntakePage() {
     }
   };
 
+  // Internal navigation guard: when there are unsaved edits, confirm before leaving.
+  const handleNavigate = useCallback((href: string): boolean => {
+    if (!isDirty) return true;
+    const ok = window.confirm(
+      "You have unsaved changes. Save before leaving?\n\nClick OK to save and continue.\nClick Cancel to discard changes and leave."
+    );
+    if (ok) {
+      // Fire-and-forget save then navigate; user expects this to work
+      handleSaveDraft().then(() => {
+        router.push(href);
+      });
+      return false; // Block immediate navigation; router.push after save
+    }
+    return true; // User chose to discard — allow navigation
+  }, [isDirty, router]);
+
   // Live values for completion/progress — completion stays LIVE but
   // never controls the rendered section while the user is editing.
   const liveProfile = watch();
@@ -464,6 +482,7 @@ export default function IntakePage() {
             requiredTotal: readiness.requiredTotal,
             canGenerate: readiness.canGenerate,
           }}
+          onNavigate={handleNavigate}
         />
       )}
 
@@ -477,6 +496,7 @@ export default function IntakePage() {
             readiness={readiness}
             application={application}
             studentName={studentIdentity ? `${studentIdentity.firstName || ""} ${studentIdentity.lastName || ""}`.trim() : undefined}
+            onNavigate={handleNavigate}
           />
         )}
 
@@ -522,8 +542,17 @@ export default function IntakePage() {
           )}
 
           {error && (
-            <div className="mb-4 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input text-sm text-dvivid-error">
-              {error}
+            <div className="mb-4 p-3 bg-dvivid-error-light border border-dvivid-error/20 rounded-input text-sm text-dvivid-error flex items-start justify-between gap-3">
+              <span className="flex-1">{error}</span>
+              {error.includes("Reload") && (
+                <button
+                  type="button"
+                  onClick={() => { setError(""); loadAll(); }}
+                  className="text-xs font-medium underline hover:opacity-80 flex-shrink-0"
+                >
+                  Reload latest data
+                </button>
+              )}
             </div>
           )}
 

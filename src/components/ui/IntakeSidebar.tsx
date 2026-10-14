@@ -27,6 +27,8 @@ interface IntakeSidebarProps {
     intakeYear: string;
   } | null;
   studentName?: string;
+  /** Called before navigation; return false to block. */
+  onNavigate?: (href: string) => boolean;
 }
 
 /**
@@ -45,6 +47,7 @@ export function IntakeSidebar({
   readiness,
   application,
   studentName,
+  onNavigate,
 }: IntakeSidebarProps) {
   const pathname = usePathname();
   const basePath = `/students/${studentId}/applications/${applicationId}/intake`;
@@ -138,7 +141,13 @@ export function IntakeSidebar({
                     : "text-dvivid-text-muted cursor-default pointer-events-none"
                 }`}
                 onClick={e => {
-                  if (!isClickable && !isCurrent) e.preventDefault();
+                  if (!isClickable && !isCurrent) {
+                    e.preventDefault();
+                    return;
+                  }
+                  if (onNavigate && !onNavigate(`${basePath}/${section.slug}`)) {
+                    e.preventDefault();
+                  }
                 }}
               >
                 <StatusIcon
@@ -175,6 +184,11 @@ export function IntakeSidebar({
           <Link
             href={`${basePath}/${nextAction.slug}`}
             className="flex items-center gap-2 text-sm font-medium text-dvivid-primary hover:underline"
+            onClick={e => {
+              if (onNavigate && nextAction.slug && !onNavigate(`${basePath}/${nextAction.slug}`)) {
+                e.preventDefault();
+              }
+            }}
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -190,6 +204,11 @@ export function IntakeSidebar({
       <Link
         href={`${basePath}/student-details`}
         className="flex items-center gap-2 text-sm text-dvivid-text-secondary hover:text-dvivid-primary transition-colors px-2"
+        onClick={e => {
+          if (onNavigate && !onNavigate(`${basePath}/student-details`)) {
+            e.preventDefault();
+          }
+        }}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
@@ -246,6 +265,7 @@ export function IntakeMobileNav({
   applicationId,
   completions,
   readiness,
+  onNavigate,
 }: {
   studentId: string;
   applicationId: string;
@@ -255,6 +275,7 @@ export function IntakeMobileNav({
     requiredTotal: number;
     canGenerate: boolean;
   };
+  onNavigate?: (href: string) => boolean;
 }) {
   const pathname = usePathname();
   const basePath = `/students/${studentId}/applications/${applicationId}/intake`;
@@ -312,7 +333,13 @@ export function IntakeMobileNav({
                 <Link
                   key={section.id}
                   href={`${basePath}/${section.slug}`}
-                  onClick={() => setOpen(false)}
+                  onClick={e => {
+                    if (onNavigate && !onNavigate(`${basePath}/${section.slug}`)) {
+                      e.preventDefault();
+                      return;
+                    }
+                    setOpen(false);
+                  }}
                   className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm ${
                     isCurrent
                       ? "bg-dvivid-primary-light text-dvivid-primary font-medium"
