@@ -504,6 +504,11 @@ function isHeadingLike(block: TextBlock): boolean {
   // Numbered heading (1., 1.1, I., A., etc.) - medium signal
   if (text.match(/^(\d+(\.\d+)*|[IVX]+|[A-Z])\.\s/)) score += 2;
 
+  // Exact known heading match (e.g., "Education", "Experience") - strong signal.
+  // Critical for native/pdf-parse extraction which lacks style metadata.
+  const lowerText = text.toLowerCase();
+  if (KNOWN_HEADING_KEYWORDS_SET.has(lowerText)) score += 3;
+
   // Bold/style metadata if available
   if (block.isBold) score += 2;
   if (block.fontSize && block.fontSize > 12) score += 1;
@@ -731,89 +736,21 @@ export function generateId(): string {
 function parseEducationSection(section: Section): ParsedEducation[] {
   const education: ParsedEducation[] = [];
   const blocks = section.blocks;
-  const text = blocks.map(b => b.text).join("\n");
-  
-  // Split on newlines AND common multi-entry delimiters like | 
-  // Many resumes pack multiple education entries on one line separated by |
-  const rawLines = text.split(/\n|\|/).map(l => l.trim()).filter(l => l.length > 0);
-  
-  // Further split lines that contain multiple entries concatenated without delimiter
-  // e.g., "Degree - Institution | 2020 Degree - Institution | 2018"
-  const lines: string[] = [];
-  for (const line of rawLines) {
-    // Split on patterns like "Degree - Institution | Year Degree - Institution"
-    // Look for degree keywords followed by another degree keyword pattern
-    const segments = line.split(/(?=(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC|Executive MBA|M\.Sc\.|M\.Tech|B\.Sc\.|B\.E\.)\s)/i).filter(s => s.trim().length > 0);
-    for (const seg of segments) {
-      lines.push(seg.trim());
-    }
-  }
+  // Join blocks preserving newlines; do NOT split on `|` because `|` is commonly
+  // used as a delimiter between degree and institution (e.g. "MBA | University").
+  const lines = blocks.map(b => b.text).join("\n").split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
-  // Degree keywords - word-bounded
-  const degreeKeywords = /(?<![A-Za-z0-9])(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC)(?![A-Za-z0-9])/i;
+  // Degree keywords - word-bounded. Includes MBA and BBA which are common in CVs.
+  const degreeKeywords = /(?<![A-Za-z0-9])(?:B\.?Tech\.?|B\.?E\.?|Bachelor|BBA|MBA|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC)(?![A-Za-z0-9])/i;
 
-  // Institution keywords - word-bounded
+  // Institution keywords - word-bounded.
   const institutionKeywords = /(?<![A-Za-z0-9])(?:University|Institute|College|School|IIT|NIT|IIIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge|Polytechnic|Board)(?![A-Za-z0-9])/i;
 
-  let currentEdu: Partial<ParsedEducation> | null = null;
+  let currentEdu: Partial<ParsedEducation> & { _sourceLines?: string[] } | null = null;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
-
-    const hasDegree = !/\bboard\b/i.test(line) && degreeKeywords.test(line);
-    const hasInstitution = institutionKeywords.test(line);
-
-    if (hasDegree || hasInstitution) {
-      if (currentEdu && (currentEdu.institution || currentEdu.degree)) {
-        education.push({
-          id: generateId(),
-          institution: currentEdu.institution || "",
-          degree: currentEdu.degree || "",
-          specialization: currentEdu.specialization || "",
-          startYear: currentEdu.startYear || "",
-          endYear: currentEdu.endYear || "",
-          cgpa: currentEdu.cgpa || "",
-          cgpaScale: currentEdu.cgpaScale || "10",
-        });
-      }
-      currentEdu = {};
-
-      const degreeInInstMatch = line.match(/^([A-Z][A-Za-z.]+(?:\s+[A-Z][A-Za-z.]+)?)\s+(?:in|of)\s+([A-Za-z\s&+]+),\s*(.+)$/);
-      if (degreeInInstMatch) {
-        currentEdu.degree = degreeInInstMatch[1].trim();
-        currentEdu.specialization = degreeInInstMatch[2].trim();
-        currentEdu.institution = degreeInInstMatch[3].trim();
-      } else {
-        const parts = line.split(",").map(p => p.trim());
-        if (parts.length >= 2) {
-          currentEdu.degree = parts[0].split(/\s+(?:in|of)\s+/)[0].trim();
-          const specMatch = parts[0].match(/(?:in|of)\s+(.+)/i);
-          if (specMatch) currentEdu.specialization = specMatch[1].trim();
-          currentEdu.institution = parts[parts.length - 1];
-        } else {
-          if (hasDegree) currentEdu.degree = line.match(degreeKeywords)?.[0] || line;
-          if (hasInstitution) currentEdu.institution = line;
-        }
-      }
-    }
-
-    if (currentEdu) {
-      const yearMatch = (line + " " + nextLine).match(/((?:20|19)\d{2})\s*(?:-|–|to)\s*((?:20|19)\d{2}|present|current|ongoing)/i);
-      if (yearMatch && !currentEdu.startYear) {
-        currentEdu.startYear = yearMatch[1];
-        currentEdu.endYear = yearMatch[2]?.match(/\d{4}/)?.[0] || "";
-      }
-
-      const cgpaMatch = line.match(/(?:CGPA|GPA|CPI|SGPA|Percentage)\s*[:=\-–—]?\s*(\d+\.?\d*)\s*(?:\/|out of|%)?\s*(\d+\.?\d*)?/i);
-      if (cgpaMatch) {
-        currentEdu.cgpa = cgpaMatch[1];
-        if (cgpaMatch[2]) currentEdu.cgpaScale = cgpaMatch[2];
-      }
-    }
-  }
-
-  if (currentEdu && (currentEdu.institution || currentEdu.degree)) {
+  function flushCurrentEdu() {
+    if (!currentEdu) return;
+    // Push all records; plausibility filtering happens after merge.
     education.push({
       id: generateId(),
       institution: currentEdu.institution || "",
@@ -824,9 +761,114 @@ function parseEducationSection(section: Section): ParsedEducation[] {
       cgpa: currentEdu.cgpa || "",
       cgpaScale: currentEdu.cgpaScale || "10",
     });
+    currentEdu = null;
   }
 
-  // Merge adjacent fragmented records
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
+
+    // Many DOCX/PDF extractions append dates after a tab (e.g. "Institution\tSep 2024 – Dec 2025").
+    // Split on tab to isolate dates from the content.
+    const tabParts = rawLine.split("\t").map(p => p.trim()).filter(p => p.length > 0);
+    const line = tabParts[0];
+    const dateTail = tabParts.slice(1).join(" ");
+
+    const hasDegree = !/\bboard\b/i.test(line) && degreeKeywords.test(line);
+    const hasInstitution = institutionKeywords.test(line);
+
+    // Certification lines inside education sections should not become education records.
+    // They lack a degree keyword and often contain words like "Certification".
+    const isCertificationLike = /\bcertification\b|\bcertificate\b|\b certified\b/i.test(line) && !hasDegree;
+
+    if ((hasDegree || hasInstitution) && !isCertificationLike) {
+      flushCurrentEdu();
+      currentEdu = { _sourceLines: [rawLine] };
+
+      // Try structured formats first:
+      // 1. "Degree | Institution, Location"  (pipe-separated degree/institution)
+      const pipeMatch = line.match(/^(.+?)\s*\|\s*(.+)$/);
+      // 2. "Degree in/of Specialization, Institution"
+      const degreeInInstMatch = line.match(/^([A-Z][A-Za-z.]+(?:\s+[A-Z][A-Za-z.]+)?)\s+(?:in|of)\s+([A-Za-z\s&+]+),\s*(.+)$/);
+
+      if (pipeMatch) {
+        const left = pipeMatch[1].trim();
+        const right = pipeMatch[2].trim();
+        // left is usually the degree, right is institution + maybe location
+        currentEdu.degree = left;
+        // right may contain "University of X, City" — comma splits institution/location
+        const rightParts = right.split(",").map(p => p.trim());
+        if (rightParts.length >= 2) {
+          currentEdu.institution = rightParts.slice(0, -1).join(", "); // all but last = institution
+          // last part might be location, not part of institution
+        } else {
+          currentEdu.institution = right;
+        }
+      } else if (degreeInInstMatch) {
+        currentEdu.degree = degreeInInstMatch[1].trim();
+        currentEdu.specialization = degreeInInstMatch[2].trim();
+        currentEdu.institution = degreeInInstMatch[3].trim();
+      } else {
+        const parts = line.split(",").map(p => p.trim());
+        if (parts.length >= 2) {
+          // For "Bachelor of Computer Applications, Indus University, Ahmedabad"
+          // parts[0] = degree+spec, parts[1] = institution, parts[2] = location
+          const degreePart = parts[0];
+          currentEdu.degree = degreePart.split(/\s+(?:in|of)\s+/)[0].trim();
+          const specMatch = degreePart.match(/(?:in|of)\s+(.+)/i);
+          if (specMatch) currentEdu.specialization = specMatch[1].trim();
+          // Institution is the middle part(s), not the location at the end.
+          // Heuristic: if last part looks like a location (short, no institution keywords),
+          // treat everything between degree and last part as institution.
+          const lastPart = parts[parts.length - 1];
+          const looksLikeLocation = !institutionKeywords.test(lastPart) &&
+            (lastPart.length < 20 || /^[A-Z][a-z]+(\s+[A-Z][a-z]+){0,2}$/.test(lastPart));
+          if (looksLikeLocation && parts.length >= 3) {
+            currentEdu.institution = parts.slice(1, -1).join(", ");
+          } else {
+            currentEdu.institution = parts.slice(1).join(", ");
+          }
+        } else {
+          if (hasDegree) currentEdu.degree = line.match(degreeKeywords)?.[0] || line;
+          if (hasInstitution) currentEdu.institution = line;
+        }
+      }
+
+      // Extract dates from the tab tail OR from the line itself.
+      // Handles: "2018-2022", "Sep 2024 – Dec 2025", "2024-Present"
+      const dateSource = (dateTail ? dateTail + " " : "") + nextLine;
+      const yearMatch = dateSource.match(/((?:20|19)\d{2})\s*(?:-|–|to)\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?((?:20|19)\d{2}|present|current|ongoing)/i);
+      if (yearMatch && !currentEdu.startYear) {
+        currentEdu.startYear = yearMatch[1];
+        currentEdu.endYear = yearMatch[2]?.match(/\d{4}/)?.[0] || "";
+      }
+
+      const cgpaMatch = line.match(/(?:CGPA|GPA|CPI|SGPA|Percentage)\s*[:=\-–—]?\s*(\d+\.?\d*)\s*(?:\/|out of|%)?\s*(\d+\.?\d*)?/i);
+      if (cgpaMatch) {
+        currentEdu.cgpa = cgpaMatch[1];
+        if (cgpaMatch[2]) currentEdu.cgpaScale = cgpaMatch[2];
+      }
+    } else if (currentEdu) {
+      // This line may be a continuation (dates, scores, location) of the current entry.
+      currentEdu._sourceLines!.push(rawLine);
+
+      const yearMatch = (rawLine + " " + nextLine).match(/((?:20|19)\d{2})\s*(?:-|–|to)\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?((?:20|19)\d{2}|present|current|ongoing)/i);
+      if (yearMatch && !currentEdu.startYear) {
+        currentEdu.startYear = yearMatch[1];
+        currentEdu.endYear = yearMatch[2]?.match(/\d{4}/)?.[0] || "";
+      }
+
+      const cgpaMatch = rawLine.match(/(?:CGPA|GPA|CPI|SGPA|Percentage)\s*[:=\-–—]?\s*(\d+\.?\d*)\s*(?:\/|out of|%)?\s*(\d+\.?\d*)?/i);
+      if (cgpaMatch) {
+        currentEdu.cgpa = cgpaMatch[1];
+        if (cgpaMatch[2]) currentEdu.cgpaScale = cgpaMatch[2];
+      }
+    }
+  }
+
+  flushCurrentEdu();
+
+  // Merge adjacent fragmented records (one has degree, next has institution)
   const merged: ParsedEducation[] = [];
   for (let i = 0; i < education.length; i++) {
     const current = education[i];
@@ -852,7 +894,24 @@ function parseEducationSection(section: Section): ParsedEducation[] {
     }
   }
 
-  return merged.filter(e => !(e.degree === "" && /\bboard\b/i.test(e.institution)));
+  // Final plausibility filter:
+  // - Reject records with < 2 meaningful fields that also lack both degree and institution.
+  // - Reject records where institution is purely a date range or location fragment.
+  // - Reject empty degree + board-only institution.
+  return merged.filter(e => {
+    if (e.degree === "" && /\bboard\b/i.test(e.institution)) return false;
+    const hasDegree = !!e.degree;
+    const hasInstitution = !!e.institution;
+    const hasYear = !!(e.startYear || e.endYear);
+    const hasScore = !!e.cgpa;
+    const meaningfulFields = [hasDegree, hasInstitution, hasYear, hasScore].filter(Boolean).length;
+    if (meaningfulFields >= 2) return true;
+    if (hasDegree && hasInstitution) return true;
+    // Single-field fragments are rejected unless they have a degree with some weight
+    // (e.g. "12th Standard" from Indian secondary CVs is degree-only but valid).
+    if (hasDegree && e.degree.length > 3) return true;
+    return false;
+  });
 }
 
 // --- Education table parser (for table-aware structured data) ---
@@ -1211,7 +1270,10 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
     const line = lines[i];
     const dateMatch = line.match(dateRegex);
     const titleMatch = line.match(/(?:intern|engineer|developer|analyst|consultant|manager|designer|researcher|assistant|associate|lead|architect|specialist|officer|trainee|director|vp|vice president|head|chief)/i);
-    const companyMatch = line.match(/(?:at|@|\|\s*)\s*([A-Z][A-Za-z0-9\s&.,]+)/);
+    // Try "Company | Location" first (capture before pipe), then "at Company" (capture after at)
+    const pipeCompanyMatch = line.match(/^([A-Z][A-Za-z0-9\s&.,]+?)\s*\|/);
+    const atCompanyMatch = line.match(/(?:at|@)\s*([A-Z][A-Za-z0-9\s&.,]+)/);
+    const companyMatch = pipeCompanyMatch || atCompanyMatch;
     const roleCompanyMatch = line.match(/^(.+?)\s*[-–—]\s*(.+)$/);
 
     // Check if this line is a date-only line (has date but no clear role/org header)
@@ -1274,12 +1336,15 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
         let extractedLocation = "";
 
         if (headerText) {
-          // Check for "at Company" or "Company |" pattern in header
-          const headerCompanyMatch = headerText.match(/(?:at|@|\|\s*)\s*([A-Z][A-Za-z0-9\s&.,]+)/);
+          // Check for "at Company" or "Company |" pattern in header.
+          // Prefer "Company | Location" (capture before pipe), then "at Company".
+          const headerPipeMatch = headerText.match(/^([A-Z][A-Za-z0-9\s&.,]+?)\s*\|/);
+          const headerAtMatch = headerText.match(/(?:at|@)\s*([A-Z][A-Za-z0-9\s&.,]+)/);
+          const headerCompanyMatch = headerPipeMatch || headerAtMatch;
           if (headerCompanyMatch) {
             extractedOrg = headerCompanyMatch[1].trim();
             // Role is everything before the company marker
-            const beforeCompany = headerText.split(/(?:at|@|\|\s*)/)[0].trim();
+            const beforeCompany = headerText.split(/(?:at|@|\|)/)[0].trim();
             if (beforeCompany && !beforeCompany.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{4}/i)) {
               extractedRole = beforeCompany;
             }
@@ -1722,15 +1787,21 @@ export function parseCVFromDocument(doc: ExtractedDocument): ParsedCV {
   const certificationsSection = sections.find(s => s.type === "CERTIFICATIONS");
   const achievementsSection = sections.find(s => s.type === "ACHIEVEMENTS");
 
-  const education = educationSection ? 
-    (educationSection.blocks.some(b => b.metadata && b.metadata.tableId) ? 
-      parseEducationTableSection(educationSection) : 
-      parseEducationSection(educationSection)) 
+  // Only use table-specific parsers when the section contains a multi-column
+  // table (column index > 0). Single-column tables with heading+content in
+  // the same cell should be parsed as free text.
+  const hasMultiColumnTable = (section: Section | undefined) =>
+    section?.blocks.some(b => b.metadata?.tableId != null && (b.column ?? 0) > 0) ?? false;
+
+  const education = educationSection ?
+    (hasMultiColumnTable(educationSection) ?
+      parseEducationTableSection(educationSection) :
+      parseEducationSection(educationSection))
     : [];
-  const experience = experienceSection ? 
-    (experienceSection.blocks.some(b => b.metadata && b.metadata.tableId) ? 
-      parseExperienceTableSection(experienceSection) : 
-      parseExperienceSection(experienceSection)) 
+  const experience = experienceSection ?
+    (hasMultiColumnTable(experienceSection) ?
+      parseExperienceTableSection(experienceSection) :
+      parseExperienceSection(experienceSection))
     : [];
   const projects = projectsSection ? parseProjectsSection(projectsSection) : [];
   const skills = skillsSection ? parseSkillsSection(skillsSection) : {

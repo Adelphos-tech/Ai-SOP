@@ -23,6 +23,7 @@ import {
   buildContextDataForSave,
 } from "@/lib/application/application-context";
 import { getProfileReadiness } from "@/lib/application/intake-completion";
+import { updateRepeatableProvenanceForManualEdits } from "@/lib/application/cv-merge";
 import {
   requireConsultantSession,
   authorizeStudentAccess,
@@ -218,6 +219,24 @@ export async function PUT(request: NextRequest) {
       );
       profileToSave.personalDataProvenance = updatedProvenance;
 
+      // Detect manual edits to CV-derived repeatable records and drop their
+      // provenance so subsequent replaceCvDerived treats them as manual.
+      profileToSave.educationProvenance = updateRepeatableProvenanceForManualEdits(
+        profileToSave.education || [],
+        existingProfile.education || [],
+        (Array.isArray(existingProfile.educationProvenance) ? existingProfile.educationProvenance : []) as any,
+      );
+      profileToSave.experienceProvenance = updateRepeatableProvenanceForManualEdits(
+        profileToSave.experience || [],
+        existingProfile.experience || [],
+        (Array.isArray(existingProfile.experienceProvenance) ? existingProfile.experienceProvenance : []) as any,
+      );
+      profileToSave.projectsProvenance = updateRepeatableProvenanceForManualEdits(
+        profileToSave.projects || [],
+        existingProfile.projects || [],
+        (Array.isArray(existingProfile.projectsProvenance) ? existingProfile.projectsProvenance : []) as any,
+      );
+
       const saved = await saveStudentProfileConditional(
         body.studentId,
         profileToSave,
@@ -282,6 +301,24 @@ export async function PUT(request: NextRequest) {
         existingProfileForNonConditional.personalDataProvenance
       );
       profileToSave.personalDataProvenance = updatedProvenanceNonConditional;
+
+      // Detect manual edits to CV-derived repeatable records (non-conditional path)
+      const existingProfileNonCond = existingProfileForNonConditional;
+      profileToSave.educationProvenance = updateRepeatableProvenanceForManualEdits(
+        profileToSave.education || [],
+        existingProfileNonCond.education || [],
+        (Array.isArray(existingProfileNonCond.educationProvenance) ? existingProfileNonCond.educationProvenance : []) as any,
+      );
+      profileToSave.experienceProvenance = updateRepeatableProvenanceForManualEdits(
+        profileToSave.experience || [],
+        existingProfileNonCond.experience || [],
+        (Array.isArray(existingProfileNonCond.experienceProvenance) ? existingProfileNonCond.experienceProvenance : []) as any,
+      );
+      profileToSave.projectsProvenance = updateRepeatableProvenanceForManualEdits(
+        profileToSave.projects || [],
+        existingProfileNonCond.projects || [],
+        (Array.isArray(existingProfileNonCond.projectsProvenance) ? existingProfileNonCond.projectsProvenance : []) as any,
+      );
 
       await saveStudentProfile(body.studentId, profileToSave);
       if (application && savedContextData) {
