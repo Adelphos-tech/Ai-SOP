@@ -98,7 +98,8 @@ export type ExtractionStrategyType =
   | "docling-ocr"
   | "rapidocr"
   | "mixed-native-ocr"
-  | "unstructured";
+  | "unstructured"
+  | "native";
 
 /** Docling service endpoints */
 const DOCLING_BASE_URL = process.env.CV_PARSER_SERVICE_URL || "http://127.0.0.1:8099";
@@ -771,6 +772,7 @@ async function extractCanonicalBlocks(
     let initialOcrUsed = false;
     let initialStrategy: "native" | "docling" | "rapidocr" | "mammoth" | "mammoth_html";
     let initialDurationMs: number;
+    let doclingUnavailable = false;
 
     if (format === "docx") {
       // Use table-aware HTML extraction for DOCX
@@ -789,6 +791,7 @@ async function extractCanonicalBlocks(
         initialStrategy = "docling";
         initialDurationMs = doclingResult.durationMs;
       } catch (doclingError) {
+        doclingUnavailable = true;
         // Docling unavailable - fall back to native pdf-parse
         const { extractTextFromPDF } = await import("./cv-parser");
         const text = await extractTextFromPDF(buffer);
@@ -841,7 +844,7 @@ async function extractCanonicalBlocks(
 // STEP 3: Apply routing decision
     let finalBlocks: CanonicalBlock[];
     let finalOcrUsed = initialOcrUsed;
-    let finalStrategy: "mammoth" | "docling-native" | "docling-ocr" | "rapidocr" | "mixed-native-ocr" | "mammoth_html" | "unstructured" = "docling-native";
+    let finalStrategy: ExtractionStrategyType = "docling-native";
     let finalDurationMs = initialDurationMs;
     const ocrPages: number[] = [];
 
@@ -854,57 +857,82 @@ async function extractCanonicalBlocks(
         break;
 
       case "docling-native":
-        if (initialStrategy !== "docling") {
-          // Re-extract with Docling
-          const doclingResult = await callDoclingParse(buffer, filename, false);
-          finalBlocks = doclingResult.blocks;
-          pageCount = doclingResult.pageCount;
-          finalOcrUsed = doclingResult.ocrUsed;
-           finalStrategy = "docling-native";
-          finalDurationMs = doclingResult.durationMs;
+        if (doclingUnavailable || initialStrategy !== "docling") {
+          if (doclingUnavailable) {
+            // Docling was already unavailable during initial extraction; use pdf-parse fallback
+            finalBlocks = initialBlocks;
+            finalStrategy = "native";
+            warnings.push("Docling unavailable, using fallback pdf-parse results");
+          } else {
+            // Re-extract with Docling
+            const doclingResult = await callDoclingParse(buffer, filename, false);
+            finalBlocks = doclingResult.blocks;
+            pageCount = doclingResult.pageCount;
+            finalOcrUsed = doclingResult.ocrUsed;
+            finalStrategy = "docling-native";
+            finalDurationMs = doclingResult.durationMs;
+          }
         } else {
           finalBlocks = initialBlocks;
         }
         break;
 
       case "docling-ocr":
-        const ocrResult = await callDoclingParse(buffer, filename, true);
-        finalBlocks = ocrResult.blocks;
-        pageCount = ocrResult.pageCount;
-        finalOcrUsed = true;
-           finalStrategy = "docling-ocr";
-        finalDurationMs = ocrResult.durationMs;
-        break;
-
-      case "rapidocr":
-        // Use Docling OCR endpoint or RapidOCR fallback
-        try {
+        if (doclingUnavailable) {
+          finalBlocks = initialBlocks;
+          finalStrategy = "native";
+          warnings.push("Docling OCR unavailable, using fallback pdf-parse results");
+        } else {
           const ocrResult = await callDoclingParse(buffer, filename, true);
           finalBlocks = ocrResult.blocks;
           pageCount = ocrResult.pageCount;
           finalOcrUsed = true;
-          finalStrategy = "rapidocr";
+          finalStrategy = "docling-ocr";
           finalDurationMs = ocrResult.durationMs;
-        } catch {
-          // Try direct RapidOCR call
-          warnings.push("Docling OCR failed, attempting direct RapidOCR");
-          throw new Error("RapidOCR fallback not yet implemented in Node layer");
+        }
+        break;
+
+      case "rapidocr":
+        // Use Docling OCR endpoint or RapidOCR fallback
+        if (doclingUnavailable) {
+          finalBlocks = initialBlocks;
+          finalStrategy = "native";
+          warnings.push("Docling OCR unavailable, using fallback pdf-parse results");
+        } else {
+          try {
+            const ocrResult = await callDoclingParse(buffer, filename, true);
+            finalBlocks = ocrResult.blocks;
+            pageCount = ocrResult.pageCount;
+            finalOcrUsed = true;
+            finalStrategy = "rapidocr";
+            finalDurationMs = ocrResult.durationMs;
+          } catch {
+            // Try direct RapidOCR call
+            warnings.push("Docling OCR failed, attempting direct RapidOCR");
+            throw new Error("RapidOCR fallback not yet implemented in Node layer");
+          }
         }
         break;
 
       case "mixed-native-ocr":
         if ("ocrPages" in route) {
-          ocrPages.push(...route.ocrPages);
-          warnings.push(`Mixed extraction: native for most pages, OCR for pages ${route.ocrPages.join(", ")}`);
-          
-          // For now, use Docling OCR on entire document
-          // TODO: Implement true page-level mixed extraction
-          const mixedResult = await callDoclingParse(buffer, filename, true);
-          finalBlocks = mixedResult.blocks;
-          pageCount = mixedResult.pageCount;
-          finalOcrUsed = true;
+          if (doclingUnavailable) {
+            finalBlocks = initialBlocks;
+            finalStrategy = "native";
+            warnings.push("Docling OCR unavailable, using fallback pdf-parse results");
+          } else {
+            ocrPages.push(...route.ocrPages);
+            warnings.push(`Mixed extraction: native for most pages, OCR for pages ${route.ocrPages.join(", ")}`);
+
+            // For now, use Docling OCR on entire document
+            // TODO: Implement true page-level mixed extraction
+            const mixedResult = await callDoclingParse(buffer, filename, true);
+            finalBlocks = mixedResult.blocks;
+            pageCount = mixedResult.pageCount;
+            finalOcrUsed = true;
             finalStrategy = "mixed-native-ocr";
-          finalDurationMs = mixedResult.durationMs;
+            finalDurationMs = mixedResult.durationMs;
+          }
         } else {
           finalBlocks = initialBlocks;
         }

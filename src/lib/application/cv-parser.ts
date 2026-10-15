@@ -1606,26 +1606,35 @@ function parseAchievementsSection(section: Section): string[] {
 function extractName(text: string): { firstName?: string; lastName?: string } {
   const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
   for (const line of lines.slice(0, 5)) {
-    if (line.match(/@|phone|email|address|curriculum|cv\b/i)) continue;
-    let cleaned = line.replace(/\s*\|\s*.*$/i, "").replace(/\s*[-–—]\s*.*$/i, "").trim();
+    // Strip email addresses, phone numbers, and structural keywords so a flattened
+    // line like "John Smith john.smith@email.com +91 98765 43210 ..." still yields the name.
+    let cleaned = line
+      .replace(/\S+@\S+\.\S+/g, "")
+      .replace(/\+?\d[\d\s().-]{6,}\d/g, "")
+      .replace(/\b(phone|email|address|curriculum|cv)\b/gi, "")
+      .replace(/\s*\|\s*.*$/i, "")
+      .replace(/\s*[-–—]\s*.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
     if (!cleaned || cleaned.length < 3) continue;
     if (cleaned === cleaned.toUpperCase() && cleaned.match(/^[A-Z\s]+$/) && cleaned.split(/\s+/).length >= 2) {
       cleaned = cleaned.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
     }
-    const nameMatch = cleaned.match(/^([A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)\s+([A-Z][a-z]+(?:[-'][A-Za-z]+)*)$/);
+    const nameMatch = cleaned.match(/^([A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)\s+([A-Z][a-z]+(?:[-'][A-Za-z]+)*)\b/);
     if (nameMatch) {
       return { firstName: nameMatch[1], lastName: nameMatch[2] };
     }
-    const lowerLastNameMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+\s+[a-z]+)$/);
+    const lowerLastNameMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+\s+[a-z]+)\b/);
     if (lowerLastNameMatch) {
       const parts = lowerLastNameMatch[2].split(/\s+/);
       return { firstName: lowerLastNameMatch[1], lastName: parts[parts.length - 1] };
     }
-    const threeWordMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([A-Z][a-z]+)$/);
+    const threeWordMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([A-Z][a-z]+)\b/);
     if (threeWordMatch) {
       return { firstName: threeWordMatch[1], lastName: threeWordMatch[3] };
     }
-    const threeWordLowerMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([a-z]+)$/);
+    const threeWordLowerMatch = cleaned.match(/^([A-Z][a-z]+)\s+([A-Z][a-z]+)\s+([a-z]+)\b/);
     if (threeWordLowerMatch) {
       return { firstName: threeWordLowerMatch[1], lastName: threeWordLowerMatch[3].replace(/\b\w/, c => c.toUpperCase()) };
     }
