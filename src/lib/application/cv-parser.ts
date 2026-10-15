@@ -889,11 +889,24 @@ export function groupEducationRecords(section: Section): SourceRecordGroup[] {
     const isNewRecord = hasDegreePattern || hasInstitutionAndYear;
     const isCont = isContinuationBlock(block);
 
+    // An institution-only line (e.g. "Nirman High School") without a degree keyword
+    // should continue the previous group if that group hasn't yet acquired a degree.
+    const hasInstitutionKeyword = /\b(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT)\b/i.test(text);
+    const lastGroup = groups.length > 0 ? groups[groups.length - 1] : null;
+    const lastHasDegree = lastGroup ? /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S|M\.?Sc|Master|Ph\.?D|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc|B\.?Com|B\.?S|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma)\b/mi.test(lastGroup.sourceEvidence) : false;
+    const isInstitutionContinuation = hasInstitutionKeyword && !hasDegreePattern && groups.length > 0 && !lastHasDegree;
+
+    // A degree line that follows an institution-only group (Indian multi-line format)
+    // should merge into the previous group rather than starting a new record.
+    const lastHasInstitution = lastGroup ? /\b(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT)\b/i.test(lastGroup.sourceEvidence) : false;
+    const isDegreeFollowingInstitution = hasDegreePattern && groups.length > 0 && !lastHasDegree && lastHasInstitution;
+
     // If a block matches a degree/institution pattern, it ALWAYS starts a new record,
     // even if it also looks like a continuation. The new-record signal takes precedence.
-    if (groups.length === 0 || isNewRecord) {
+    // EXCEPTION: degree lines following an institution group merge into that group.
+    if (groups.length === 0 || (isNewRecord && !isDegreeFollowingInstitution)) {
       groups.push({ blocks: [block], sourceEvidence: text });
-    } else if (!isCont) {
+    } else if (!isCont && !isInstitutionContinuation && !isDegreeFollowingInstitution) {
       // Not a new record and not a continuation — still start a new group
       // (avoids merging unrelated blocks when no clear continuation signal exists)
       groups.push({ blocks: [block], sourceEvidence: text });
@@ -914,10 +927,14 @@ function extractEducationFields(group: SourceRecordGroup): Partial<ParsedEducati
   // Expanded degree keywords covering standard qualifications
   const degreePattern = /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor(?:\s+of)?|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master(?:\s+of)?|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma)\b/i;
 
-  // Extract degree from the start of the text
-  const degreeMatch = text.match(degreePattern);
-  if (degreeMatch) {
-    result.degree = degreeMatch[0].trim();
+  // Extract degree from any line in the text (Indian multi-line format has degree after institution)
+  const lines = text.split("\n");
+  for (const line of lines) {
+    const degreeMatch = line.trim().match(degreePattern);
+    if (degreeMatch) {
+      result.degree = degreeMatch[0].trim();
+      break;
+    }
   }
 
   // Extract specialization: "Degree, Field - ..." or "Degree in/of Field - ..."
@@ -936,7 +953,11 @@ function extractEducationFields(group: SourceRecordGroup): Partial<ParsedEducati
   for (const pattern of instPatterns) {
     const m = text.match(pattern);
     if (m) {
-      result.institution = m[1].trim();
+      const candidate = m[1].trim();
+      // Reject purely numeric / percentage matches that are score lines
+      if (/^\d+\.?\d*\s*%?$/.test(candidate)) continue;
+      if (/^(?:CGPA|GPA|CPI|SGPA|Percentage|Marks|Score|Grade|Result|Passing|Year|Duration|Status|Board|Standard|Subject|Stream|Division|Semester|Session|Roll|Number)\b/i.test(candidate)) continue;
+      result.institution = candidate;
       break;
     }
   }
