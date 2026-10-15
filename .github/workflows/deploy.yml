@@ -283,7 +283,7 @@ jobs:
             RETRY=$((RETRY + 1))
             echo "Health check attempt $RETRY/$MAX_RETRIES..."
 
-            STATUS=$(curl --silent --show-error --max-time 15 -o /dev/null -w "%{http_code}" "$HEALTH_URL/students" || true)
+            STATUS=$(curl --silent --show-error --max-time 15 -o /dev/null -w "%{http_code}" "$HEALTH_URL/" || true)
             echo "HTTP status: $STATUS"
 
             if [ "$STATUS" = "200" ] && curl --fail --silent --show-error --max-time 15 -o /dev/null "$HEALTH_URL/_next/static/$EXPECTED_BUILD_ID/_buildManifest.js"; then
