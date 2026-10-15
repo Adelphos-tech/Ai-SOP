@@ -3,6 +3,8 @@
 import { useState, useCallback, useRef } from "react";
 import { PrimaryButton, SecondaryButton } from "@/components/ui";
 
+type Stage = "upload" | "review" | "complete";
+
 interface ParsedCV {
   personalData: {
     firstName?: string;
@@ -64,22 +66,21 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
   const [extractedText, setExtractedText] = useState<string | null>(null);
   const [filename, setFilename] = useState("");
   const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState(false);
-  const [showReview, setShowReview] = useState(false);
+  const [stage, setStage] = useState<Stage>("upload");
   const [parseRevision, setParseRevision] = useState<number | null>(null);
   const [staleProfile, setStaleProfile] = useState(false);
   const [ocrNotice, setOcrNotice] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [identityConflict, setIdentityConflict] = useState<IdentityConflict | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(async (file: File) => {
     setError("");
     setErrorCode(null);
     setParsedCV(null);
-    setShowReview(false);
-    setApplied(false);
+    setStage("upload");
     setIdentityConflict(null);
     setOcrNotice(null);
 
@@ -122,7 +123,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
       setParseState(data.parseState || null);
       setExtractedText(data.extractedText || null);
       setOcrNotice(data.ocrNotice || null);
-      setShowReview(true);
+      setStage("review");
       setParseRevision(typeof data.profileRevision === "number" ? data.profileRevision : null);
       setStaleProfile(false);
     } catch (err: any) {
@@ -155,7 +156,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
     if (file) handleFile(file);
   }, [handleFile]);
 
-  async function handleApply(identityOverride = false, replaceCvDerived = false) {
+  async function handleApply(replaceCvDerived = false) {
     if (!parsedCV) return;
     setApplying(true);
     setError("");
@@ -169,15 +170,13 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
           parsedCV,
           overwrite: false,
           profileRevision: parseRevision,
-          ...(identityOverride ? { identityConflictOverride: true } : {}),
           ...(replaceCvDerived ? { replaceCvDerived: true } : {}),
         }),
       });
       if (res.status === 409) {
         const data = await res.json().catch(() => ({}));
         if (data.code === "CV_IDENTITY_CONFLICT") {
-          // Wrong-person CV — never silently applied. Show the conflict
-          // banner; "Apply Anyway" is a separate explicit second step.
+          // Wrong-person CV — blocked. No override available.
           setIdentityConflict({
             studentIdentity: data.studentIdentity || { name: "", email: "" },
             cvIdentity: data.cvIdentity || { name: "", email: "" },
@@ -193,7 +192,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Failed to apply CV data.");
       }
-      setApplied(true);
+      setStage("complete");
       onApplied?.();
     } catch (err: any) {
       setError(err?.message || "Failed to apply CV data.");
@@ -206,8 +205,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
     setParsedCV(null);
     setParseState(null);
     setExtractedText(null);
-    setShowReview(false);
-    setApplied(false);
+    setStage("upload");
     setError("");
     setErrorCode(null);
     setFilename("");
@@ -215,6 +213,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
     setParseRevision(null);
     setIdentityConflict(null);
     setConfirmReplace(false);
+    setShowPreview(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -226,15 +225,42 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
   const certCount = parsedCV?.certifications?.length || 0;
   const achievementCount = parsedCV?.achievements?.length || 0;
 
+  // Categorize extracted fields by confidence
+  function getFieldStatus(value: string | undefined): "confirmed" | "needs-review" | "missing" {
+    if (!value || value.trim().length === 0) return "missing";
+    if (value.match(/\b(unknown|not found|not detected|could not|please enter)\b/i)) return "needs-review";
+    return "confirmed";
+  }
+
+  function getEducationStatus(e: any): "confirmed" | "needs-review" {
+    if (!e.institution || !e.degree) return "needs-review";
+    if (e.institution.length < 3 || e.degree.length < 2) return "needs-review";
+    return "confirmed";
+  }
+
+  function getExperienceStatus(e: any): "confirmed" | "needs-review" {
+    if (!e.organization || !e.role) return "needs-review";
+    if (e.organization.length < 3 || e.role.length < 3) return "needs-review";
+    return "confirmed";
+  }
+
+  const eduConfirmed = parsedCV?.education.filter(e => getEducationStatus(e) === "confirmed").length || 0;
+  const eduNeedsReview = parsedCV?.education.filter(e => getEducationStatus(e) === "needs-review").length || 0;
+  const expConfirmed = parsedCV?.experience.filter(e => getExperienceStatus(e) === "confirmed").length || 0;
+  const expNeedsReview = parsedCV?.experience.filter(e => getExperienceStatus(e) === "needs-review").length || 0;
+
   return (
     <div className="bg-white border border-dvivid-border rounded-card shadow-card p-6">
+      {/* Stage stepper */}
+      <StageStepper stage={stage} />
+
       <h3 className="text-card-title text-dvivid-text-primary mb-1">Student Application Profile</h3>
       <p className="text-sm text-dvivid-text-secondary mb-4">
         Upload a CV to pre-fill this application. You can review and edit everything before generation.
       </p>
 
-      {/* Upload zone */}
-      {!parsedCV && !applied && (
+      {/* ============ STAGE 1: UPLOAD ============ */}
+      {stage === "upload" && (
         <div
           onDrop={handleDrop}
           onDragOver={handleDragOver}
@@ -266,7 +292,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
               <p className="text-sm font-medium text-dvivid-text-primary">
-                Upload CV
+                Upload Resume
               </p>
               <p className="text-xs text-dvivid-text-muted">
                 Drag & drop PDF/DOCX or click to browse
@@ -292,7 +318,6 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
               Re-upload CV after reviewing the latest profile
             </button>
           )}
-          {/* Show "Upload Different CV" on parse failures (not stale profile) */}
           {!staleProfile && errorCode && (
             <button
               onClick={handleReset}
@@ -304,33 +329,26 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
         </div>
       )}
 
-      {/* Parsed result */}
-      {parsedCV && showReview && !applied && (
+      {/* ============ STAGE 2: REVIEW ============ */}
+      {stage === "review" && parsedCV && (
         <div className="mt-4 space-y-4">
-          {/* OCR provenance — text recovered from scanned/image content;
-              informational, not an error. Apply still requires review. */}
-          {ocrNotice && (
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-input">
-              <p className="text-sm text-blue-800">{ocrNotice}</p>
-            </div>
-          )}
-          {/* State-aware banner — PARSED / PARTIAL_PARSE / EXTRACTION_ONLY */}
+          {/* Parse state banner */}
           {parseState === "EXTRACTION_ONLY" ? (
             <div className="p-3 bg-amber-50 border border-amber-300 rounded-input space-y-1">
               <p className="text-sm font-medium text-amber-800">
-                Resume content was extracted, but we could not fully structure this format: {filename}
+                We could not fully structure this format: {filename}
               </p>
               <p className="text-sm text-amber-700">
-                Review the extracted text below and complete the profile fields manually — nothing is applied automatically.
+                The text was extracted but not parsed into fields. Complete the profile manually — nothing is applied automatically.
               </p>
             </div>
           ) : parseState === "PARTIAL_PARSE" || parseState === "PARSED_WITH_WARNINGS" ? (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-input">
               <p className="text-sm font-medium text-amber-800">
-                Resume imported with some items needing review: {filename}
+                Imported with some items needing review: {filename}
               </p>
               <p className="text-xs text-amber-700">
-                Check the detected sections below — unmarked sections were not found in the document.
+                Review each section below before applying.
               </p>
             </div>
           ) : (
@@ -339,25 +357,19 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
               <span className="text-sm font-medium text-dvivid-success">
-                CV imported: {filename}
+                Resume imported: {filename}
               </span>
             </div>
           )}
 
-          {/* Extracted raw text — reference for review when structure is
-              weak (PARTIAL_PARSE) or absent (EXTRACTION_ONLY) */}
-          {extractedText && (
-            <details className="border border-amber-200 bg-amber-50/50 rounded-input p-3">
-              <summary className="text-sm font-medium text-amber-800 cursor-pointer">
-                Extracted resume content ({extractedText.length.toLocaleString()} characters)
-              </summary>
-              <pre className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs text-dvivid-text-secondary bg-white border border-dvivid-border rounded p-2">
-                {extractedText}
-              </pre>
-            </details>
+          {/* OCR notice */}
+          {ocrNotice && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-input">
+              <p className="text-sm text-blue-800">{ocrNotice}</p>
+            </div>
           )}
 
-          {/* Identity comparison — always visible before Apply */}
+          {/* Identity comparison */}
           {(parsedCV.personalData.firstName || parsedCV.personalData.email) && (
             <div className={`p-3 border rounded-input text-sm space-y-1 ${
               identityConflict
@@ -381,128 +393,129 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
             </div>
           )}
 
-          {/* Identity conflict — Apply Anyway is an explicit second step */}
+          {/* Identity conflict — BLOCKED, no override */}
           {identityConflict && (
             <div className="p-4 bg-dvivid-error-light border border-dvivid-error/30 rounded-input space-y-2">
               <p className="text-sm font-semibold text-dvivid-error">
-                ⚠ This CV appears to belong to a different person.
+                This CV belongs to a different person and cannot be applied.
               </p>
               <p className="text-sm text-dvivid-text-secondary">{identityConflict.message}</p>
+              <p className="text-xs text-dvivid-text-muted">
+                Upload a different CV or verify the selected student.
+              </p>
             </div>
           )}
 
-          {/* Detected summary */}
-          <div>
-            <p className="text-sm font-medium text-dvivid-text-primary mb-2">Detected:</p>
-            <div className="space-y-1.5">
-              <DetectedItem detected={!!(parsedCV.personalData.firstName || parsedCV.personalData.email)} label="Personal information" />
-              <DetectedItem detected={parsedCV.education.length > 0} label={`${parsedCV.education.length} Education record${parsedCV.education.length !== 1 ? "s" : ""}`} />
-              <DetectedItem detected={parsedCV.projects.length > 0} label={`${parsedCV.projects.length} Project${parsedCV.projects.length !== 1 ? "s" : ""}`} />
-              <DetectedItem detected={parsedCV.experience.length > 0} label={`${parsedCV.experience.length} Work experience${parsedCV.experience.length !== 1 ? "s" : ""}`} />
-              <DetectedItem detected={totalSkills > 0} label={`${totalSkills} Skill${totalSkills !== 1 ? "s" : ""}`} />
-              <DetectedItem detected={certCount > 0} label={`${certCount} Certification${certCount !== 1 ? "s" : ""}`} />
-              <DetectedItem detected={achievementCount > 0} label={`${achievementCount} Achievement${achievementCount !== 1 ? "s" : ""}`} />
-            </div>
+          {/* Review summary cards */}
+          <div className="space-y-3">
+            {/* Personal */}
+            <ReviewCard
+              title="Personal Information"
+              status={getFieldStatus(parsedCV.personalData.firstName) === "confirmed" && getFieldStatus(parsedCV.personalData.email) === "confirmed" ? "confirmed" : "needs-review"}
+            >
+              <FieldRow label="Name" value={[parsedCV.personalData.firstName, parsedCV.personalData.lastName].filter(Boolean).join(" ")} />
+              <FieldRow label="Email" value={parsedCV.personalData.email} />
+              <FieldRow label="Phone" value={parsedCV.personalData.phone} />
+              <FieldRow label="Location" value={[parsedCV.personalData.currentCity, parsedCV.personalData.currentCountry].filter(Boolean).join(", ")} />
+              <FieldRow label="Nationality" value={parsedCV.personalData.nationality} />
+            </ReviewCard>
+
+            {/* Education */}
+            {parsedCV.education.length > 0 && (
+              <ReviewCard
+                title={`Education (${eduConfirmed} confirmed${eduNeedsReview > 0 ? `, ${eduNeedsReview} needs review` : ""})`}
+                status={eduNeedsReview > 0 ? "needs-review" : "confirmed"}
+              >
+                {parsedCV.education.map((e, i) => (
+                  <div key={i} className={`py-1.5 border-b last:border-b-0 border-dvivid-border-light ${getEducationStatus(e) === "needs-review" ? "text-amber-700" : "text-dvivid-text-secondary"}`}>
+                    <span className="text-sm">{e.degree || "?"} {e.specialization ? `in ${e.specialization}` : ""} — {e.institution || "?"}</span>
+                    <span className="text-xs text-dvivid-text-muted ml-2">({e.startYear || "?"}–{e.endYear || "?"})</span>
+                    {getEducationStatus(e) === "needs-review" && <span className="ml-2 text-xs font-medium text-amber-600">Needs review</span>}
+                  </div>
+                ))}
+              </ReviewCard>
+            )}
+
+            {/* Experience */}
+            {parsedCV.experience.length > 0 && (
+              <ReviewCard
+                title={`Work Experience (${expConfirmed} confirmed${expNeedsReview > 0 ? `, ${expNeedsReview} needs review` : ""})`}
+                status={expNeedsReview > 0 ? "needs-review" : "confirmed"}
+              >
+                {parsedCV.experience.map((e, i) => (
+                  <div key={i} className={`py-1.5 border-b last:border-b-0 border-dvivid-border-light ${getExperienceStatus(e) === "needs-review" ? "text-amber-700" : "text-dvivid-text-secondary"}`}>
+                    <span className="text-sm">{e.role || "?"} at {e.organization || "?"}</span>
+                    <span className="text-xs text-dvivid-text-muted ml-2">({e.startDate || "?"}–{e.endDate || "present"})</span>
+                    {getExperienceStatus(e) === "needs-review" && <span className="ml-2 text-xs font-medium text-amber-600">Needs review</span>}
+                  </div>
+                ))}
+              </ReviewCard>
+            )}
+
+            {/* Projects */}
+            {parsedCV.projects.length > 0 && (
+              <ReviewCard title={`Projects (${parsedCV.projects.length})`} status="confirmed">
+                {parsedCV.projects.map((p, i) => (
+                  <div key={i} className="py-1.5 border-b last:border-b-0 border-dvivid-border-light text-dvivid-text-secondary text-sm">
+                    {p.name || "?"} {p.technologies && <span className="text-xs text-dvivid-text-muted">— {p.technologies}</span>}
+                  </div>
+                ))}
+              </ReviewCard>
+            )}
+
+            {/* Skills */}
+            {totalSkills > 0 && (
+              <ReviewCard title={`Skills (${totalSkills})`} status="confirmed">
+                <div className="flex flex-wrap gap-1.5">
+                  {[...parsedCV.skills.technical, ...parsedCV.skills.programming, ...parsedCV.skills.tools, ...(parsedCV.skills.software || []), ...parsedCV.skills.domain, ...parsedCV.skills.soft].map((s, i) => (
+                    <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-secondary">{s}</span>
+                  ))}
+                </div>
+              </ReviewCard>
+            )}
+
+            {/* Certifications + Achievements */}
+            {certCount > 0 && (
+              <ReviewCard title={`Certifications (${certCount})`} status="confirmed">
+                {parsedCV.certifications!.map((c, i) => (
+                  <div key={i} className="py-0.5 text-sm text-dvivid-text-secondary">{c}</div>
+                ))}
+              </ReviewCard>
+            )}
+            {achievementCount > 0 && (
+              <ReviewCard title={`Achievements (${achievementCount})`} status="confirmed">
+                {parsedCV.achievements!.map((a, i) => (
+                  <div key={i} className="py-0.5 text-sm text-dvivid-text-secondary">{a}</div>
+                ))}
+              </ReviewCard>
+            )}
           </div>
 
-          {/* Warnings */}
+          {/* Technical diagnostics (collapsed) */}
           {parsedCV.parseWarnings.length > 0 && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-input">
-              <p className="text-sm font-medium text-amber-800 mb-1">Parse notes:</p>
-              <ul className="text-sm text-amber-700 list-disc list-inside space-y-0.5">
+            <details className="border border-gray-200 rounded-input p-3">
+              <summary className="text-xs font-medium text-dvivid-text-muted cursor-pointer">
+                Technical parse details ({parsedCV.parseWarnings.length})
+              </summary>
+              <ul className="text-xs text-dvivid-text-muted list-disc list-inside space-y-0.5 mt-2">
                 {parsedCV.parseWarnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
-            </div>
+            </details>
           )}
 
-          {/* Review details */}
-          <details className="border border-dvivid-border rounded-input p-3">
-            <summary className="text-sm font-medium text-dvivid-primary cursor-pointer hover:underline">
-              Review CV Import Details
-            </summary>
-            <div className="mt-3 space-y-3 text-sm">
-              {/* Personal */}
-              <div>
-                <p className="font-medium text-dvivid-text-primary mb-1">Personal Information</p>
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-dvivid-text-secondary">
-                  <dt>Name:</dt><dd>{parsedCV.personalData.firstName} {parsedCV.personalData.lastName}</dd>
-                  <dt>Email:</dt><dd>{parsedCV.personalData.email || "—"}</dd>
-                  <dt>Phone:</dt><dd>{parsedCV.personalData.phone || "—"}</dd>
-                  <dt>Location:</dt><dd>{[parsedCV.personalData.currentCity, parsedCV.personalData.currentCountry].filter(Boolean).join(", ") || "—"}</dd>
-                  <dt>Nationality:</dt><dd>{parsedCV.personalData.nationality || "—"}</dd>
-                </dl>
-              </div>
+          {/* Extracted raw text (collapsed) */}
+          {extractedText && (
+            <details className="border border-gray-200 rounded-input p-3">
+              <summary className="text-xs font-medium text-dvivid-text-muted cursor-pointer">
+                Extracted resume text ({extractedText.length.toLocaleString()} characters)
+              </summary>
+              <pre className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs text-dvivid-text-secondary bg-white border border-dvivid-border rounded p-2">
+                {extractedText}
+              </pre>
+            </details>
+          )}
 
-              {/* Education */}
-              {parsedCV.education.length > 0 && (
-                <div>
-                  <p className="font-medium text-dvivid-text-primary mb-1">Education</p>
-                  {parsedCV.education.map((e, i) => (
-                    <div key={i} className="text-dvivid-text-secondary mb-1">
-                      {e.degree} in {e.specialization} — {e.institution} ({e.startYear}–{e.endYear})
-                      {e.cgpa && ` · CGPA: ${e.cgpa}/${e.cgpaScale}`}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Experience */}
-              {parsedCV.experience.length > 0 && (
-                <div>
-                  <p className="font-medium text-dvivid-text-primary mb-1">Work Experience</p>
-                  {parsedCV.experience.map((e, i) => (
-                    <div key={i} className="text-dvivid-text-secondary mb-1">
-                      {e.role} at {e.organization} ({e.startDate}–{e.endDate || "present"})
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Projects */}
-              {parsedCV.projects.length > 0 && (
-                <div>
-                  <p className="font-medium text-dvivid-text-primary mb-1">Projects</p>
-                  {parsedCV.projects.map((p, i) => (
-                    <div key={i} className="text-dvivid-text-secondary mb-1">
-                      {p.name}{p.technologies && ` — ${p.technologies}`}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Skills */}
-              {totalSkills > 0 && (
-                <div>
-                  <p className="font-medium text-dvivid-text-primary mb-1">Skills</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[...parsedCV.skills.technical, ...parsedCV.skills.programming, ...parsedCV.skills.tools, ...(parsedCV.skills.software || []), ...parsedCV.skills.domain, ...parsedCV.skills.soft].map((s, i) => (
-                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-dvivid-text-secondary">{s}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Certifications + Achievements */}
-              {certCount > 0 && (
-                <div>
-                  <p className="font-medium text-dvivid-text-primary mb-1">Certifications</p>
-                  {parsedCV.certifications!.map((c, i) => (
-                    <div key={i} className="text-dvivid-text-secondary mb-0.5">{c}</div>
-                  ))}
-                </div>
-              )}
-              {achievementCount > 0 && (
-                <div>
-                  <p className="font-medium text-dvivid-text-primary mb-1">Achievements & Awards</p>
-                  {parsedCV.achievements!.map((a, i) => (
-                    <div key={i} className="text-dvivid-text-secondary mb-0.5">{a}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </details>
-
-          {/* Replace confirm — explicit second step, never the default */}
+          {/* Replace confirm */}
           {confirmReplace && !identityConflict && (
             <div className="p-4 bg-amber-50 border border-amber-300 rounded-input space-y-2">
               <p className="text-sm font-semibold text-amber-900">
@@ -515,7 +528,7 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
               </p>
               <div className="flex gap-3 pt-1">
                 <button
-                  onClick={() => handleApply(false, true)}
+                  onClick={() => handleApply(true)}
                   disabled={applying}
                   className="px-4 py-2 text-sm font-medium rounded-input bg-amber-600 text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
                 >
@@ -526,28 +539,49 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
             </div>
           )}
 
-          {/* Actions — EXTRACTION_ONLY has no structured data to apply;
-              consultant reviews the text above and fills the profile
-              manually. Apply stays available for PARTIAL_PARSE only after
-              explicit review. */}
+          {/* Preview before apply */}
+          {showPreview && !identityConflict && (
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-input space-y-3">
+              <p className="text-sm font-semibold text-blue-900">
+                Preview changes before applying
+              </p>
+              <div className="text-sm space-y-1">
+                <p className="text-blue-800"><strong>Will be added or updated:</strong></p>
+                <ul className="list-disc list-inside text-blue-700 text-xs">
+                  {parsedCV.personalData.firstName && <li>Personal information (name, email, etc.)</li>}
+                  {parsedCV.education.length > 0 && <li>{parsedCV.education.length} education record(s)</li>}
+                  {parsedCV.experience.length > 0 && <li>{parsedCV.experience.length} experience record(s)</li>}
+                  {parsedCV.projects.length > 0 && <li>{parsedCV.projects.length} project(s)</li>}
+                  {totalSkills > 0 && <li>{totalSkills} skill(s)</li>}
+                </ul>
+                {hasCvDerivedData && (
+                  <>
+                    <p className="text-amber-800 mt-2"><strong>Will be replaced:</strong></p>
+                    <p className="text-xs text-amber-700">Previous CV-imported education, experience, projects and skills will be removed.</p>
+                  </>
+                )}
+                <p className="text-green-800 mt-2"><strong>Will be preserved:</strong></p>
+                <p className="text-xs text-green-700">Manually entered data and data from other sources.</p>
+              </div>
+              <div className="flex gap-3 pt-1">
+                <PrimaryButton onClick={() => { setShowPreview(false); handleApply(false); }} disabled={applying}>
+                  {applying ? "Applying..." : "Confirm and Apply"}
+                </PrimaryButton>
+                <SecondaryButton onClick={() => setShowPreview(false)}>Cancel</SecondaryButton>
+              </div>
+            </div>
+          )}
+
+          {/* Actions */}
           <div className="flex gap-3 flex-wrap">
             {parseState === "EXTRACTION_ONLY" ? (
               <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
             ) : identityConflict ? (
+              <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
+            ) : !confirmReplace && !showPreview ? (
               <>
-                <SecondaryButton onClick={handleReset}>Upload Different CV</SecondaryButton>
-                <button
-                  onClick={() => handleApply(true, confirmReplace)}
-                  disabled={applying}
-                  className="px-4 py-2 text-sm font-medium rounded-input border border-dvivid-error text-dvivid-error hover:bg-dvivid-error hover:text-white transition-colors disabled:opacity-50"
-                >
-                  {applying ? "Applying..." : "Apply Anyway (I verified the identity)"}
-                </button>
-              </>
-            ) : !confirmReplace ? (
-              <>
-                <PrimaryButton onClick={() => handleApply(false)} disabled={applying}>
-                  {applying ? "Applying..." : "Apply to Profile"}
+                <PrimaryButton onClick={() => setShowPreview(true)} disabled={applying}>
+                  Review and Apply
                 </PrimaryButton>
                 {hasCvDerivedData && (
                   <SecondaryButton onClick={() => setConfirmReplace(true)}>
@@ -561,8 +595,8 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
         </div>
       )}
 
-      {/* Applied confirmation */}
-      {applied && (
+      {/* ============ STAGE 3: COMPLETE ============ */}
+      {stage === "complete" && (
         <div className="mt-4 space-y-4">
           <div className="flex items-center gap-2 p-3 bg-dvivid-success-light border border-dvivid-success/20 rounded-input">
             <svg className="w-5 h-5 text-dvivid-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -575,6 +609,67 @@ export function CVUpload({ studentId, profileRevision, onApplied, studentIdentit
           <SecondaryButton onClick={handleReset}>Upload Another CV</SecondaryButton>
         </div>
       )}
+    </div>
+  );
+}
+
+function StageStepper({ stage }: { stage: Stage }) {
+  const steps = [
+    { id: "upload", label: "Upload Resume" },
+    { id: "review", label: "Review Extracted Details" },
+    { id: "complete", label: "Complete Application" },
+  ];
+  const activeIndex = steps.findIndex(s => s.id === stage);
+
+  return (
+    <div className="flex items-center gap-2 mb-4">
+      {steps.map((s, i) => (
+        <>
+          <div key={s.id} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+            i <= activeIndex
+              ? "bg-dvivid-primary-light text-dvivid-primary"
+              : "bg-gray-100 text-dvivid-text-muted"
+          }`}>
+            <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${
+              i <= activeIndex ? "bg-dvivid-primary text-white" : "bg-gray-200 text-dvivid-text-muted"
+            }`}>
+              {i < activeIndex ? "✓" : i + 1}
+            </span>
+            {s.label}
+          </div>
+          {i < steps.length - 1 && (
+            <div className={`w-4 h-px ${i < activeIndex ? "bg-dvivid-primary" : "bg-gray-200"}`} />
+          )}
+        </>
+      ))}
+    </div>
+  );
+}
+
+function ReviewCard({ title, status, children }: { title: string; status: "confirmed" | "needs-review"; children: React.ReactNode }) {
+  return (
+    <div className="border border-dvivid-border rounded-card p-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm font-semibold text-dvivid-text-primary">{title}</p>
+        {status === "confirmed" ? (
+          <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">Confirmed</span>
+        ) : (
+          <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Needs review</span>
+        )}
+      </div>
+      <div className="space-y-0">{children}</div>
+    </div>
+  );
+}
+
+function FieldRow({ label, value }: { label: string; value?: string }) {
+  const status = !value || value.trim().length === 0 ? "missing" : "confirmed";
+  return (
+    <div className="flex justify-between text-sm py-0.5">
+      <span className="text-dvivid-text-muted">{label}</span>
+      <span className={`${status === "missing" ? "text-amber-600 italic" : "text-dvivid-text-secondary"}`}>
+        {status === "missing" ? "Not found" : value}
+      </span>
     </div>
   );
 }
