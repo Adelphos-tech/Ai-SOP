@@ -159,6 +159,8 @@ export interface ParsedCV {
 export interface ParsedFieldMeta {
   confidence?: "HIGH" | "MEDIUM" | "LOW";
   source?: { text: string; page?: number | null };
+  /** Raw source text snippet that produced this record — shown in review UI. */
+  sourceEvidence?: string;
 }
 
 export interface ParsedEducation extends ParsedFieldMeta {
@@ -484,7 +486,10 @@ function isHeadingLike(block: TextBlock): boolean {
   // These are often all-caps or title-case with a date at the end
   if (text.match(/^[A-Z][A-Za-z0-9\s&.]+?\s+[-–]\s*(?:20|19)\d{2}$/)) return false;
   if (text.match(/^[A-Z][A-Za-z0-9\s&.]+?\s+(?:certif|certification|credential|license|accreditation|certified)\b/i)) return false;
-  
+
+  // Skip score/grade key-value lines (e.g., "CGPA: 7.8", "Percentage: 85%") — these are content, not headings
+  if (text.match(/^[A-Za-z][A-Za-z\s]*[:=]\s*\d/)) return false;
+
   // Positive signals
   let score = 0;
 
@@ -728,69 +733,135 @@ export function generateId(): string {
 }
 
 // --- Education parser (receives ONLY education section blocks) ---
+/** Reject education records that are clearly not real qualifications. */
+function isPlausibleEducationRecord(e: Partial<ParsedEducation>): boolean {
+  // Must have at least 2 meaningful fields among degree, institution, year, cgpa
+  const meaningfulFields = [
+    e.degree && e.degree.length > 1,
+    e.institution && e.institution.length > 2 && !/^\d{4}$/.test(e.institution) && !/^(mumbai|delhi|bangalore|hyderabad|pune|chennai|kolkata|ahmedabad|jaipur|lucknow|kanpur|nagpur|indore|thane|bhopal|visakhapatnam|patna|vadodara|ghaziabad|ludhiana|agra|nashik|ranchi|coimbatore|chandigarh|mysore|guwahati)/i.test(e.institution),
+    e.startYear && /^\d{4}$/.test(e.startYear),
+    e.cgpa && e.cgpa.length > 0,
+  ].filter(Boolean).length;
+
+  if (meaningfulFields < 2) return false;
+
+  // Reject institutions that are just dates or location fragments
+  if (e.institution && (/^\d{4}[-–]\d{4}$/.test(e.institution) || /^\d{4}$/.test(e.institution))) return false;
+
+  // Reject if degree is just a generic keyword without context
+  if (e.degree && /^(secondary|school|board|education)$/i.test(e.degree)) return false;
+
+  return true;
+}
+
+function normalizeDegree(deg: string): string {
+  return deg.trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, "");
+}
+
+function deduplicateEducation(edu: ParsedEducation[]): ParsedEducation[] {
+  const seen = new Set<string>();
+  return edu.filter(e => {
+    const key = `${normalizeDegree(e.degree)}|${e.institution.toLowerCase().trim()}|${e.startYear}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function parseEducationSection(section: Section): ParsedEducation[] {
   const education: ParsedEducation[] = [];
   const blocks = section.blocks;
   const text = blocks.map(b => b.text).join("\n");
-  
-  // Split on newlines AND common multi-entry delimiters like | 
-  // Many resumes pack multiple education entries on one line separated by |
-  const rawLines = text.split(/\n|\|/).map(l => l.trim()).filter(l => l.length > 0);
-  
-  // Further split lines that contain multiple entries concatenated without delimiter
-  // e.g., "Degree - Institution | 2020 Degree - Institution | 2018"
+
+  // Split on newlines only — | is a table separator, not an entry delimiter
+  const rawLines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+
+  // Further split lines that contain multiple degree entries on ONE LINE
+  // e.g., "B.Tech in CSE, IITB, 2020 M.Tech in DS, IITB, 2022"
   const lines: string[] = [];
   for (const line of rawLines) {
-    // Split on patterns like "Degree - Institution | Year Degree - Institution"
-    // Look for degree keywords followed by another degree keyword pattern
-    const segments = line.split(/(?=(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC|Executive MBA|M\.Sc\.|M\.Tech|B\.Sc\.|B\.E\.)\s)/i).filter(s => s.trim().length > 0);
-    for (const seg of segments) {
-      lines.push(seg.trim());
+    // Only split when we see a degree keyword preceded by a year or comma
+    // This avoids splitting single legitimate entries
+    const segments = line.split(
+      /(?<=[,;]|\d{4})\s+(?=(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC|Executive MBA|M\.Sc\.|M\.Tech|B\.Sc\.|B\.E\.)\s)/i
+    ).filter(s => s.trim().length > 0);
+    if (segments.length > 1) {
+      for (const seg of segments) lines.push(seg.trim());
+    } else {
+      lines.push(line);
     }
   }
 
-  // Degree keywords - word-bounded
-  const degreeKeywords = /(?<![A-Za-z0-9])(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC)(?![A-Za-z0-9])/i;
+  // Degree keywords — stricter: require word boundaries and exclude standalone "school" in skills sections
+  const degreeKeywords = /(?<![A-Za-z0-9])(?:B\.?Tech\.?|B\.?E\.?|Bachelor(?:\s+of)?|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master(?:\s+of)?|Ph\.?D\.?|Doctorate|Diploma|12th|10th|Senior Secondary|Secondary|SSLC|SSC)(?![A-Za-z0-9])/i;
 
-  // Institution keywords - word-bounded
-  const institutionKeywords = /(?<![A-Za-z0-9])(?:University|Institute|College|School|IIT|NIT|IIIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge|Polytechnic|Board)(?![A-Za-z0-9])/i;
+  // Institution keywords — exclude generic "School" and "Board" alone; require a proper noun
+  const institutionKeywords = /(?<![A-Za-z0-9])(?:University|Institute|College|IIT|NIT|IIIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge|Polytechnic)(?![A-Za-z0-9])/i;
+  // "School" only counts if part of a named school (e.g. "Delhi Public School" or "High School")
+  const schoolPattern = /\b[A-Za-z]+\s+School\b|\bSchool\s+[A-Z]/i;
 
-  let currentEdu: Partial<ParsedEducation> | null = null;
+  let currentEdu: Partial<ParsedEducation> & { _sourceLines?: string[] } | null = null;
+
+  function flushEdu() {
+    if (!currentEdu) return;
+    // Push any entry that has at least one meaningful field so adjacent
+    // fragments can be merged (e.g. institution-only + degree-only lines).
+    if (currentEdu.degree || currentEdu.institution || currentEdu.startYear || currentEdu.cgpa) {
+      education.push({
+        id: generateId(),
+        institution: currentEdu.institution || "",
+        degree: currentEdu.degree || "",
+        specialization: currentEdu.specialization || "",
+        startYear: currentEdu.startYear || "",
+        endYear: currentEdu.endYear || "",
+        cgpa: currentEdu.cgpa || "",
+        cgpaScale: currentEdu.cgpaScale || "10",
+        sourceEvidence: currentEdu._sourceLines?.join(" | ") || "",
+      } as ParsedEducation);
+    }
+    currentEdu = null;
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
 
     const hasDegree = !/\bboard\b/i.test(line) && degreeKeywords.test(line);
-    const hasInstitution = institutionKeywords.test(line);
+    const boardPattern = /\b(?:CBSE|ICSE|State\s+Board|Education\s+Board)\b/i;
+    const hasInstitution = institutionKeywords.test(line) || schoolPattern.test(line) || boardPattern.test(line);
 
     if (hasDegree || hasInstitution) {
-      if (currentEdu && (currentEdu.institution || currentEdu.degree)) {
-        education.push({
-          id: generateId(),
-          institution: currentEdu.institution || "",
-          degree: currentEdu.degree || "",
-          specialization: currentEdu.specialization || "",
-          startYear: currentEdu.startYear || "",
-          endYear: currentEdu.endYear || "",
-          cgpa: currentEdu.cgpa || "",
-          cgpaScale: currentEdu.cgpaScale || "10",
-        });
-      }
-      currentEdu = {};
+      flushEdu();
+      currentEdu = { _sourceLines: [line] };
 
       const degreeInInstMatch = line.match(/^([A-Z][A-Za-z.]+(?:\s+[A-Z][A-Za-z.]+)?)\s+(?:in|of)\s+([A-Za-z\s&+]+),\s*(.+)$/);
       if (degreeInInstMatch) {
-        currentEdu.degree = degreeInInstMatch[1].trim();
-        currentEdu.specialization = degreeInInstMatch[2].trim();
-        currentEdu.institution = degreeInInstMatch[3].trim();
+        if (hasDegree) currentEdu.degree = degreeInInstMatch[1].trim();
+        if (hasDegree) {
+          const specMatch = degreeInInstMatch[2].match(/(?:in|of)\s+(.+)/i);
+          if (specMatch) currentEdu.specialization = specMatch[1].trim();
+        }
+        // Group 3 may contain "Institution, Year" — split by comma to isolate institution
+        const instCandidates = degreeInInstMatch[3].split(",").map(p => p.trim());
+        const instPart = instCandidates.find(p =>
+          /\b(?:University|Institute|College|School|IIT|NIT|IIIT|BITS|VIT|MIT|Polytechnic)\b/i.test(p) ||
+          /\b(?:CBSE|ICSE|State Board)\b/i.test(p)
+        );
+        if (hasInstitution) currentEdu.institution = instPart || instCandidates[0];
       } else {
         const parts = line.split(",").map(p => p.trim());
         if (parts.length >= 2) {
-          currentEdu.degree = parts[0].split(/\s+(?:in|of)\s+/)[0].trim();
-          const specMatch = parts[0].match(/(?:in|of)\s+(.+)/i);
-          if (specMatch) currentEdu.specialization = specMatch[1].trim();
-          currentEdu.institution = parts[parts.length - 1];
+          if (hasDegree) {
+            currentEdu.degree = parts[0].split(/\s+(?:in|of)\s+/)[0].trim();
+            const specMatch = parts[0].match(/(?:in|of)\s+(.+)/i);
+            if (specMatch) currentEdu.specialization = specMatch[1].trim();
+          }
+          // Find the part that contains an institution keyword, not just the last part
+          const instPart = parts.find(p =>
+            /\b(?:University|Institute|College|School|IIT|NIT|IIIT|BITS|VIT|MIT|Polytechnic)\b/i.test(p) ||
+            /\b(?:CBSE|ICSE|State Board)\b/i.test(p)
+          );
+          if (hasInstitution) currentEdu.institution = instPart || parts[1]; // fallback to second part
         } else {
           if (hasDegree) currentEdu.degree = line.match(degreeKeywords)?.[0] || line;
           if (hasInstitution) currentEdu.institution = line;
@@ -799,6 +870,9 @@ function parseEducationSection(section: Section): ParsedEducation[] {
     }
 
     if (currentEdu) {
+      if (!currentEdu._sourceLines?.includes(line)) {
+        currentEdu._sourceLines = [...(currentEdu._sourceLines || []), line];
+      }
       const yearMatch = (line + " " + nextLine).match(/((?:20|19)\d{2})\s*(?:-|–|to)\s*((?:20|19)\d{2}|present|current|ongoing)/i);
       if (yearMatch && !currentEdu.startYear) {
         currentEdu.startYear = yearMatch[1];
@@ -813,20 +887,9 @@ function parseEducationSection(section: Section): ParsedEducation[] {
     }
   }
 
-  if (currentEdu && (currentEdu.institution || currentEdu.degree)) {
-    education.push({
-      id: generateId(),
-      institution: currentEdu.institution || "",
-      degree: currentEdu.degree || "",
-      specialization: currentEdu.specialization || "",
-      startYear: currentEdu.startYear || "",
-      endYear: currentEdu.endYear || "",
-      cgpa: currentEdu.cgpa || "",
-      cgpaScale: currentEdu.cgpaScale || "10",
-    });
-  }
+  flushEdu();
 
-  // Merge adjacent fragmented records
+  // Merge adjacent fragmented records (institution-only + degree-only lines)
   const merged: ParsedEducation[] = [];
   for (let i = 0; i < education.length; i++) {
     const current = education[i];
@@ -838,13 +901,14 @@ function parseEducationSection(section: Section): ParsedEducation[] {
     ) {
       merged.push({
         id: current.id,
-        institution: current.institution || next.institution,
+        institution: next.institution || current.institution,
         degree: current.degree || next.degree,
         specialization: current.specialization || next.specialization || "",
         startYear: current.startYear || next.startYear || "",
         endYear: current.endYear || next.endYear || "",
         cgpa: current.cgpa || next.cgpa || "",
         cgpaScale: current.cgpaScale || next.cgpaScale || "10",
+        sourceEvidence: (current.sourceEvidence || "") + " | " + (next.sourceEvidence || ""),
       });
       i++;
     } else {
@@ -852,28 +916,32 @@ function parseEducationSection(section: Section): ParsedEducation[] {
     }
   }
 
-  return merged.filter(e => !(e.degree === "" && /\bboard\b/i.test(e.institution)));
+  // Filter out board-only entries and apply plausibility check
+  const plausible = merged.filter(e => {
+    if (!e.degree && e.institution && /\bboard\b/i.test(e.institution)) return false;
+    return isPlausibleEducationRecord(e);
+  });
+
+  return deduplicateEducation(plausible);
 }
 
 // --- Education table parser (for table-aware structured data) ---
 export function parseEducationTableSection(section: Section): ParsedEducation[] {
   const education: ParsedEducation[] = [];
-  
-// Group blocks by tableId
-const tables: Map<string, TextBlock[]> = new Map();
-  
-   for (const block of section.blocks) {
-     const tableId = block.metadata?.tableId;
-     if (tableId != null && typeof tableId === 'string') {
-       if (!tables.has(tableId)) {
-         tables.set(tableId, []);
-       }
-       tables.get(tableId)!.push(block);
-     }
-   }
-  
+
+  // Group blocks by tableId
+  const tables: Map<string, TextBlock[]> = new Map();
+
+  for (const block of section.blocks) {
+    const tableId = block.metadata?.tableId;
+    if (tableId != null && typeof tableId === 'string') {
+      if (!tables.has(tableId)) tables.set(tableId, []);
+      tables.get(tableId)!.push(block);
+    }
+  }
+
   // Process each table
-  for (const [tableId, tableBlocks] of tables) {
+  for (const [, tableBlocks] of tables) {
     // Sort by rowIndex, then columnIndex
     const sortedBlocks = [...tableBlocks].sort((a, b) => {
       const rowA = a.row ?? 0;
@@ -883,55 +951,119 @@ const tables: Map<string, TextBlock[]> = new Map();
       const colB = b.column ?? 0;
       return colA - colB;
     });
-    
-     // Group by rowIndex
-     const rows: Map<number, TextBlock[]> = new Map();
+
+    // Group by rowIndex
+    const rows: Map<number, TextBlock[]> = new Map();
     for (const block of sortedBlocks) {
       const rowIndex = block.row ?? 0;
-      if (!rows.has(rowIndex)) {
-        rows.set(rowIndex, []);
-      }
+      if (!rows.has(rowIndex)) rows.set(rowIndex, []);
       rows.get(rowIndex)!.push(block);
     }
-    
-    // Process each row
+
     const sortedRowKeys = [...rows.keys()].sort((a, b) => a - b);
-    for (const rowIndex of sortedRowKeys) {
-      const rowBlocks = rows.get(rowIndex)!;
-      
-      // Skip header rows
-      const isHeaderRow = rowBlocks.some(b => b.metadata?.isHeader === true);
-      if (isHeaderRow) continue;
-      
-      // Extract cells in order
-      const cells: { [columnIndex: number]: string } = {};
-      for (const block of rowBlocks) {
+    if (sortedRowKeys.length === 0) continue;
+
+    // Detect header row and map columns by header name
+    let colMap: { degree?: number; institution?: number; year?: number; result?: number } = {};
+    const headerRowIndex = sortedRowKeys[0];
+    const headerBlocks = rows.get(headerRowIndex) || [];
+    const isHeaderRow = headerBlocks.some(b => b.metadata?.isHeader === true);
+
+    if (isHeaderRow) {
+      for (const block of headerBlocks) {
         const colIndex = block.column ?? 0;
-        cells[colIndex] = block.text;
-      }
-      
-      // Expect: Qualification, Institution, Year, Result
-      if (cells[0] !== undefined && cells[1] !== undefined && cells[2] !== undefined && cells[3] !== undefined) {
-        const qualification = cells[0] || "";
-        const institution = cells[1] || "";
-        const year = cells[2] || "";
-        const result = cells[3] || "";
-        
-        education.push({
-          id: generateId(),
-          institution: institution,
-          degree: qualification,
-          specialization: "",
-          startYear: "",
-          endYear: "",
-          cgpa: "",
-          cgpaScale: "",
-        });
+        const lower = block.text.toLowerCase();
+        if (/qualification|degree|course|program|programme/.test(lower)) colMap.degree = colIndex;
+        else if (/institution|university|college|school|board/.test(lower)) colMap.institution = colIndex;
+        else if (/year|duration|period|passing/.test(lower)) colMap.year = colIndex;
+        else if (/result|cgpa|percentage|grade|marks|score|gpa/.test(lower)) colMap.result = colIndex;
       }
     }
+
+    // If no header detected, try to infer from first data row
+    if (Object.keys(colMap).length === 0 && sortedRowKeys.length > 1) {
+      const firstDataBlocks = rows.get(sortedRowKeys[1]) || [];
+      for (const block of firstDataBlocks) {
+        const colIndex = block.column ?? 0;
+        const text = block.text;
+        // Infer by content patterns
+        if (/\d{4}/.test(text) && text.length < 15) colMap.year = colIndex;
+        else if (/\d+\.?\d*/.test(text) && text.length < 10) colMap.result = colIndex;
+        else if (/\b(?:University|College|School|Institute|IIT|NIT|BITS|VIT)\b/i.test(text)) colMap.institution = colIndex;
+        else if (/\b(?:B\.?Tech|M\.?Tech|B\.?E\.|M\.?S\.|B\.?Sc\.|MBA|Ph\.?D|12th|10th)\b/i.test(text)) colMap.degree = colIndex;
+      }
+    }
+
+    // Fallback: assume first N columns map to degree, institution, year, result
+    const dataStartIndex = isHeaderRow ? 1 : 0;
+    for (let i = dataStartIndex; i < sortedRowKeys.length; i++) {
+      const rowBlocks = rows.get(sortedRowKeys[i]) || [];
+      const cells: { [col: number]: string } = {};
+      for (const block of rowBlocks) cells[block.column ?? 0] = block.text;
+
+      const colIndices = Object.keys(cells).map(Number).sort((a, b) => a - b);
+      if (colIndices.length === 0) continue;
+
+      let degree = "";
+      let institution = "";
+      let year = "";
+      let result = "";
+
+      if (Object.keys(colMap).length > 0) {
+        degree = colMap.degree !== undefined ? cells[colMap.degree] || "" : "";
+        institution = colMap.institution !== undefined ? cells[colMap.institution] || "" : "";
+        year = colMap.year !== undefined ? cells[colMap.year] || "" : "";
+        result = colMap.result !== undefined ? cells[colMap.result] || "" : "";
+      } else {
+        // Positional fallback
+        degree = cells[colIndices[0]] || "";
+        institution = cells[colIndices[1]] || "";
+        year = cells[colIndices[2]] || "";
+        result = cells[colIndices[3]] || "";
+      }
+
+      if (!degree && !institution) continue; // Skip empty rows
+
+      // Parse year into startYear/endYear if it's a range
+      let startYear = "";
+      let endYear = "";
+      let cgpa = "";
+      let cgpaScale = "";
+      if (year) {
+        const yearRangeMatch = year.match(/(\d{4})\s*[-–]\s*(\d{4})/);
+        if (yearRangeMatch) {
+          startYear = yearRangeMatch[1];
+          endYear = yearRangeMatch[2];
+        } else if (/\d{4}/.test(year)) {
+          startYear = year.match(/\d{4}/)?.[0] || "";
+        }
+      }
+      if (result) {
+        const cgpaMatch = result.match(/(\d+\.?\d*)\s*(?:\/|out of)\s*(\d+\.?\d*)/);
+        if (cgpaMatch) {
+          cgpa = cgpaMatch[1];
+          cgpaScale = cgpaMatch[2];
+        } else if (/\d+\.?\d*/.test(result)) {
+          cgpa = result.match(/\d+\.?\d*/)?.[0] || "";
+        }
+      }
+
+      const source = rowBlocks.map(b => b.text).join(" | ");
+      education.push({
+        id: generateId(),
+        institution,
+        degree,
+        specialization: "",
+        startYear,
+        endYear,
+        cgpa,
+        cgpaScale,
+        sourceEvidence: source,
+      });
+    }
   }
-  
-  return education;
+
+  return deduplicateEducation(education);
 }
 
 // --- Experience table parser (for table-aware structured data) ---
@@ -1189,6 +1321,35 @@ function normalizeExperienceDates(
   return { startDate, endDate };
 }
 
+/** Reject experience records where organization or role is clearly prose. */
+function isPlausibleExperienceRecord(e: Partial<ParsedExperience>): boolean {
+  // Must have both role and organization, OR role + date, OR organization + date
+  const hasRole = e.role && e.role.length > 2 && !/^(description|built|developed|created|designed|implemented|managed|led|worked|assisted|helped|responsible)/i.test(e.role);
+  const hasOrg = e.organization && e.organization.length > 2 && !/^(description|built|developed|created|designed|implemented|managed|led|worked|assisted|helped|responsible)/i.test(e.organization);
+  const hasDate = e.startDate && e.startDate.length > 0;
+
+  if (!hasRole && !hasOrg) return false;
+  if (hasOrg && /^(description|built|developed|created|designed|implemented|managed|led|worked):/i.test(e.organization!)) return false;
+
+  // Organization should not be a full sentence
+  if (hasOrg && e.organization!.split(/[.!?]/).length > 1) return false;
+
+  // Role should not contain "Description:" or similar prose markers
+  if (hasRole && /\b(description|details|summary|overview):/i.test(e.role!)) return false;
+
+  return true;
+}
+
+/** Returns true if a line looks like a description/prose line, not a header. */
+function isDescriptionLine(line: string): boolean {
+  const lower = line.toLowerCase();
+  if (/^(description|built|developed|created|designed|implemented|managed|led|worked|assisted|helped|responsible for):/i.test(line)) return true;
+  if (lower.startsWith("description ") || lower.startsWith("details ")) return true;
+  // Lines with sentences are descriptions (single or multiple)
+  if (/[.!?]/.test(line) && line.split(/[.!?]/).filter(s => s.trim().length > 10).length >= 1) return true;
+  return false;
+}
+
 // ============================================================
 // EXPERIENCE PARSER (receives ONLY experience section blocks)
 // ============================================================
@@ -1198,21 +1359,51 @@ function parseExperienceSection(section: Section): ParsedExperience[] {
   const text = blocks.map(b => b.text).join("\n");
   const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
-  let currentExp: Partial<ParsedExperience> | null = null;
+  let currentExp: Partial<ParsedExperience> & { _sourceLines?: string[] } | null = null;
 
 // Date regex that captures: [month] year - [month] year/present
-// Handles: 
+// Handles:
 //   "2022 - Present", "Jan 2024 - Present", "2022 - 2024", "Jan 2022 - Mar 2024"
 //   "05/2020 - 08/2020", "05/2020 - Present"
 // Supported separators: - – to
 const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?((?:20|19)\d{2})|(?:\d{2})\/((?:20|19)\d{2}))\s*(?:-|–|to)\s*(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?((?:20|19)\d{2})|(?:\d{2})\/((?:20|19)\d{2})|present|current|ongoing)/i;
 
+  function flushExp() {
+    if (!currentExp) return;
+    if (isPlausibleExperienceRecord(currentExp)) {
+      experience.push({
+        id: generateId(),
+        type: currentExp.type || "Full-time Job",
+        organization: currentExp.organization || "",
+        role: currentExp.role || "",
+        location: currentExp.location || "",
+        startDate: currentExp.startDate || "",
+        endDate: currentExp.endDate || "",
+        currentlyWorking: currentExp.currentlyWorking || false,
+        responsibilities: currentExp.responsibilities || "",
+        sourceEvidence: currentExp._sourceLines?.join(" | ") || "",
+      } as ParsedExperience);
+    }
+    currentExp = null;
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (isDescriptionLine(line)) {
+      // This is a description line — accumulate to current entry's responsibilities, don't treat as header
+      if (currentExp) {
+        const desc = line.replace(/^[•\-*]\s*/, "");
+        currentExp.responsibilities = currentExp.responsibilities ? currentExp.responsibilities + " " + desc : desc;
+        currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
+      }
+      continue;
+    }
+
     const dateMatch = line.match(dateRegex);
     const titleMatch = line.match(/(?:intern|engineer|developer|analyst|consultant|manager|designer|researcher|assistant|associate|lead|architect|specialist|officer|trainee|director|vp|vice president|head|chief)/i);
-    const companyMatch = line.match(/(?:at|@|\|\s*)\s*([A-Z][A-Za-z0-9\s&.,]+)/);
-    const roleCompanyMatch = line.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+    const companyMatch = line.match(/(?:at|@)\s+([A-Z][A-Za-z0-9\s&.,]+)/);
+    // Role-company match: exclude lines starting with description keywords and lines with colons
+    const roleCompanyMatch = !/^[^:]{0,30}:/i.test(line) && line.match(/^([^-–—:]+?)\s*[-–—]\s*([^-–—:]+)$/);
 
     // Check if this line is a date-only line (has date but no clear role/org header)
     const isDateOnlyLine = dateMatch && !titleMatch && !companyMatch && !roleCompanyMatch;
@@ -1222,28 +1413,15 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
       // If we have a pending entry with role/org but no dates, and this line has dates,
       // merge the dates into the existing entry instead of creating a new one.
       const shouldMerge = currentExp && (currentExp.role || currentExp.organization) && !currentExp.startDate;
-      
+
       if (!shouldMerge) {
-        // No merge - save previous entry if exists
-        if (currentExp && currentExp.organization) {
-          experience.push({
-            id: generateId(),
-            type: currentExp.type || "Full-time Job",
-            organization: currentExp.organization || "",
-            role: currentExp.role || "",
-            location: currentExp.location || "",
-            startDate: currentExp.startDate || "",
-            endDate: currentExp.endDate || "",
-            currentlyWorking: currentExp.currentlyWorking || false,
-            responsibilities: currentExp.responsibilities || "",
-          });
-        }
+        flushExp();
       }
 
       if (shouldMerge && currentExp) {
         // This date line belongs to the pending entry
         const headerText = line.replace(dateRegex, "").replace(/[\s\-–—|,;:]+$/, "").trim();
-        
+
         // Extract location from header if present (after | or similar)
         let extractedLocation = "";
         if (headerText) {
@@ -1252,22 +1430,23 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
             extractedLocation = locMatch[1].trim();
           }
         }
-        
+
         // Normalize date tokens to canonical format (YYYY-MM or YYYY)
         const { startDate, endDate } = normalizeExperienceDates(
           dateMatch[0], dateMatch[1], dateMatch[2], dateMatch[3], dateMatch[4], dateMatch[5]
         );
-        
+
         currentExp.startDate = startDate;
         currentExp.endDate = endDate;
         currentExp.currentlyWorking = /present|current|ongoing/i.test(endDate || "");
         if (extractedLocation) currentExp.location = extractedLocation;
+        currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
       } else {
         // No pending role/org entry - create new entry from this date line
         // BEFORE creating new entry: extract role/org from the non-date portion of THIS line
         // Remove the date range from the line to isolate the header
         const headerText = line.replace(dateRegex, "").replace(/[\s\-–—|,;:]+$/, "").trim();
-        
+
         // Extract role and organization from header
         let extractedRole = "";
         let extractedOrg = "";
@@ -1275,17 +1454,17 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
 
         if (headerText) {
           // Check for "at Company" or "Company |" pattern in header
-          const headerCompanyMatch = headerText.match(/(?:at|@|\|\s*)\s*([A-Z][A-Za-z0-9\s&.,]+)/);
+          const headerCompanyMatch = headerText.match(/(?:at|@)\s+([A-Z][A-Za-z0-9\s&.,]+)/);
           if (headerCompanyMatch) {
             extractedOrg = headerCompanyMatch[1].trim();
             // Role is everything before the company marker
-            const beforeCompany = headerText.split(/(?:at|@|\|\s*)/)[0].trim();
+            const beforeCompany = headerText.split(/\s+at\s+|\s*@\s*/)[0].trim();
             if (beforeCompany && !beforeCompany.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{4}/i)) {
               extractedRole = beforeCompany;
             }
           } else {
-            // Check for "Role - Company" pattern
-            const hRoleCompanyMatch = headerText.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+            // Check for "Role - Company" pattern — EXCLUDE lines with colons (description lines)
+            const hRoleCompanyMatch = !/^[^:]{0,30}:/i.test(headerText) && headerText.match(/^([^-–—:]+?)\s*[-–—]\s*([^-–—:]+)$/);
             if (hRoleCompanyMatch && !headerText.startsWith("•") && !headerText.startsWith("-") && !headerText.startsWith("*")) {
               extractedRole = hRoleCompanyMatch[1].trim();
               extractedOrg = hRoleCompanyMatch[2].trim();
@@ -1294,7 +1473,7 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
               extractedRole = headerText;
             }
           }
-          
+
           // Extract location if present after |
           const locMatch = headerText.match(/\|\s*([^|]+)$/);
           if (locMatch) {
@@ -1306,7 +1485,7 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
         const { startDate, endDate } = normalizeExperienceDates(
           dateMatch[0], dateMatch[1], dateMatch[2], dateMatch[3], dateMatch[4], dateMatch[5]
         );
-        
+
         currentExp = {
           startDate: startDate,
           endDate: endDate,
@@ -1314,13 +1493,18 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
           role: extractedRole || undefined,
           organization: extractedOrg || undefined,
           location: extractedLocation || undefined,
+          _sourceLines: [line],
         };
       }
     } else if (titleMatch && !currentExp) {
       // Title line without date - start new entry (fallback)
-      currentExp = {};
-    } else if (titleMatch && currentExp && !currentExp.organization && !dateMatch && !line.startsWith("•") && !line.startsWith("-") && !line.startsWith("*")) {
-      // We have a pending entry with dates but no org, and this line has a title+org
+      currentExp = { _sourceLines: [line] };
+    } else if (titleMatch && currentExp && currentExp.role) {
+      // Current entry already has a role; this title line starts a new entry
+      flushExp();
+      currentExp = { _sourceLines: [line] };
+    } else if (titleMatch && currentExp && !currentExp.role && !currentExp.organization && !dateMatch && !line.startsWith("•") && !line.startsWith("-") && !line.startsWith("*")) {
+      // We have a pending entry with dates but no org/role, and this line has a title+org
       // This is the multiline header case: role/org line followed by date line
       // OR date line followed by role/org line - merge them
       if (currentExp.startDate && !currentExp.organization) {
@@ -1328,12 +1512,14 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
         if (companyMatch) {
           currentExp.organization = companyMatch[1].trim();
         }
-        if (roleCompanyMatch && !currentExp.role) {
-          currentExp.role = roleCompanyMatch[1].trim();
-          if (!currentExp.organization) currentExp.organization = roleCompanyMatch[2].trim();
+        const rcm = line.match(/^([^-–—:]+?)\s*[-–—]\s*([^-–—:]+)$/);
+        if (rcm && !currentExp.role) {
+          currentExp.role = rcm[1].trim();
+          if (!currentExp.organization) currentExp.organization = rcm[2].trim();
         } else if (!currentExp.role) {
           currentExp.role = line.split(/\s+at\s+|\s*@\s*|\s*\|\s*/)[0].trim();
         }
+        currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
       }
     }
 
@@ -1341,17 +1527,28 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
       // Extract role from title line (line without date that has title keywords)
       if (titleMatch && !currentExp.role && !dateMatch) {
         currentExp.role = line.split(/\s+at\s+|\s*@\s*|\s*\|\s*/)[0].trim();
+        currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
       }
       // Extract company from "at Company" or "Company |" pattern
       if (companyMatch && !currentExp.organization) {
         currentExp.organization = companyMatch[1].trim();
+        currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
       }
-      // Also check for "Role - Company" pattern in lines without date
-      if (!currentExp.organization && !dateMatch) {
-        const roleCompanyMatch = line.match(/^(.+?)\s*[-–—]\s*(.+)$/);
-        if (roleCompanyMatch && !line.startsWith("•") && !line.startsWith("-") && !line.startsWith("*")) {
-          if (!currentExp.role) currentExp.role = roleCompanyMatch[1].trim();
-          if (!currentExp.organization) currentExp.organization = roleCompanyMatch[2].trim();
+      // Also check for "Role - Company" pattern in lines without date — SKIP description lines
+      if (!currentExp.organization && !dateMatch && !/^[^:]{0,30}:/i.test(line)) {
+        const rcm = line.match(/^([^-–—:]+?)\s*[-–—]\s*([^-–—:]+)$/);
+        if (rcm && !line.startsWith("•") && !line.startsWith("-") && !line.startsWith("*")) {
+          if (!currentExp.role) currentExp.role = rcm[1].trim();
+          if (!currentExp.organization) currentExp.organization = rcm[2].trim();
+          currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
+        }
+      }
+      // Fallback: comma-separated "Organization, Location" when role exists but org is missing
+      if (!currentExp.organization && !dateMatch && line.includes(",") && currentExp.role) {
+        const firstPart = line.split(",")[0].trim();
+        if (firstPart.length > 2 && firstPart.length < 60 && !/^(description|built|developed|created|designed|implemented|managed|led|worked|assisted|helped|responsible)/i.test(firstPart)) {
+          currentExp.organization = firstPart;
+          currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
         }
       }
       if (/intern/i.test(line) && !currentExp.type) {
@@ -1365,23 +1562,12 @@ const dateRegex = /(?:(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z
         } else {
           currentExp.responsibilities = desc;
         }
+        currentExp._sourceLines = [...(currentExp._sourceLines || []), line];
       }
     }
   }
 
-  if (currentExp && currentExp.organization) {
-    experience.push({
-      id: generateId(),
-      type: currentExp.type || "Full-time Job",
-      organization: currentExp.organization || "",
-      role: currentExp.role || "",
-      location: currentExp.location || "",
-      startDate: currentExp.startDate || "",
-      endDate: currentExp.endDate || "",
-      currentlyWorking: currentExp.currentlyWorking || false,
-      responsibilities: currentExp.responsibilities || "",
-    });
-  }
+  flushExp();
 
   return experience;
 }
