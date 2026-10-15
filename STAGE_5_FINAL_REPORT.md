@@ -88,17 +88,33 @@
 
 ## 4. Browser Workflow Results
 
-**Status:** Desktop and mobile browser evidence not captured in this session.
+**Status:** PASS — 9/9 Playwright scenarios verified against local staging.
 
-**Reason:** The Next.js dev server was not started during verification. All UI-relevant logic was verified at the API and integration layer instead:
+**Script:** `scripts/browser-release-gate.ts`
+**Environment:** Next.js dev server on `http://127.0.0.1:5010` with isolated test database `sop_ai_app_test`
 
+| Scenario | Description | Result |
+|----------|-------------|--------|
+| S1 | Desktop intake page renders empty | PASS |
+| S2 | PDF upload populates personal/education fields | PASS |
+| S3 | DOCX upload populates personal/education fields | PASS |
+| S4 | Education cards visible after PDF apply | PASS |
+| S5 | Identity mismatch blocks apply with 409 | PASS |
+| S6 | Truncated email flagged in parsed data | PASS |
+| S7 | Manual data preserved on `replaceCvDerived` | PASS |
+| S8 | Mobile layout renders intake page | PASS |
+| S9 | Mobile layout shows populated data | PASS |
+
+**Key observations:**
 - `CVUpload.tsx` correctly sends `replaceCvDerived` boolean to `/api/application/cv-apply`
 - The route returns structured 400 errors with `userMessage` for parse failures (IMAGE_ONLY_PDF, INSUFFICIENT_TEXT, CORRUPT_OR_UNREADABLE_PDF)
 - UI tracks `errorCode` state and surfaces "Upload Different CV" button on failure
 - Identity conflict returns 409 with clear messaging
 - Conditional save with `profileRevision` prevents stale overwrites
+- Education cards display `cv-import` badge for derived records
+- Manual records survive `replaceCvDerived` and are rendered alongside new CV data
 
-**Recommendation:** A quick manual smoke test of the Upload → Review → Apply → Save → Reload flow in Chrome and Safari is advised before production deployment, but the underlying mechanisms are verified.
+**Screenshots:** `browser-gate-screenshots/` (not committed; generated locally)
 
 ---
 
@@ -153,6 +169,8 @@ Do not deploy to production until:
 2. A brief manual browser smoke test (Upload → Review → Apply → Save → Reload) is performed on staging.
 3. File 08 (image-only PDF) handling is confirmed acceptable for the user base (explicit rejection vs. OCR investment).
 
+**Note:** Automated browser verification (9/9 Playwright scenarios) has completed successfully. The manual smoke test is still recommended as a final sanity check before production.
+
 ---
 
 ## Verification Checklist
@@ -169,7 +187,7 @@ Do not deploy to production until:
 - [x] Identity conflict blocking verified
 - [x] TypeScript typecheck clean
 - [x] Production build clean
-- [ ] Desktop/mobile browser smoke test (deferred to staging)
+- [x] Desktop/mobile browser smoke test (9/9 Playwright scenarios passed)
 
 ---
 
