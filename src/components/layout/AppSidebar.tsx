@@ -9,6 +9,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
+import { useNavigationGuard } from "./NavigationGuardContext";
 
 interface NavItem {
   href: string;
@@ -42,6 +43,16 @@ const NAV_ITEMS: NavItem[] = [
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const { checkGuard } = useNavigationGuard();
+
+  const handleClick = (href: string) => (e: React.MouseEvent) => {
+    if (!checkGuard(href)) {
+      e.preventDefault();
+      return;
+    }
+    onNavigate?.();
+  };
+
   return (
     <nav className="flex flex-col gap-0.5 px-3 mt-2" aria-label="Primary">
       {NAV_ITEMS.map(item => {
@@ -52,7 +63,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
           <Link
             key={item.href}
             href={item.href}
-            onClick={onNavigate}
+            onClick={handleClick(item.href)}
             aria-current={active ? "page" : undefined}
             className={`flex items-center gap-2.5 px-3 py-2 rounded-input text-sm font-medium transition-colors ${
               active
@@ -70,8 +81,16 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 function Brand() {
+  const { checkGuard } = useNavigationGuard();
   return (
-    <Link href="/students" className="flex items-center gap-2.5 px-5 h-16 border-b border-dvivid-border-light" aria-label="D-Vivid home">
+    <Link
+      href="/students"
+      onClick={(e) => {
+        if (!checkGuard("/students")) e.preventDefault();
+      }}
+      className="flex items-center gap-2.5 px-5 h-16 border-b border-dvivid-border-light"
+      aria-label="D-Vivid home"
+    >
       <Image src="/dvivid_logo.png" alt="D-Vivid" width={110} height={33} priority className="h-[33px] w-auto" />
     </Link>
   );

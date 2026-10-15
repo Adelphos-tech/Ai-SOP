@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { AppSidebar, AppSidebarMobile } from "./AppSidebar";
 import { AppTopBar } from "./AppTopBar";
+import { NavigationGuardProvider } from "./NavigationGuardContext";
 
 /**
  * Stale-client refresh notice.
@@ -53,16 +54,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   return (
-    <div className="min-h-screen flex bg-dvivid-page-bg">
-      <AppSidebar />
-      <AppSidebarMobile open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
-      <div className="flex-1 min-w-0 flex flex-col">
-        <AppTopBar onMenuToggle={() => setMobileNavOpen(true)} />
-        <main className="flex-1 overflow-auto">
-          {children}
-        </main>
+    <NavigationGuardProvider>
+      <div className="min-h-screen flex bg-dvivid-page-bg">
+        <AppSidebar />
+        <AppSidebarMobile open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+        <div className="flex-1 min-w-0 flex flex-col">
+          <AppTopBar onMenuToggle={() => setMobileNavOpen(true)} />
+          <main className="flex-1 overflow-auto">
+            {children}
+          </main>
+        </div>
+        <StaleClientNotice />
       </div>
-      <StaleClientNotice />
-    </div>
+    </NavigationGuardProvider>
   );
 }

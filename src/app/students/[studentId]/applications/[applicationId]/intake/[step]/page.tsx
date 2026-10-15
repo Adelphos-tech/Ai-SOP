@@ -29,6 +29,7 @@ import {
   IntakeProfileSchema,
   IntakeProfileForm,
 } from "@/lib/forms/intake-profile.schema";
+import { useNavigationGuard } from "@/components/layout/NavigationGuardContext";
 
 // ============================================================
 // 9-SECTION INTAKE PAGE — React Hook Form + Zod
@@ -145,6 +146,8 @@ export default function IntakePage() {
   const { reset, getValues, handleSubmit, watch, formState } = methods;
   const isDirty = formState.isDirty;
 
+  const { registerGuard, unregisterGuard } = useNavigationGuard();
+
   // Load profile + application. Identity change resets ALL id-scoped
   // state — no student-A state may remain observable under student B.
   useEffect(() => {
@@ -172,6 +175,26 @@ export default function IntakePage() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDirty]);
+
+  // Register navigation guard for global sidebar navigation
+  useEffect(() => {
+    registerGuard((href: string) => {
+      if (!isDirty) return true;
+      // Reuse the same three-choice guard logic
+      const saveFirst = window.confirm("You have unsaved changes. Save before leaving?");
+      if (saveFirst) {
+        // Fire-and-forget save; navigation handled asynchronously
+        handleSaveDraftWrapper().then(result => {
+          if (result.success) router.push(href);
+        });
+        return false;
+      }
+      const discard = window.confirm("Discard changes and leave?");
+      if (discard) return true;
+      return false;
+    });
+    return () => unregisterGuard();
+  }, [isDirty, registerGuard, unregisterGuard, router]);
 
   async function loadAll() {
     const token = ++loadTokenRef.current;
@@ -262,9 +285,9 @@ export default function IntakePage() {
         };
       } else if (res.status === 409) {
         // CRITICAL: Do NOT call loadAll() here — it would reset() the form
-        // and silently discard the user's unsaved edits. Preserve their work
-        // so they can decide to retry or reload.
-        const msg = "Profile was updated elsewhere (e.g. CV import). Your current edits are preserved — click Save again to overwrite, or Reload to fetch the latest data.";
+        // and silently discard the user's unsaved edits. Preserve their work.
+        // The consultant must reload to fetch the latest revision before saving.
+        const msg = "Profile was updated elsewhere (e.g. CV import). Your current edits are preserved — reload the page to fetch the latest data before saving again.";
         setSaveStatus("error");
         setError(msg);
         throw new Error(msg);
@@ -349,12 +372,13 @@ export default function IntakePage() {
 
   // Skip optional section — also save current progress before navigating.
   // Skip intentionally saves without blocking validation (draft semantics).
+  // If save fails, STAY on current page — do not navigate.
   async function handleSkip() {
     try {
       await saveProfile(getValues());
-    } catch {
-      // If save fails on skip, still allow navigation but show warning
-      setError("Warning: progress may not have been saved.");
+    } catch (err: any) {
+      setError(err?.message || "Save failed. Cannot skip until the current section is saved.");
+      return; // Prevent navigation on failed save
     }
     const nextSection = INTAKE_SECTIONS.find(s => s.id === currentStep + 1);
     if (nextSection) {
@@ -380,29 +404,41 @@ export default function IntakePage() {
   };
 
   // Save Draft — persists without navigating. Stays on current section.
-  const handleSaveDraft = async () => {
+  // Returns explicit result so callers can decide whether to navigate.
+  const handleSaveDraftWrapper = async (): Promise<{ success: boolean; error?: string }> => {
     const values = getValues();
     try {
       await saveProfile(values);
+      return { success: true };
     } catch (err: any) {
-      setError(err?.message || "Failed to save draft. Please try again.");
+      const msg = err?.message || "Failed to save draft. Please try again.";
+      setError(msg);
+      return { success: false, error: msg };
     }
   };
 
-  // Internal navigation guard: when there are unsaved edits, confirm before leaving.
+  // Convenience wrapper for the Save Draft button (does not navigate).
+  const handleSaveDraft = async () => {
+    await handleSaveDraftWrapper();
+  };
+
+  // Internal navigation guard: three-choice flow for unsaved edits.
+  // Save → navigate on success; Discard → navigate immediately; Cancel → stay.
   const handleNavigate = useCallback((href: string): boolean => {
     if (!isDirty) return true;
-    const ok = window.confirm(
-      "You have unsaved changes. Save before leaving?\n\nClick OK to save and continue.\nClick Cancel to discard changes and leave."
-    );
-    if (ok) {
-      // Fire-and-forget save then navigate; user expects this to work
-      handleSaveDraft().then(() => {
-        router.push(href);
+    const saveFirst = window.confirm("You have unsaved changes. Save before leaving?");
+    if (saveFirst) {
+      // Try to save, then navigate ONLY if save succeeds
+      handleSaveDraftWrapper().then(result => {
+        if (result.success) router.push(href);
+        // If save failed, user stays on current page with edits intact
       });
-      return false; // Block immediate navigation; router.push after save
+      return false; // Block immediate navigation
     }
-    return true; // User chose to discard — allow navigation
+    // User declined to save — ask if they want to discard
+    const discard = window.confirm("Discard changes and leave?");
+    if (discard) return true; // Navigate without saving
+    return false; // Cancel — stay on current page
   }, [isDirty, router]);
 
   // Live values for completion/progress — completion stays LIVE but
@@ -418,7 +454,13 @@ export default function IntakePage() {
       <PageContainer>
         <div className="text-center py-12">
           <p className="text-sm text-dvivid-error mb-4">Invalid intake section.</p>
-          <Link href={`/students/${studentId}/applications/${applicationId}`} className="text-sm text-dvivid-primary hover:underline">
+          <Link
+            href={`/students/${studentId}/applications/${applicationId}`}
+            className="text-sm text-dvivid-primary hover:underline"
+            onClick={(e) => {
+              if (!handleNavigate(`/students/${studentId}/applications/${applicationId}`)) e.preventDefault();
+            }}
+          >
             ← Back to application
           </Link>
         </div>
@@ -451,7 +493,12 @@ export default function IntakePage() {
         <div className="text-center py-16">
           <p className="text-lg font-medium text-dvivid-success mb-2">✓ All required information complete</p>
           <p className="text-sm text-dvivid-text-secondary mb-6">The applicant is ready for document generation.</p>
-          <Link href={`/students/${studentId}/applications/${applicationId}`}>
+          <Link
+            href={`/students/${studentId}/applications/${applicationId}`}
+            onClick={(e) => {
+              if (!handleNavigate(`/students/${studentId}/applications/${applicationId}`)) e.preventDefault();
+            }}
+          >
             <PrimaryButton>Back to Application →</PrimaryButton>
           </Link>
         </div>
@@ -465,11 +512,14 @@ export default function IntakePage() {
         intakeComplete={intakeComplete}
         firstIncompleteIntakeSlug={firstMissingSlug}
       />
-      <Breadcrumb items={[
-        { label: "Students", href: "/students" },
-        { label: application?.universityName || "Application", href: `/students/${studentId}/applications/${applicationId}` },
-        { label: wizardMode ? "Missing Information" : currentSection!.label },
-      ]} />
+      <Breadcrumb
+        items={[
+          { label: "Students", href: "/students" },
+          { label: application?.universityName || "Application", href: `/students/${studentId}/applications/${applicationId}` },
+          { label: wizardMode ? "Missing Information" : currentSection!.label },
+        ]}
+        onNavigate={handleNavigate}
+      />
 
       {/* Mobile section nav (visible only below lg breakpoint) */}
       {!wizardMode && (
@@ -597,15 +647,30 @@ export default function IntakePage() {
               {/* Primary actions row */}
               <div className="flex justify-between items-center flex-wrap gap-3">
                 {wizardMode ? (
-                  <Link href={`/students/${studentId}/applications/${applicationId}`}>
+                  <Link
+                    href={`/students/${studentId}/applications/${applicationId}`}
+                    onClick={(e) => {
+                      if (!handleNavigate(`/students/${studentId}/applications/${applicationId}`)) e.preventDefault();
+                    }}
+                  >
                     <SecondaryButton>← Back to application</SecondaryButton>
                   </Link>
                 ) : prevSection ? (
-                  <Link href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}>
+                  <Link
+                    href={`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`}
+                    onClick={(e) => {
+                      if (!handleNavigate(`/students/${studentId}/applications/${applicationId}/intake/${prevSection.slug}`)) e.preventDefault();
+                    }}
+                  >
                     <SecondaryButton>← Back</SecondaryButton>
                   </Link>
                 ) : (
-                  <Link href={`/students/${studentId}/applications/${applicationId}`}>
+                  <Link
+                    href={`/students/${studentId}/applications/${applicationId}`}
+                    onClick={(e) => {
+                      if (!handleNavigate(`/students/${studentId}/applications/${applicationId}`)) e.preventDefault();
+                    }}
+                  >
                     <SecondaryButton>← Back</SecondaryButton>
                   </Link>
                 )}

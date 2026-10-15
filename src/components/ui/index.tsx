@@ -205,14 +205,20 @@ export function EmptyState({
   );
 }
 
-export function Breadcrumb({ items }: { items: Array<{ label: string; href?: string }> }) {
+export function Breadcrumb({ items, onNavigate }: { items: Array<{ label: string; href?: string }>; onNavigate?: (href: string) => boolean }) {
   return (
     <div className="flex items-center gap-2 text-sm mb-6">
       {items.map((item, i) => (
         <div key={i} className="flex items-center gap-2">
           {i > 0 && <span className="text-dvivid-text-muted">/</span>}
           {item.href ? (
-            <Link href={item.href} className="text-dvivid-text-secondary hover:text-dvivid-primary transition-colors">
+            <Link
+              href={item.href}
+              className="text-dvivid-text-secondary hover:text-dvivid-primary transition-colors"
+              onClick={(e) => {
+                if (onNavigate && !onNavigate(item.href!)) e.preventDefault();
+              }}
+            >
               {item.label}
             </Link>
           ) : (
