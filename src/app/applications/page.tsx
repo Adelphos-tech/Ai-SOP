@@ -84,7 +84,7 @@ export default function ApplicationsPage() {
         subtitle="All university applications across students. Click an application to open its workspace."
         action={
           <Link href="/students/new">
-            <PrimaryButton>+ New Applicant</PrimaryButton>
+            <PrimaryButton>+ Add Student</PrimaryButton>
           </Link>
         }
       />
@@ -120,12 +120,12 @@ export default function ApplicationsPage() {
           description={
             query
               ? `No applications match "${query}".`
-              : "Create a new applicant to start their first university application."
+              : "Add a student to create their first university application."
           }
           action={
             !query && (
               <Link href="/students/new">
-                <PrimaryButton>+ New Applicant</PrimaryButton>
+                <PrimaryButton>+ Add Student</PrimaryButton>
               </Link>
             )
           }
