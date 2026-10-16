@@ -11,11 +11,12 @@ import { FormField, inputClass } from "@/components/ui/FormField";
 import { UniversitySelect } from "@/components/ui/UniversitySelect";
 
 // ============================================================
-// /students/new — New Applicant Fast Flow
+// /students/new — Create Student
 // ============================================================
 // Canonical entry point for creating a new student.
-// Flow: create student → application → redirect to application
-// workspace (where intake + CV upload + documents happen).
+// Flow: create student → application → redirect to student profile
+// workspace (/students/[id]). From there the consultant can click
+// "Edit Profile" to reach the intake + CV upload flow.
 // Reuses the same repository functions as the legacy /app-setup
 // (createStudent, createApplication) — no duplicated business logic.
 // ============================================================
@@ -97,9 +98,9 @@ export default function NewApplicantPage() {
       const appData = await appRes.json();
       const applicationId = appData.application.id;
 
-      // No dead-end: go straight to the application workspace.
-      // CV upload, intake, and documents happen there.
-      router.push(`/students/${studentId}/applications/${applicationId}`);
+      // Redirect to student profile so the consultant lands on the
+      // canonical workspace, not inside the intake form.
+      router.push(`/students/${studentId}`);
     } catch (err: any) {
       setError(err?.message || "Failed to create applicant");
     } finally {
@@ -110,12 +111,12 @@ export default function NewApplicantPage() {
   return (
     <PageContainer>
       <WorkflowStepper />
-      <Breadcrumb items={[{ label: "Students", href: "/students" }, { label: "New Applicant" }]} />
+      <Breadcrumb items={[{ label: "Students", href: "/students" }, { label: "Create Student" }]} />
 
       <div className="mb-8">
-        <h1 className="text-page-title text-dvivid-text-primary">New Applicant</h1>
+        <h1 className="text-page-title text-dvivid-text-primary">Create Student</h1>
         <p className="text-base text-dvivid-text-secondary mt-1.5">
-          Create a student and their first university application. You'll upload the CV and complete the intake in the application workspace.
+          Create a student and their first university application. After creation you'll land on the student profile page, where you can click "Edit Profile" to upload a CV and complete the intake.
         </p>
       </div>
 
@@ -126,7 +127,7 @@ export default function NewApplicantPage() {
       )}
 
       {/* Step 1: Student */}
-      <SectionCard title="1. Student Details" description="The person whose application materials are being prepared." className="mb-6">
+      <SectionCard title="1. Student Details" description="Basic information about the new student." className="mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormField label="First Name" required error={fieldErrors.firstName}>
             <input className={inputClass} value={firstName} onChange={e => { setFirstName(e.target.value); setFieldErrors(f => ({ ...f, firstName: "" })); }} placeholder="Kunj" autoFocus />
@@ -194,7 +195,7 @@ export default function NewApplicantPage() {
           <SecondaryButton>Cancel</SecondaryButton>
         </Link>
         <PrimaryButton onClick={handleCreate} disabled={creating}>
-          {creating ? "Creating..." : "Create Applicant & Application →"}
+          {creating ? "Creating..." : "Create Student →"}
         </PrimaryButton>
       </div>
     </PageContainer>

@@ -198,10 +198,10 @@ function StudentsPageInner() {
     <PageContainer>
       <PageHeader
         title="Students"
-        subtitle={`${total} applicant${total !== 1 ? "s" : ""} total`}
+        subtitle={`${total} student${total !== 1 ? "s" : ""} total`}
         action={
           <Link href="/students/new">
-            <PrimaryButton>+ New Applicant</PrimaryButton>
+            <PrimaryButton>+ Add Student</PrimaryButton>
           </Link>
         }
       />
@@ -235,12 +235,12 @@ function StudentsPageInner() {
       {!loading && !loadError && loaded && results.length === 0 && (
         <div className="bg-white border border-dvivid-border rounded-card">
           <EmptyState
-            title={query ? "No matching applicants" : "No applicants yet"}
-            description={query ? `No students match "${query}".` : "Create your first applicant to start an application."}
+            title={query ? "No matching students" : "No students yet"}
+            description={query ? `No students match "${query}".` : "Add your first student to start an application."}
             action={
               !query ? (
                 <Link href="/students/new">
-                  <PrimaryButton>+ New Applicant</PrimaryButton>
+                  <PrimaryButton>+ Add Student</PrimaryButton>
                 </Link>
               ) : undefined
             }
