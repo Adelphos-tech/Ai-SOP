@@ -137,10 +137,10 @@ export async function POST(request: NextRequest) {
           studentId: body.studentId,
           actorId: consultant.id,
           removedCvItems:
-            (existingProfile.education || []).length - merged.education.length +
-            (existingProfile.experience || []).length - merged.experience.length +
-            (existingProfile.projects || []).length - merged.projects.length +
-            (existingProfile.achievements || []).length - merged.achievements.length,
+            (existingProfile.education || []).length - (merged.education || []).length +
+            (existingProfile.experience || []).length - (merged.experience || []).length +
+            (existingProfile.projects || []).length - (merged.projects || []).length +
+            (existingProfile.achievements || []).length - (merged.achievements || []).length,
         }, "warn");
       }
     }
