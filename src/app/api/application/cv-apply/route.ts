@@ -62,28 +62,19 @@ export async function POST(request: NextRequest) {
     // Compare the CV's identity evidence against the students ROW
     // (first_name/last_name/email) — NOT profile_data.personalData,
     // which a previous wrong-person apply may have corrupted.
-    // A CONFLICT must never silently merge into the canonical profile.
+    // A CONFLICT unconditionally blocks apply. There is no override.
     const identity = classifyIdentityMatch(student, body.parsedCV?.personalData);
     if (identity.status === "CONFLICT") {
-      if (body.identityConflictOverride !== true) {
-        return NextResponse.json(
-          {
-            error: `The uploaded CV appears to belong to ${identity.cvIdentity.name || "a different person"}${identity.cvIdentity.email ? ` (${identity.cvIdentity.email})` : ""}, while the selected student is ${identity.studentIdentity.name || "unknown"}${identity.studentIdentity.email ? ` (${identity.studentIdentity.email})` : ""}. Please verify the student or choose another CV.`,
-            code: "CV_IDENTITY_CONFLICT",
-            identityStatus: identity.status,
-            studentIdentity: identity.studentIdentity,
-            cvIdentity: identity.cvIdentity,
-          },
-          { status: 409 },
-        );
-      }
-      // Explicit consultant override — audit metadata only: ids and
-      // counts, never names/emails (PII).
-      emitEvent("cv_identity_conflict_override", {
-        studentId: body.studentId,
-        actorId: consultant.id,
-        status: identity.status,
-      }, "warn");
+      return NextResponse.json(
+        {
+          error: `The uploaded CV appears to belong to ${identity.cvIdentity.name || "a different person"}${identity.cvIdentity.email ? ` (${identity.cvIdentity.email})` : ""}, while the selected student is ${identity.studentIdentity.name || "unknown"}${identity.studentIdentity.email ? ` (${identity.studentIdentity.email})` : ""}. Please verify the student or choose another CV.`,
+          code: "CV_IDENTITY_CONFLICT",
+          identityStatus: identity.status,
+          studentIdentity: identity.studentIdentity,
+          cvIdentity: identity.cvIdentity,
+        },
+        { status: 409 },
+      );
     }
 
     // ===== OPTIMISTIC CONCURRENCY CHECK =====

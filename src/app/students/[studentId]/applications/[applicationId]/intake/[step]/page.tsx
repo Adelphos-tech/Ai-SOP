@@ -905,54 +905,104 @@ function StudentDetailsSection() {
         ) : (
           <div className="space-y-4">
             {edu.fields.map((f, i) => (
-              <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
-                <input type="hidden" {...register(`education.${i}.id` as any)} />
-                <div className="flex items-center justify-between mb-4 pb-3 border-b border-dvivid-border-light">
-                  <div className="flex items-center gap-2">
-                    <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
-                    <span className="text-sm font-semibold text-dvivid-text-primary">Education</span>
-                  </div>
-                  <button type="button" onClick={() => edu.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <FormField label="Degree Level">
-                    <select className={inputClass} {...register(`education.${i}.level` as any)}>
-                      <option value="">Select level</option>
-                      <option value="10th">10th Grade</option>
-                      <option value="12th">12th Grade</option>
-                      <option value="Diploma">Diploma</option>
-                      <option value="Bachelor's">Bachelor's</option>
-                      <option value="Master's">Master's</option>
-                      <option value="PhD">PhD</option>
-                    </select>
-                  </FormField>
-                  <FormField label="Institution / University">
-                    <input className={inputClass} placeholder="IIT Bombay" {...register(`education.${i}.institution` as any)} />
-                  </FormField>
-                  <FormField label="Field / Major">
-                    <input className={inputClass} placeholder="Computer Science" {...register(`education.${i}.specialization` as any)} />
-                  </FormField>
-                  <FormField label="CGPA / GPA">
-                    <input className={inputClass} placeholder="8.5" {...register(`education.${i}.cgpa` as any)} />
-                  </FormField>
-                  <FormField label="Maximum GPA Scale">
-                    <input className={inputClass} placeholder="10" {...register(`education.${i}.cgpaScale` as any)} />
-                  </FormField>
-                  <FormField label="Start Year">
-                    <input className={inputClass} placeholder="2020" {...register(`education.${i}.startYear` as any)} />
-                  </FormField>
-                  <FormField label="Graduation Year">
-                    <input className={inputClass} placeholder="2024" {...register(`education.${i}.endYear` as any)} />
-                  </FormField>
-                  <FormField label="Backlogs (if any)">
-                    <input className={inputClass} placeholder="0" {...register(`education.${i}.backlogs` as any)} />
-                  </FormField>
-                </div>
-              </div>
+              <EducationCard
+                key={f._key}
+                index={i}
+                field={f}
+                register={register}
+                onRemove={() => edu.remove(i)}
+              />
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// EDUCATION CARD (collapsible, with CV-import badge)
+// ============================================================
+function EducationCard({ index, field, register, onRemove }: { index: number; field: any; register: any; onRemove: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const isCvImported = String(field.id ?? "").startsWith("cv-");
+  const level = field.level || "";
+  const institution = field.institution || "";
+  const degree = field.degree || "";
+  const specialization = field.specialization || "";
+  const startYear = field.startYear || "";
+  const endYear = field.endYear || "";
+  const cgpa = field.cgpa || "";
+  const hasMissing = !level || !institution;
+
+  return (
+    <div className={`bg-white border rounded-card p-4 relative overflow-hidden ${isCvImported ? "border-l-4 border-l-blue-500 border-blue-200" : "border-l-4 border-l-dvivid-primary border-dvivid-border"}`}>
+      <input type="hidden" {...register(`education.${index}.id` as any)} />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="w-6 h-6 rounded-full bg-dvivid-primary-light flex items-center justify-center text-[10px] font-bold text-dvivid-primary flex-shrink-0">{index + 1}</span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-dvivid-text-primary truncate">
+              {degree || level || "Unnamed education"}
+              {specialization && <span className="text-dvivid-text-secondary"> in {specialization}</span>}
+              {institution && <span className="text-dvivid-text-muted"> — {institution}</span>}
+            </p>
+            <div className="flex items-center gap-2 mt-0.5">
+              {isCvImported && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">CV import</span>}
+              {hasMissing && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-medium">Missing fields</span>}
+              {cgpa && <span className="text-[10px] text-dvivid-text-muted">CGPA {cgpa}</span>}
+              {(startYear || endYear) && <span className="text-[10px] text-dvivid-text-muted">{startYear || "?"}–{endYear || "?"}</span>}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="text-xs text-dvivid-text-muted hover:text-dvivid-primary font-medium px-2 py-1"
+          >
+            {expanded ? "Collapse" : "Edit"}
+          </button>
+          <button type="button" onClick={onRemove} className="text-xs text-dvivid-error hover:underline font-medium px-2 py-1">Remove</button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-dvivid-border-light">
+          <FormField label="Degree Level">
+            <select className={inputClass} {...register(`education.${index}.level` as any)}>
+              <option value="">Select level</option>
+              <option value="10th">10th Grade</option>
+              <option value="12th">12th Grade</option>
+              <option value="Diploma">Diploma</option>
+              <option value="Bachelor's">Bachelor's</option>
+              <option value="Master's">Master's</option>
+              <option value="PhD">PhD</option>
+            </select>
+          </FormField>
+          <FormField label="Institution / University">
+            <input className={inputClass} placeholder="IIT Bombay" {...register(`education.${index}.institution` as any)} />
+          </FormField>
+          <FormField label="Field / Major">
+            <input className={inputClass} placeholder="Computer Science" {...register(`education.${index}.specialization` as any)} />
+          </FormField>
+          <FormField label="CGPA / GPA">
+            <input className={inputClass} placeholder="8.5" {...register(`education.${index}.cgpa` as any)} />
+          </FormField>
+          <FormField label="Maximum GPA Scale">
+            <input className={inputClass} placeholder="10" {...register(`education.${index}.cgpaScale` as any)} />
+          </FormField>
+          <FormField label="Start Year">
+            <input className={inputClass} placeholder="2020" {...register(`education.${index}.startYear` as any)} />
+          </FormField>
+          <FormField label="Graduation Year">
+            <input className={inputClass} placeholder="2024" {...register(`education.${index}.endYear` as any)} />
+          </FormField>
+          <FormField label="Backlogs (if any)">
+            <input className={inputClass} placeholder="0" {...register(`education.${index}.backlogs` as any)} />
+          </FormField>
+        </div>
+      )}
     </div>
   );
 }
@@ -1134,53 +1184,104 @@ function WorkExperienceSection() {
       ) : (
         <div className="space-y-4">
           {exp.fields.map((f, i) => (
-            <div key={f._key} className="bg-white border border-dvivid-border rounded-card p-5 relative overflow-hidden border-l-4 border-l-dvivid-primary">
-              <input type="hidden" {...register(`experience.${i}.id` as any)} />
-              <div className="flex items-center justify-between mb-4 pb-3 border-b border-dvivid-border-light">
-                <div className="flex items-center gap-2">
-                  <span className="w-7 h-7 rounded-full bg-dvivid-primary-light flex items-center justify-center text-xs font-bold text-dvivid-primary">{i + 1}</span>
-                  <span className="text-sm font-semibold text-dvivid-text-primary">Experience</span>
-                </div>
-                <button type="button" onClick={() => exp.remove(i)} className="text-sm text-dvivid-error hover:underline font-medium">Remove</button>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormField label="Type">
-                  <select className={inputClass} {...register(`experience.${i}.type` as any)}>
-                    <option value="">Select type</option>
-                    <option value="Internship">Internship</option>
-                    <option value="Full-time Job">Full-time Job</option>
-                    <option value="Part-time Job">Part-time Job</option>
-                    <option value="Research Role">Research Role</option>
-                    <option value="Other">Other Experience</option>
-                  </select>
-                </FormField>
-                <FormField label="Organization"><input className={inputClass} {...register(`experience.${i}.organization` as any)} /></FormField>
-                <FormField label="Role"><input className={inputClass} {...register(`experience.${i}.role` as any)} /></FormField>
-                <FormField label="Location"><input className={inputClass} {...register(`experience.${i}.location` as any)} /></FormField>
-                <FormField label="Start Date"><input type="month" className={inputClass} {...register(`experience.${i}.startDate` as any)} /></FormField>
-                <Controller
-                  control={control}
-                  name={`experience.${i}.currentlyWorking` as any}
-                  render={({ field }) => (
-                    <FormField label="End Date">
-                      <input type="month" className={inputClass} disabled={field.value === true} {...register(`experience.${i}.endDate` as any)} />
-                    </FormField>
-                  )}
-                />
-                <FormField label="Currently Working" className="md:col-span-2">
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" {...register(`experience.${i}.currentlyWorking` as any)} />
-                    <span className="text-sm text-dvivid-text-secondary">I currently work here</span>
-                  </label>
-                </FormField>
-                <FormField label="Responsibilities" className="md:col-span-2"><Area name={`experience.${i}.responsibilities`} rows={3} /></FormField>
-                <FormField label="Achievements" className="md:col-span-2"><Area name={`experience.${i}.achievements`} rows={2} /></FormField>
-                <FormField label="Skills Used"><input className={inputClass} {...register(`experience.${i}.skillsUsed` as any)} /></FormField>
-                <FormField label="Key Learning"><input className={inputClass} {...register(`experience.${i}.keyLearning` as any)} /></FormField>
-                <FormField label="Relevance to Master's" className="md:col-span-2"><input className={inputClass} {...register(`experience.${i}.relevanceToMasters` as any)} /></FormField>
-              </div>
-            </div>
+            <ExperienceCard
+              key={f._key}
+              index={i}
+              field={f}
+              register={register}
+              control={control}
+              onRemove={() => exp.remove(i)}
+            />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// EXPERIENCE CARD (collapsible, with CV-import badge)
+// ============================================================
+function ExperienceCard({ index, field, register, control, onRemove }: { index: number; field: any; register: any; control: any; onRemove: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const isCvImported = String(field.id ?? "").startsWith("cv-");
+  const type = field.type || "";
+  const organization = field.organization || "";
+  const role = field.role || "";
+  const location = field.location || "";
+  const startDate = field.startDate || "";
+  const endDate = field.endDate || "";
+  const currentlyWorking = field.currentlyWorking || false;
+  const hasMissing = !organization || !role;
+
+  return (
+    <div className={`bg-white border rounded-card p-4 relative overflow-hidden ${isCvImported ? "border-l-4 border-l-blue-500 border-blue-200" : "border-l-4 border-l-dvivid-primary border-dvivid-border"}`}>
+      <input type="hidden" {...register(`experience.${index}.id` as any)} />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="w-6 h-6 rounded-full bg-dvivid-primary-light flex items-center justify-center text-[10px] font-bold text-dvivid-primary flex-shrink-0">{index + 1}</span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-dvivid-text-primary truncate">
+              {role || "Unnamed role"}
+              {organization && <span className="text-dvivid-text-muted"> at {organization}</span>}
+            </p>
+            <div className="flex items-center gap-2 mt-0.5">
+              {isCvImported && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">CV import</span>}
+              {hasMissing && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-medium">Missing fields</span>}
+              {type && <span className="text-[10px] text-dvivid-text-muted">{type}</span>}
+              {(startDate || endDate) && <span className="text-[10px] text-dvivid-text-muted">{startDate || "?"}–{currentlyWorking ? "Present" : endDate || "?"}</span>}
+              {location && <span className="text-[10px] text-dvivid-text-muted">· {location}</span>}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="text-xs text-dvivid-text-muted hover:text-dvivid-primary font-medium px-2 py-1"
+          >
+            {expanded ? "Collapse" : "Edit"}
+          </button>
+          <button type="button" onClick={onRemove} className="text-xs text-dvivid-error hover:underline font-medium px-2 py-1">Remove</button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-dvivid-border-light">
+          <FormField label="Type">
+            <select className={inputClass} {...register(`experience.${index}.type` as any)}>
+              <option value="">Select type</option>
+              <option value="Internship">Internship</option>
+              <option value="Full-time Job">Full-time Job</option>
+              <option value="Part-time Job">Part-time Job</option>
+              <option value="Research Role">Research Role</option>
+              <option value="Other">Other Experience</option>
+            </select>
+          </FormField>
+          <FormField label="Organization"><input className={inputClass} {...register(`experience.${index}.organization` as any)} /></FormField>
+          <FormField label="Role"><input className={inputClass} {...register(`experience.${index}.role` as any)} /></FormField>
+          <FormField label="Location"><input className={inputClass} {...register(`experience.${index}.location` as any)} /></FormField>
+          <FormField label="Start Date"><input type="month" className={inputClass} {...register(`experience.${index}.startDate` as any)} /></FormField>
+          <Controller
+            control={control}
+            name={`experience.${index}.currentlyWorking` as any}
+            render={({ field }) => (
+              <FormField label="End Date">
+                <input type="month" className={inputClass} disabled={field.value === true} {...register(`experience.${index}.endDate` as any)} />
+              </FormField>
+            )}
+          />
+          <FormField label="Currently Working" className="md:col-span-2">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" {...register(`experience.${index}.currentlyWorking` as any)} />
+              <span className="text-sm text-dvivid-text-secondary">I currently work here</span>
+            </label>
+          </FormField>
+          <FormField label="Responsibilities" className="md:col-span-2"><Area name={`experience.${index}.responsibilities`} rows={3} /></FormField>
+          <FormField label="Achievements" className="md:col-span-2"><Area name={`experience.${index}.achievements`} rows={2} /></FormField>
+          <FormField label="Skills Used"><input className={inputClass} {...register(`experience.${index}.skillsUsed` as any)} /></FormField>
+          <FormField label="Key Learning"><input className={inputClass} {...register(`experience.${index}.keyLearning` as any)} /></FormField>
+          <FormField label="Relevance to Master's" className="md:col-span-2"><input className={inputClass} {...register(`experience.${index}.relevanceToMasters` as any)} /></FormField>
         </div>
       )}
     </div>

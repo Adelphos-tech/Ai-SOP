@@ -44,3 +44,4 @@ coverage/
 services/cv-parser/.venv/
 services/cv-parser/fixtures/
 __pycache__/
+tsconfig.tsbuildinfo
