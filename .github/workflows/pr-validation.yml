@@ -73,3 +73,36 @@ jobs:
 
       - name: Run Country Questionnaire persistence unit tests
         run: npx tsx tests/country-questionnaire-persistence-unit.test.ts
+
+      - name: Run Country Questions completion regression tests
+        run: npx tsx tests/country-questions-completion.test.ts
+
+      - name: Run application context scope tests
+        run: npx tsx tests/application-context-scope.test.ts
+        env:
+          SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+
+      - name: Run resilience acceptance tests
+        run: npx tsx tests/resilience-acceptance.test.ts
+        env:
+          SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+
+  static-checks:
+    name: TypeScript + Production Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Production build
+        run: npm run build
