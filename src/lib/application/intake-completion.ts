@@ -89,11 +89,14 @@ export function calculateIntakeCompletion(profile: any, application?: any): Sect
         break;
       case 6: { // Country Questions
         const cq = p.countryQuestionnaire;
-        if (!cq?.countryCode || !cq?.answers || typeof cq.answers !== "object") {
+        // Saved questionnaire country wins; fall back to the application's
+        // destination country (what the form displays when none was saved).
+        const countryCode = cq?.countryCode || (typeof app.country === "string" ? app.country.trim() : "");
+        if (!countryCode || !cq?.answers || typeof cq.answers !== "object") {
           filled = false;
           break;
         }
-        const questionnaire = getCountryQuestionnaire(cq.countryCode);
+        const questionnaire = getCountryQuestionnaire(countryCode);
         const requiredQuestions = questionnaire.questions.filter(q => q.required);
         // All required questions must have non-empty trimmed answers.
         // Unknown / legacy / "OTHER" countries use DEFAULT_QUESTIONNAIRE.
