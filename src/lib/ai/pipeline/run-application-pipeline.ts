@@ -97,7 +97,7 @@ import {
 } from "../bounded-finalizer";
 import { getUsdToInrRate } from "@/lib/currency/exchange-rate";
 import { getOpenAIClient } from "../openai-client";
-import { calculateStageCost, getPricingForModel } from "../pricing";
+import { calculateStageCost, findUnpricedModels, getPricingForModel } from "../pricing";
 import { LanguageProfile, StageUsage, PipelineCost } from "../types";
 import { logUsage } from "../usage-logger";
 import { UsageLogEntry } from "../types";
@@ -998,6 +998,17 @@ export async function runApplicationPipeline(
   // Resolve execution mode and generation ID.
   const executionMode: ExecutionMode = input.execution?.mode || "CONTENT_REGENERATION";
   const generationId = input.execution?.generationId || randomUUID();
+
+  // Pricing-coverage preflight: a configured stage model with no verified
+  // registry entry falls back to Sol rates — warn loudly so it is never
+  // silently mis-priced.
+  const unpriced = findUnpricedModels(getAllModelsUsed());
+  if (unpriced.length) {
+    emitEvent("generation_unpriced_model_config", {
+      generationRunId: generationId,
+      detail: `unpriced models (Sol-rate fallback): ${unpriced.join(", ")}`,
+    }, "warn");
+  }
 
   // Validate generation ID format before any filesystem access.
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generationId)) {
