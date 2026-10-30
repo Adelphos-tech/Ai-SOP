@@ -322,6 +322,38 @@ export async function POST(request: NextRequest) {
       merged.achievements = existingAch;
     }
 
+    // ===== Publications & patents → canonical publications[] =====
+    // Append-only: manual entries are never overwritten; dedupe by title
+    // against existing publications AND achievements so an item never
+    // lands in both lists. Status/year come only from source text —
+    // a patent application is never upgraded to "granted"/"published".
+    const parsedPubs: Array<{ title: string; status?: string; venue?: string; year?: string }> =
+      Array.isArray((parsed as any).publications) ? (parsed as any).publications : [];
+    if (parsedPubs.length > 0) {
+      const existingPubs = Array.isArray(merged.publications) ? merged.publications : [];
+      const existingTitles = new Set<string>([
+        ...existingPubs.map((p: any) => (p.title || "").trim().toLowerCase()),
+        ...(merged.achievements || []).map((a: any) => (a.title || "").trim().toLowerCase()),
+      ]);
+      let added = 0;
+      for (const p of parsedPubs) {
+        if (!p || typeof p.title !== "string") continue;
+        const key = p.title.trim().toLowerCase();
+        if (!key || existingTitles.has(key)) continue;
+        existingPubs.push({
+          id: `cv-${randomUUID()}`,
+          title: p.title.trim(),
+          venue: (p.venue || "").trim(),
+          status: (p.status || "").trim(),
+          year: (p.year || "").trim(),
+          link: "",
+        });
+        existingTitles.add(key);
+        added++;
+      }
+      if (added > 0) merged.publications = existingPubs;
+    }
+
     // ===== CONDITIONAL SAVE (optimistic concurrency) =====
     const saved = await saveStudentProfileConditional(body.studentId, merged, expectedRevision);
     if (!saved) {
