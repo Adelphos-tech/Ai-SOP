@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
     // CV_PARSER_FALLBACK are superseded — the pipeline always degrades
     // gracefully. Bump CV_PIPELINE_VERSION on chain changes so cached
     // metas re-parse.
-    const CV_PIPELINE_VERSION = "4";
+    const CV_PIPELINE_VERSION = "5";
 
     if (existingMeta) {
       // Idempotent reuse ONLY when the stored parse came from the same
@@ -291,6 +291,19 @@ export async function POST(request: NextRequest) {
       uploadedBy: consultant.id,
       parsed,
     };
+    // Non-destructive upgrade: a same-hash re-parse under a new pipeline
+    // version overwrites the meta file — archive the previous version's
+    // metadata first so historical parse evidence is never lost.
+    if (existingMeta?.parsed?.parserMeta?.mapperVersion &&
+        existingMeta.parsed.parserMeta.mapperVersion !== CV_PIPELINE_VERSION) {
+      const archivePath = metaFilePath.replace(
+        /\.meta\.json$/,
+        `.meta.v${existingMeta.parsed.parserMeta.mapperVersion}.json`,
+      );
+      try {
+        await writeFile(archivePath, JSON.stringify(existingMeta));
+      } catch { /* archive best-effort — never block the import */ }
+    }
     await writeFile(metaFilePath, JSON.stringify(meta));
 
     // ===== STRUCTURED DIAGNOSTICS (content-free) =====

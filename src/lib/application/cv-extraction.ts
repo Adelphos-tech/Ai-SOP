@@ -993,7 +993,7 @@ async function extractCanonicalBlocks(
 /**
  * Deduplicate overlapping equivalent blocks from multiple extraction strategies
  */
-function deduplicateCanonicalBlocks(blocks: CanonicalBlock[]): CanonicalBlock[] {
+export function deduplicateCanonicalBlocks(blocks: CanonicalBlock[]): CanonicalBlock[] {
   if (blocks.length <= 1) return blocks;
 
   // Group by normalized text + page
@@ -1011,16 +1011,28 @@ function deduplicateCanonicalBlocks(blocks: CanonicalBlock[]): CanonicalBlock[] 
   for (const [, group] of groups) {
     if (group.length === 1) {
       keep.add(group[0]);
-    } else {
-      // Keep the one with highest confidence and layout metadata
-      const best = group.reduce((a, b) => {
-        // Prefer blocks with bbox and higher confidence
-        const aScore = (a.bbox ? 10 : 0) + (a.confidence * 10);
-        const bScore = (b.bbox ? 10 : 0) + (b.confidence * 10);
-        return aScore >= bScore ? a : b;
-      });
-      keep.add(best);
+      continue;
     }
+    // Identical text emitted by the SAME extractor at DIFFERENT positions
+    // is a legitimately repeated line (e.g. "Product Design Intern" used as
+    // the role for four internships) — never collapse those. Only merge
+    // real multi-strategy overlaps: different source strategies or bboxes
+    // that actually intersect.
+    const strategies = new Set(group.map(b => b.sourceStrategy));
+    const bboxOverlap = group.length === 2 && group[0].bbox && group[1].bbox &&
+      !(group[0].bbox!.b <= group[1].bbox!.t || group[1].bbox!.b <= group[0].bbox!.t);
+    if (strategies.size <= 1 && !bboxOverlap) {
+      group.forEach(b => keep.add(b));
+      continue;
+    }
+    // Keep the one with highest confidence and layout metadata
+    const best = group.reduce((a, b) => {
+      // Prefer blocks with bbox and higher confidence
+      const aScore = (a.bbox ? 10 : 0) + (a.confidence * 10);
+      const bScore = (b.bbox ? 10 : 0) + (b.confidence * 10);
+      return aScore >= bScore ? a : b;
+    });
+    keep.add(best);
   }
 
   return blocks.filter(b => keep.has(b)).sort((a, b) => a.order - b.order);

@@ -113,6 +113,20 @@ const NEAR_EMPTY_TEXT_LENGTH = 10;
 // CANONICAL TYPES
 // ============================================================
 
+/** A publication or patent recovered from a publications/patents section.
+ * status holds the raw source line — never upgraded to granted/published
+ * unless the source says so explicitly. */
+export interface ParsedPublication {
+  title: string;
+  /** Raw status/type line from source ("Indian Patent Application - Draft
+   * under preparation...", "Registration pending | India | 2026"). */
+  status: string;
+  venue: string;
+  year: string;
+  /** Unaltered source lines that produced this record. */
+  sourceEvidence: string[];
+}
+
 export interface ParsedCV {
   personalData: {
     firstName?: string;
@@ -140,6 +154,9 @@ export interface ParsedCV {
   /** Explicit "CERTIFICATIONS"/"LICENSES" section lines only. */
   certifications: string[];
   achievements: string[];
+  /** Publications & patents — mapped to canonical
+   * profile.publications[] by cv-apply (append-only). */
+  publications?: ParsedPublication[];
   rawTextLength: number;
   parseWarnings: string[];
   /** Parser provenance — present on docling-path results. Never
@@ -234,6 +251,7 @@ export type CanonicalSectionType =
   | "SKILLS"
   | "CERTIFICATIONS"
   | "ACHIEVEMENTS"
+  | "PUBLICATIONS"
   | "PERSONAL"
   | "SUMMARY"
   | "UNKNOWN_SECTION";
@@ -411,30 +429,21 @@ export function deduplicateHeadersFooters(doc: ExtractedDocument): ExtractedDocu
 
 const KNOWN_HEADINGS: Record<CanonicalSectionType, string[]> = {
   EDUCATION: ["education", "academic background", "qualifications", "scholastic record", "academic qualifications", "educational background", "education & credentials"],
-  EXPERIENCE: ["experience", "employment", "work history", "professional experience", "career history", "career journey", "work experience", "employment history", "work", "professional history", "career experience", "professional career", "academic appointments", "teaching experience", "research experience"],
-  PROJECTS: ["projects", "personal projects", "academic projects", "key projects", "project experience", "proof of work", "portfolio", "selected projects", "key projects", "major projects", "project highlights", "initiatives", "selected initiatives", "key initiatives", "major initiatives", "project portfolio"],
-  SKILLS: ["skills", "technical skills", "core competencies", "technologies", "tech stack", "expertise", "competencies", "core capabilities"],
-  CERTIFICATIONS: ["certifications", "certificates", "licenses", "certified courses", "professional certifications", "credentials", "licences"],
-  ACHIEVEMENTS: ["achievements", "awards", "honors", "honours", "accomplishments", "recognitions", "awards and honors", "grants & awards", "grants and awards"],
+  EXPERIENCE: ["experience", "employment", "work history", "professional experience", "career history", "career journey", "work experience", "employment history", "work", "professional history", "career experience", "professional career", "academic appointments", "teaching experience", "research experience", "internship", "internships", "internship experience"],
+  PROJECTS: ["project work details", "project work", "project details", "projects", "personal projects", "academic projects", "key projects", "project experience", "proof of work", "portfolio", "selected projects", "key projects", "major projects", "project highlights", "initiatives", "selected initiatives", "key initiatives", "major initiatives", "project portfolio"],
+  SKILLS: ["skills", "technical skills", "core competencies", "technologies", "tech stack", "expertise", "competencies", "core capabilities", "core skills"],
+  CERTIFICATIONS: ["certification & specialisation", "certification and specialisation", "certifications & training", "certifications and training", "certification", "certifications", "certificates", "licenses", "certified courses", "professional certifications", "credentials", "licences", "specialisation"],
+  ACHIEVEMENTS: ["co-curricular achievements", "co-curricular activities", "extra-curricular achievements", "extra-curricular activities", "extracurricular activities", "extracurricular", "achievements", "awards", "honors", "honours", "accomplishments", "recognitions", "awards and honors", "grants & awards", "grants and awards"],
+  PUBLICATIONS: ["publications & patents", "publications and patents", "publications", "patents", "research publications"],
   PERSONAL: ["personal information", "personal details", "contact", "contact information"],
   SUMMARY: ["summary", "objective", "profile", "professional summary", "career objective", "about me", "executive profile", "career overview", "professional summary"],
   UNKNOWN_SECTION: [], // Never matched directly
 };
 
 // Set of known heading keywords (lowercase, no colon) for quick lookup in heading detection
-const KNOWN_HEADING_KEYWORDS_SET = new Set<string>([
-  "education", "experience", "projects", "skills", "certifications", "achievements",
-  "academic background", "qualifications", "scholastic record", "academic qualifications", "educational background", "education & credentials",
-  "employment", "work history", "professional experience", "career history", "career journey", "work experience", "employment history", "work", "professional history", "career experience", "professional career", "academic appointments", "teaching experience", "research experience",
-  "personal projects", "academic projects", "key projects", "project experience", "proof of work", "portfolio",
-  "selected projects", "key projects", "major projects", "project highlights",
-  "initiatives", "selected initiatives", "key initiatives", "major initiatives", "project portfolio",
-  "technical skills", "core competencies", "technologies", "tech stack", "expertise", "competencies", "core capabilities",
-  "certificates", "licenses", "certified courses", "professional certifications", "credentials", "licences",
-  "awards", "honors", "honours", "accomplishments", "recognitions", "awards and honors", "grants & awards", "grants and awards",
-  "personal information", "personal details", "contact", "contact information",
-  "summary", "objective", "profile", "professional summary", "career objective", "about me", "executive profile", "career overview"
-]);
+const KNOWN_HEADING_KEYWORDS_SET = new Set<string>(
+  Object.values(KNOWN_HEADINGS).flat()
+);
 
 /**
  * Step A: Generic structural heading detection
@@ -548,15 +557,15 @@ function classifyHeading(block: TextBlock): HeadingDetectionResult {
     }
   }
 
-  // Fuzzy match: if the heading text contains a known keyword and is short
+  // Fuzzy match: heading text contains a known keyword (word-boundary) and
+  // is short. Pick the LONGEST matching keyword so specific phrases like
+  // "project work" win over the generic "work" (experience).
   const words = lowerText.split(/\s+/).filter(w => w.length > 0);
-  if (words.length <= 5) {
-    // Convert Set to array for iteration (ES5 compatible)
-    const knownKeywords = Array.from(KNOWN_HEADING_KEYWORDS_SET);
-    for (let i = 0; i < knownKeywords.length; i++) {
-      const kw = knownKeywords[i];
-      if (lowerText.includes(kw)) {
-        // Find which canonical type this keyword belongs to
+  if (words.length <= 6) {
+    const sortedKws = Array.from(KNOWN_HEADING_KEYWORDS_SET).sort((a, b) => b.length - a.length);
+    for (const kw of sortedKws) {
+      const kwRe = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      if (kwRe.test(lowerText)) {
         for (const [type, keywords] of Object.entries(KNOWN_HEADINGS)) {
           if (keywords.includes(kw)) {
             return {
@@ -604,7 +613,14 @@ export function segmentResumeSections(blocks: TextBlock[]): Section[] {
   
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
-    if (isHeadingLike(block)) {
+    // Lines that exactly equal a known heading are always boundaries, even
+    // when the structural scorer scores them low (e.g. long ALL-CAPS
+    // headings like "CERTIFICATION & SPECIALISATION").
+    const lowerBlockText = block.text.trim().toLowerCase();
+    const isExactKnown = lowerBlockText.length > 0 && lowerBlockText.length <= 60 &&
+      (KNOWN_HEADING_KEYWORDS_SET.has(lowerBlockText) ||
+        Object.values(KNOWN_HEADINGS).flat().some(kw => lowerBlockText === kw));
+    if (isHeadingLike(block) || isExactKnown) {
       const result = classifyHeading(block);
       if (result.headingLike) {
         // A heading is "confident" if it's not just structural but has some semantic meaning
@@ -657,6 +673,39 @@ export function segmentResumeSections(blocks: TextBlock[]): Section[] {
       });
     }
   }
+
+  // Post-pass: merge UNKNOWN_SECTION fragments whose "heading" is not a real
+  // section heading into the preceding list-type canonical section. List
+  // items like project titles ("HoloChem - Device Design") or sub-labels
+  // ("Description of the project:") look heading-like but are content.
+  // Real unknown section headings are predominantly ALL-CAPS; keep those
+  // as their own sections so their content is still surfaced as unmapped.
+  const LIST_TYPE_SECTIONS = new Set<CanonicalSectionType>(["PROJECTS", "CERTIFICATIONS", "ACHIEVEMENTS", "PUBLICATIONS"]);
+  const isUppercaseDominant = (t: string) => {
+    const letters = t.replace(/[^A-Za-z]/g, "");
+    return letters.length >= 4 && letters === letters.toUpperCase();
+  };
+  const mergedSections: Section[] = [];
+  for (const sec of sections) {
+    const prev = mergedSections[mergedSections.length - 1];
+    if (
+      sec.type === "UNKNOWN_SECTION" &&
+      prev &&
+      (LIST_TYPE_SECTIONS.has(prev.type) || prev.type === "UNKNOWN_SECTION") &&
+      !isUppercaseDominant(sec.heading || "")
+    ) {
+      // Re-attach the heading text as a content block, then the body blocks.
+      const headingBlock = sec.heading
+        ? [{ text: sec.heading, page: sec.blocks[0]?.page ?? 1, blockType: "paragraph" as const }]
+        : [];
+      prev.blocks = [...prev.blocks, ...headingBlock, ...sec.blocks];
+      prev.endBlockIndex = sec.endBlockIndex;
+      continue;
+    }
+    mergedSections.push(sec);
+  }
+  sections.length = 0;
+  sections.push(...mergedSections);
 
   // If no sections found at all, try synthetic section recovery from table-heavy documents.
   // DOCX files with tables but no Word heading styles often have section keywords
@@ -883,22 +932,22 @@ export function groupEducationRecords(section: Section): SourceRecordGroup[] {
     // A new education record boundary is detected when:
     // 1. Block starts with a degree keyword (inclusive list of standard degrees)
     // 2. Block contains an institution + year pattern
-    const hasDegreePattern = /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor(?:\s+of)?|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master(?:\s+of)?|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma)\b/i.test(text);
-    const hasInstitutionAndYear = /\b(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge)\b.*(?:20|19)\d{4}/i.test(text);
+    const hasDegreePattern = /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor(?:\s+of)?|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master(?:\s+of)?|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|Higher\s+Secondary|Secondary\s+Education|Higher\s+Secondary\s+Education|SSLC|SSC|PG\s+Diploma)\b/i.test(text);
+    const hasInstitutionAndYear = /\b(?:University|Institute|College|School|Polytechnic|Board|IIT|NIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge)\b.*(?:20|19)\d{4}/i.test(text);
 
     const isNewRecord = hasDegreePattern || hasInstitutionAndYear;
     const isCont = isContinuationBlock(block);
 
     // An institution-only line (e.g. "Nirman High School") without a degree keyword
     // should continue the previous group if that group hasn't yet acquired a degree.
-    const hasInstitutionKeyword = /\b(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT)\b/i.test(text);
+    const hasInstitutionKeyword = /\b(?:University|Institute|College|School|Polytechnic|Board|IIT|NIT|BITS|VIT|MIT)\b/i.test(text);
     const lastGroup = groups.length > 0 ? groups[groups.length - 1] : null;
-    const lastHasDegree = lastGroup ? /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S|M\.?Sc|Master|Ph\.?D|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc|B\.?Com|B\.?S|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma)\b/mi.test(lastGroup.sourceEvidence) : false;
+    const lastHasDegree = lastGroup ? /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S|M\.?Sc|Master|Ph\.?D|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc|B\.?Com|B\.?S|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|Higher\s+Secondary|Secondary\s+Education|Higher\s+Secondary\s+Education|SSLC|SSC|PG\s+Diploma)\b/mi.test(lastGroup.sourceEvidence) : false;
     const isInstitutionContinuation = hasInstitutionKeyword && !hasDegreePattern && groups.length > 0 && !lastHasDegree;
 
     // A degree line that follows an institution-only group (Indian multi-line format)
     // should merge into the previous group rather than starting a new record.
-    const lastHasInstitution = lastGroup ? /\b(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT)\b/i.test(lastGroup.sourceEvidence) : false;
+    const lastHasInstitution = lastGroup ? /\b(?:University|Institute|College|School|Polytechnic|Board|IIT|NIT|BITS|VIT|MIT)\b/i.test(lastGroup.sourceEvidence) : false;
     const isDegreeFollowingInstitution = hasDegreePattern && groups.length > 0 && !lastHasDegree && lastHasInstitution;
 
     // If a block matches a degree/institution pattern, it ALWAYS starts a new record,
@@ -925,7 +974,7 @@ function extractEducationFields(group: SourceRecordGroup): Partial<ParsedEducati
   const result: Partial<ParsedEducation> & { _sourceLines?: string[] } = { _sourceLines: [text] };
 
   // Expanded degree keywords covering standard qualifications
-  const degreePattern = /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor(?:\s+of)?|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master(?:\s+of)?|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma)\b/i;
+  const degreePattern = /^(?:B\.?Tech\.?|B\.?E\.?|Bachelor(?:\s+of)?|M\.?Tech\.?|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master(?:\s+of)?|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|Higher\s+Secondary|Secondary\s+Education|Higher\s+Secondary\s+Education|SSLC|SSC|PG\s+Diploma)\b/i;
 
   // Extract degree from any line in the text (Indian multi-line format has degree after institution)
   const lines = text.split("\n");
@@ -938,7 +987,7 @@ function extractEducationFields(group: SourceRecordGroup): Partial<ParsedEducati
   }
 
   // Extract specialization: "Degree, Field - ..." or "Degree in/of Field - ..."
-  const specMatch = text.match(/^(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S|M\.?Sc|Master|Ph\.?D|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc|B\.?Com|B\.?S|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma)[,\s]+(?:in\s+|of\s+)?([^-–|]+)/i);
+  const specMatch = text.match(/^(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S|M\.?Sc|Master|Ph\.?D|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc|B\.?Com|B\.?S|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|Higher\s+Secondary|Secondary\s+Education|Higher\s+Secondary\s+Education|SSLC|SSC|PG\s+Diploma)[,\s]+(?:in\s+|of\s+)?([^-–|]+)/i);
   if (specMatch) {
     result.specialization = specMatch[1].trim();
   }
@@ -948,14 +997,26 @@ function extractEducationFields(group: SourceRecordGroup): Partial<ParsedEducati
   const instPatterns = [
     /[-–]\s*([^|•\n]+?)(?:\s*\||\s*$)/,                          // "Degree - Institution | Year"
     /\b(?:in|at)\s+([^|,\n]+?)(?:\s*[|,]\s*|\s*$)/i,               // "Degree in Field at Institution"
-    /\b([^|,\n]*(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT)[^|,\n]*)/i, // fallback
+    /\b([^|,\n]*(?:University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT)[^|,\n]*)/i, // named institution first
+    /\b([^|,\n]*(?:Board)[^|,\n]*)/i,                                     // board-only fallback when no school named
   ];
+  const DATE_FRAGMENT_RE = /(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:(?:19|20)\d{2}|present|current|ongoing))?|present|current|ongoing/i;
   for (const pattern of instPatterns) {
     const m = text.match(pattern);
     if (m) {
-      const candidate = m[1].trim();
+      let candidate = m[1].trim();
+      // Tab-/column-flattened lines glue the date range onto the institution
+      // ("Nirma University                    Aug 2023 - May 2027"). Split on
+      // 2+ spaces/tabs and drop date-only fragments.
+      if (/\s{2,}|\t/.test(candidate)) {
+        const segs = candidate.split(/\s{2,}|\t+/).map(s => s.trim()).filter(Boolean);
+        const kept = segs.filter(s => !DATE_FRAGMENT_RE.test(s) || !/^\s*((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*)?(?:19|20)\d{2}/i.test(s));
+        if (kept.length) candidate = kept.join(" ");
+      }
       // Reject purely numeric / percentage matches that are score lines
       if (/^\d+\.?\d*\s*%?$/.test(candidate)) continue;
+      // Reject date-only or month-year candidates
+      if (/^(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:(?:19|20)\d{2}|present|current))?$/i.test(candidate)) continue;
       if (/^(?:CGPA|GPA|CPI|SGPA|Percentage|Marks|Score|Grade|Result|Passing|Year|Duration|Status|Board|Standard|Subject|Stream|Division|Semester|Session|Roll|Number)\b/i.test(candidate)) continue;
       result.institution = candidate;
       break;
@@ -963,9 +1024,10 @@ function extractEducationFields(group: SourceRecordGroup): Partial<ParsedEducati
   }
 
   // Extract year range
-  const yearRangeMatch = text.match(/((?:20|19)\d{2})\s*[-–]\s*((?:20|19)\d{2}|present|current|ongoing)/i);
+  const MONTH_RE = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*";
+  const yearRangeMatch = text.match(new RegExp(`((?:${MONTH_RE}\\s+)?(?:20|19)\\d{2})\\s*[-–]\\s*((?:${MONTH_RE}\\s+)?(?:20|19)\\d{2}|present|current|ongoing)`, "i"));
   if (yearRangeMatch) {
-    result.startYear = yearRangeMatch[1];
+    result.startYear = yearRangeMatch[1].match(/\d{4}/)?.[0] || "";
     result.endYear = yearRangeMatch[2].match(/\d{4}/)?.[0] || "";
   } else {
     const singleYear = text.match(/\b((?:20|19)\d{2})\b/);
@@ -1008,8 +1070,9 @@ export function groupExperienceRecords(section: Section): SourceRecordGroup[] {
 
     // Date regex (simplified)
     const hasDate = /(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?(?:20|19)\d{2}\s*[-–]\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?(?:20|19)\d{2}|present|current|ongoing/i.test(text);
-    // Role-company pattern at start of block
-    const hasRoleCompany = /^([^|•\-–—:]+?)\s*[-–—]\s*([^|•\-–—:]+)/.test(text) || /(?:at|@)\s+([A-Z][A-Za-z0-9\s&.,]+)/.test(text);
+    // Role-company pattern at start of block — the dash must be spaced so
+    // hyphenated words like "4-week" or "IoT-enabled" don't fake-match.
+    const hasRoleCompany = /^([^|•\-–—:]+?)\s+[-–—]\s+([^|•\-–—:]+)/.test(text) || /(?:at|@)\s+([A-Z][A-Za-z0-9\s&.,]+)/.test(text);
     // Expanded title keywords covering academic, creative, and research roles
     const titleKeywords = /(?:Manager|Analyst|Engineer|Developer|Director|VP|Vice President|Head|Chief|Intern|Consultant|Specialist|Officer|President|Lead|Architect|Coordinator|Associate|Assistant|Executive|Strategist|Planner|Designer|Writer|Editor|Scientist|Fellow|Researcher|Trainee|Representative)\b/i;
     const hasTitleKeyword = titleKeywords.test(text);
@@ -1018,8 +1081,11 @@ export function groupExperienceRecords(section: Section): SourceRecordGroup[] {
     // or if it has BOTH a date and a title keyword in the first 80 chars.
     const firstPart = text.slice(0, 80);
     const hasDateAndTitleInFirstPart = /(?:20|19)\d{2}\s*[-–]/.test(firstPart) && titleKeywords.test(firstPart);
+    // Columnar layout: "Company | Location   <spaces>   Date-range" opens a
+    // record even without a dash or role keyword on the same line.
+    const hasCompanyDateLine = hasDate && /\s\|\s/.test(text) && !hasTitleKeyword;
 
-    const isNewRecord = (hasRoleCompany && hasTitleKeyword) || hasDateAndTitleInFirstPart;
+    const isNewRecord = (hasRoleCompany && hasTitleKeyword) || hasDateAndTitleInFirstPart || hasCompanyDateLine;
 
     if (groups.length === 0 || isNewRecord) {
       groups.push({ blocks: [block], sourceEvidence: text });
@@ -1037,8 +1103,14 @@ export function groupExperienceRecords(section: Section): SourceRecordGroup[] {
       const lastHasRole = titleKeywords.test(last.sourceEvidence);
       const currentHasDate = /(?:20|19)\d{2}\s*[-–]/.test(text);
 
+      const currentHasTitle = hasTitleKeyword && !currentHasDate;
+      const lastLacksRole = lastHasDate && !lastHasRole;
       if (!lastHasDate && currentHasDate && lastHasRole) {
         // Previous group is a title-only block; current block provides dates → merge
+        last.blocks.push(block);
+        last.sourceEvidence += "\n" + text;
+      } else if (lastLacksRole && currentHasTitle) {
+        // Company|location+date block first, role on the following line → merge
         last.blocks.push(block);
         last.sourceEvidence += "\n" + text;
       } else if (lastHasDate && !hasTitleKeyword && !hasRoleCompany) {
@@ -1062,7 +1134,7 @@ function extractExperienceFields(group: SourceRecordGroup): Partial<ParsedExperi
 
   // Role - Company pattern (operate on first line only to avoid cross-line contamination)
   const firstLine = text.split("\n")[0] || text;
-  const roleCompanyMatch = firstLine.match(/^([^|•\-–—:]+?)\s*[-–—]\s*([^|•\-–—:]+)/);
+  const roleCompanyMatch = firstLine.match(/^([^|•\-–—:]+?)\s+[-–—]\s+([^|•\-–—:]+)/);
   if (roleCompanyMatch) {
     result.role = roleCompanyMatch[1].trim();
     result.organization = roleCompanyMatch[2].trim();
@@ -1071,6 +1143,25 @@ function extractExperienceFields(group: SourceRecordGroup): Partial<ParsedExperi
     if (atMatch) {
       result.role = atMatch[1].trim();
       result.organization = atMatch[2].trim();
+    }
+  }
+
+  // Columnar layout: "Company | Location    <spaces/tabs>   Date-range"
+  // Split on pipe for org/location, then find the role on a following line.
+  if (!result.organization) {
+    const orgLocMatch = firstLine.match(/^(.+?)\s*\|\s*(.+?)(?:\s{2,}|\s*\t|\s*$)/);
+    if (orgLocMatch) {
+      result.organization = orgLocMatch[1].trim();
+      if (!result.location) result.location = orgLocMatch[2].trim();
+    }
+  }
+  if (!result.role) {
+    for (const line of text.split("\n").slice(1)) {
+      const t = line.trim();
+      if (!t || /^[•\-*]/.test(t) || t.length > 90) continue;
+      if (/(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?(?:20|19)\d{2}\s*[-–]/i.test(t)) continue;
+      if (JOB_TITLE_KEYWORDS.test(t)) { result.role = t; break; }
+      break; // only inspect the immediate continuation line
     }
   }
 
@@ -1122,6 +1213,7 @@ function isPlausibleEducationRecord(e: Partial<ParsedEducation>): boolean {
 
   // Reject institutions that are just dates or location fragments
   if (e.institution && (/^\d{4}[-–]\d{4}$/.test(e.institution) || /^\d{4}$/.test(e.institution))) return false;
+  if (e.institution && /^(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+)?(?:(?:19|20)\d{2}|present|current))?$/i.test(e.institution.trim())) return false;
 
   // Reject if degree is just a generic keyword without context
   if (e.degree && /^(secondary|school|board|education)$/i.test(e.degree)) return false;
@@ -1683,19 +1775,30 @@ function parseProjectsSection(section: Section): ParsedProject[] {
   }
 
   for (const line of lines) {
+    // Sub-labels inside a project entry ("Description of the project:")
+    // are content markers, not new project names.
+    if (/^(description|objective|overview|details?|summary|about)\s*(of\s+the\s+(project|work|initiative))?\s*:?\s*$/i.test(line)) {
+      continue;
+    }
     // Try to split on title separator (e.g., "Title - Description" or "Title: Description")
     let titlePart = "";
     let descPart = "";
     let hasValidTitle = false;
 
-    const sepMatch = line.match(titleSeparatorRegex);
+    // Tab-/column-flattened lines can glue a right column (date/tag) onto a
+    // project title, inflating the "description" side — evaluate the title
+    // on the first column segment only.
+    const titleLine = line.split(/\t+| {3,}/)[0].trim() || line;
+    const sepMatch = titleLine.match(titleSeparatorRegex);
     if (sepMatch) {
       const sepIndex = sepMatch.index || 0;
-      const candidateTitle = line.substring(0, sepIndex).trim();
-      const candidateDesc = line.substring(sepIndex + sepMatch[0].length).trim();
-      
-      // Check if left side looks like a project title
-      if (isPlausibleProjectTitle(candidateTitle) && candidateDesc.length > 10) {
+      const candidateTitle = titleLine.substring(0, sepIndex).trim();
+      const candidateDesc = titleLine.substring(sepIndex + sepMatch[0].length).trim();
+
+      // Split only when the right side is a real description. A short
+      // "Name - Subtitle" title ("Arc - Intelligent Clinical Ecosystem")
+      // must stay whole.
+      if (isPlausibleProjectTitle(candidateTitle) && candidateDesc.length >= 60) {
         titlePart = candidateTitle;
         descPart = candidateDesc;
         hasValidTitle = true;
@@ -1715,8 +1818,9 @@ function parseProjectsSection(section: Section): ParsedProject[] {
         });
       }
       currentProj = { name: titlePart, type: "Academic", description: descPart, technologies: "" };
-    } else if (line.length < 80 && !line.startsWith("•") && !line.startsWith("-") && !line.startsWith("*")) {
-      // Traditional short line = new project name
+    } else if (titleLine.length < 80 && !titleLine.endsWith(".") && !titleLine.startsWith("•") && !titleLine.startsWith("-") && !titleLine.startsWith("*")) {
+      // Traditional short line = new project name. Sentence-like lines
+      // (end with ".") are descriptions, not titles.
       if (currentProj && currentProj.name) {
         projects.push({
           id: generateId(),
@@ -1727,7 +1831,7 @@ function parseProjectsSection(section: Section): ParsedProject[] {
           role: currentProj.role || "",
         });
       }
-      currentProj = { name: line, type: "Academic", description: "", technologies: "" };
+      currentProj = { name: titleLine, type: "Academic", description: "", technologies: "" };
     } else if (currentProj) {
       // Description/bullet line for current project
       const desc = line.replace(/^[•\-*]\s*/, "");
@@ -1871,6 +1975,45 @@ function parseAchievementsSection(section: Section): string[] {
   return parseCertificationsSection(section); // Same logic
 }
 
+/** Line that carries status/venue/type detail rather than a title —
+ * pipe-separated segments, filing/application/patent keywords, or a
+ * bare year. Titles never match these. */
+const PUB_DETAIL_LINE = /\||\b(?:patent|application|registration|design\s+registration|filed|filing|pending|draft|submitted|under\s+preparation|granted|published|accepted|in\s+press|journal|conference|proceedings|doi|volume|vol\.|issue|issn|isbn|trademark|copyright)\b/i;
+const PUB_YEAR_SEG = /^(?:\(?\s*(?:19|20)\d{2}\s*\)?)$/;
+
+// --- Publications & patents parser ---
+// Layout is title line(s) followed by a status/type line:
+//   Blister Packaging System
+//   Indian Patent Application - Draft under preparation (filing expected Aug. 2026)
+// Status, venue and year are extracted ONLY from explicit source text.
+export function parsePublicationsSection(section: Section): ParsedPublication[] {
+  const lines = section.blocks.map(b => b.text.trim()).filter(t => t.length > 2);
+  const pubs: ParsedPublication[] = [];
+
+  for (const line of lines) {
+    if (PUB_DETAIL_LINE.test(line) && pubs.length > 0) {
+      const last = pubs[pubs.length - 1];
+      const segs = line.split("|").map(s => s.trim()).filter(Boolean);
+      for (const seg of segs) {
+        if (PUB_YEAR_SEG.test(seg) && !last.year) {
+          last.year = seg.replace(/[()]/g, "").trim();
+        } else if (/^application\s+no/i.test(seg)) {
+          // filing identifier — keep it inside the raw status line below
+        } else if (!last.status && /\b(?:pending|draft|filed|filing|submitted|under\s+preparation|granted|published|accepted|in\s+press)\b/i.test(seg)) {
+          last.status = seg;
+        } else if (!PUB_YEAR_SEG.test(seg)) {
+          last.venue = last.venue ? `${last.venue} | ${seg}` : seg;
+        }
+      }
+      if (!last.status) last.status = line;
+      last.sourceEvidence.push(line);
+      continue;
+    }
+    pubs.push({ title: line, status: "", venue: "", year: "", sourceEvidence: [line] });
+  }
+  return pubs;
+}
+
 // --- Header region extraction ---
 /** Extract text from blocks that appear before the first section heading.
  *  This isolates the resume header (name, contact, location) from
@@ -1900,7 +2043,7 @@ export function getHeaderRegionText(blocks: TextBlock[]): string {
 // --- Personal data plausibility validators ---
 const JOB_TITLE_KEYWORDS = /(?:Manager|Analyst|Engineer|Developer|Director|VP|Vice President|Head|Chief|Intern|Consultant|Specialist|Officer|President|Lead|Architect|Coordinator|Associate|Assistant|Executive|Strategist|Planner|Designer|Writer|Editor|Scientist|Fellow|Researcher|Trainee|Representative|Scientist|Biologist|Research|Pharmacy|Pharm D|Doctor|Physician|Nurse|Therapist|Pharmacist|Clinical|Research\s+Scientist|Computational\s+Biology)\b/i;
 
-const EDUCATION_KEYWORDS = /(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|SSLC|SSC|PG\s+Diploma|University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge)\b/i;
+const EDUCATION_KEYWORDS = /(?:B\.?Tech\.?|B\.?E\.?|Bachelor|M\.?Tech|M\.?E\.?|M\.?S\.?|M\.?Sc\.?|Master|Ph\.?D\.?|Doctorate|Diploma|MBA|Executive\s+MBA|B\.?Sc\.?|B\.?Com\.?|B\.?S\.?|Class\s+X|Class\s+XII|10th|12th|Senior\s+Secondary|Higher\s+Secondary|Secondary\s+Education|Higher\s+Secondary\s+Education|SSLC|SSC|PG\s+Diploma|University|Institute|College|School|Polytechnic|IIT|NIT|BITS|VIT|MIT|Stanford|Harvard|Oxford|Cambridge)\b/i;
 
 const FIELD_OF_STUDY_KEYWORDS = /(?:Computer|Engineering|Technology|Information|Science|Biology|Mathematics|Physics|Chemistry|Medicine|Pharmacy|Business|Management|Finance|Economics|Commerce|Arts|Humanities|Social|Political|Law|Architecture|Design|Marketing|Accounting|Statistics|Data|Analytics|Cybersecurity|Operations|Research|Development|Software|Hardware|Electrical|Mechanical|Civil|Chemical|Biotechnology|Bioinformatics|Genomics|Life\s+Sciences)\b/i;
 
@@ -2074,12 +2217,22 @@ export function parseCVFromDocument(doc: ExtractedDocument): ParsedCV {
   const nationality = extractNationality(cleanDoc.fullText);
 
   // Step 4: Section-specific parsing (each receives ONLY its section blocks)
-  const educationSection = sections.find(s => s.type === "EDUCATION");
-  const experienceSection = sections.find(s => s.type === "EXPERIENCE");
-  const projectsSection = sections.find(s => s.type === "PROJECTS");
-  const skillsSection = sections.find(s => s.type === "SKILLS");
-  const certificationsSection = sections.find(s => s.type === "CERTIFICATIONS");
-  const achievementsSection = sections.find(s => s.type === "ACHIEVEMENTS");
+  // Merge repeated same-type sections so a split section (or a second
+  // occurrence anywhere in the document) is never silently dropped.
+  const mergeSections = (t: CanonicalSectionType): Section | undefined => {
+    const secs = sections.filter(s => s.type === t);
+    if (!secs.length) return undefined;
+    return secs.length === 1
+      ? secs[0]
+      : { ...secs[0], blocks: secs.flatMap(s => s.blocks) };
+  };
+  const educationSection = mergeSections("EDUCATION");
+  const experienceSection = mergeSections("EXPERIENCE");
+  const projectsSection = mergeSections("PROJECTS");
+  const skillsSection = mergeSections("SKILLS");
+  const certificationsSection = mergeSections("CERTIFICATIONS");
+  const achievementsSection = mergeSections("ACHIEVEMENTS");
+  const publicationsSection = mergeSections("PUBLICATIONS");
 
   const education = educationSection ? 
     (educationSection.blocks.some(b => b.metadata && b.metadata.tableId) ? 
@@ -2097,6 +2250,19 @@ export function parseCVFromDocument(doc: ExtractedDocument): ParsedCV {
   };
   const certifications = certificationsSection ? parseCertificationsSection(certificationsSection) : [];
   const achievements = achievementsSection ? parseAchievementsSection(achievementsSection) : [];
+  // Publications & patents — kept as typed-ish lines; cv-apply merges them
+  // into the canonical achievements[] with their source text intact.
+  const publications = publicationsSection ? parsePublicationsSection(publicationsSection) : [];
+
+  // Preserve unrecognized sections as diagnostics instead of silently losing them.
+  for (const s of sections) {
+    if (s.type !== "UNKNOWN_SECTION") continue;
+    const label = s.heading || s.blocks.find(b => b.text.trim())?.text.trim().slice(0, 60) || "(unnamed)";
+    const contentLines = s.blocks.filter(b => b.text.trim()).length;
+    if (contentLines > 0) {
+      warnings.push(`Unmapped section "${label}" (${contentLines} lines) — content not auto-mapped, review manually.`);
+    }
+  }
 
   // Warnings
   if (!personal.firstName) warnings.push("Could not detect name. Please enter manually.");
@@ -2127,6 +2293,7 @@ export function parseCVFromDocument(doc: ExtractedDocument): ParsedCV {
     skills,
     certifications,
     achievements,
+    publications,
     rawTextLength: cleanDoc.fullText.length,
     parseWarnings: [...warnings, ...cleanDoc.warnings],
     parserMeta: {
