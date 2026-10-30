@@ -1195,7 +1195,61 @@ function WorkExperienceSection() {
           ))}
         </div>
       )}
+      <CoCurricularAchievementsSection />
     </div>
+  );
+}
+
+// ============================================================
+// CO-CURRICULAR ACTIVITIES & ACHIEVEMENTS
+// ============================================================
+function CoCurricularAchievementsSection() {
+  const { register, control } = useFormContext<IntakeProfileForm>();
+  const items = useFieldArray({ control: control as any, name: "achievements", keyName: "_key" });
+
+  return (
+    <section className="mt-8 rounded-card border border-dvivid-border bg-white p-4 sm:p-5" aria-labelledby="co-curricular-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div>
+          <h3 id="co-curricular-heading" className="text-sm font-semibold text-dvivid-text-primary">Co-curricular Activities &amp; Achievements</h3>
+          <p className="text-xs text-dvivid-text-secondary mt-1">Leadership roles, clubs, volunteering, competitions, sports, arts, awards and other activities outside coursework.</p>
+        </div>
+        <button type="button" onClick={() => items.append({ id: crypto.randomUUID(), type: "Co-curricular Activity", title: "", year: "", description: "" })} className="text-sm text-dvivid-primary hover:underline font-medium">+ Add Activity / Achievement</button>
+      </div>
+      {items.fields.length === 0 ? (
+        <p className="rounded-card border border-dashed border-dvivid-border bg-dvivid-surface-alt p-4 text-sm text-dvivid-text-secondary">No co-curricular activities or achievements recorded. This section is optional.</p>
+      ) : (
+        <div className="space-y-4">
+          {items.fields.map((item, index) => (
+            <div key={item._key} className="rounded-card border border-dvivid-border p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-dvivid-text-primary">Activity / Achievement {index + 1}</span>
+                <button type="button" onClick={() => items.remove(index)} className="text-sm text-dvivid-error hover:underline font-medium" aria-label={`Remove activity or achievement ${index + 1}`}>Remove</button>
+              </div>
+              <input type="hidden" {...register(`achievements.${index}.id` as any)} />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField label="Category">
+                  <select className={inputClass} {...register(`achievements.${index}.type` as any)}>
+                    <option value="">Select category</option>
+                    <option value="Co-curricular Activity">Co-curricular Activity</option>
+                    <option value="Leadership">Leadership / Club</option>
+                    <option value="Competition">Competition / Hackathon</option>
+                    <option value="Volunteering">Volunteering / Community Service</option>
+                    <option value="Sports / Arts">Sports / Arts</option>
+                    <option value="Award">Award / Recognition</option>
+                    <option value="Certification">Certification</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </FormField>
+                <FormField label="Title / Activity"><input className={inputClass} placeholder="e.g. Head of Research Club" {...register(`achievements.${index}.title` as any)} /></FormField>
+                <FormField label="Year / Duration"><input className={inputClass} placeholder="e.g. 2023–2025 or 2 years" {...register(`achievements.${index}.year` as any)} /></FormField>
+                <FormField label="Details &amp; Contributions" className="md:col-span-2"><Area name={`achievements.${index}.description`} rows={3} placeholder="Your role, contributions and measurable achievements. Include only verified details." /></FormField>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

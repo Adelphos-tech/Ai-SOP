@@ -94,6 +94,18 @@ const experienceItem = z
   })
   .passthrough();
 
+// Existing student-scope achievements are shared with the CV importer and SOP pipeline.
+// Keep all fields optional so legacy and partially completed records remain editable.
+const achievementItem = z
+  .object({
+    id: optStr,
+    type: optStr,
+    title: optStr,
+    description: optStr,
+    year: optStr,
+  })
+  .passthrough();
+
 const skills = z
   .object({
     technical: z.array(z.string()).optional(),
@@ -119,6 +131,7 @@ export const IntakeProfileSchema = z
     subjects: z.array(subjectItem).optional(),
     skills,
     experience: z.array(experienceItem).optional(),
+    achievements: z.array(achievementItem).optional(),
     noWorkExperience: z.boolean().optional(),
     mastersMotivation: z
       .object({
