@@ -131,7 +131,7 @@ jobs:
         run: pip install unstructured[pdf,docx] --quiet
 
       - name: Install spaCy English model for Unstructured
-        run: python -m spacy download en_core_web_sm
+        run: pip install spacy --quiet && python -m spacy download en_core_web_sm
 
       - name: Run CV parse classification tests
         run: npx tsx tests/phase-cv-parse-classification-tests.ts
