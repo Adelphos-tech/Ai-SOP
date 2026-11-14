@@ -632,6 +632,14 @@ export default function DocumentWorkspacePage() {
             )}
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {(versions.length > 0 || document?.generationStatus === "GENERATED") && (
+              <Link
+                href={`/students/${studentId}/applications/${applicationId}/documents/${documentId}/writing-review`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-input text-sm font-medium bg-dvivid-primary-light text-dvivid-primary hover:bg-dvivid-primary hover:text-white transition-colors"
+              >
+                AI Writing Review →
+              </Link>
+            )}
             {/* One clear status — never "Generating + Draft" together */}
             {generationActive ? (
               <StatusBadge status="IN_REVIEW" label="Generating" />
