@@ -165,7 +165,7 @@ export default function WritingReviewPage() {
   const [application, setApplication] = useState<Application | null>(null);
   const [version, setVersion] = useState<CurrentVersion | null>(null);
   const [detectors, setDetectors] = useState<DetectorScore[]>([]);
-  const [detectConfig, setDetectConfig] = useState<{ runnable: string[]; maxDetectorsPerRun: number; estimatedPerDetectorUsd: number; configured: boolean } | null>(null);
+  const [detectConfig, setDetectConfig] = useState<{ runnable: string[]; maxDetectorsPerRun: number; estimatedPerDetectorUsd: number; configured: boolean; rewritePricing?: { balancedPer1k: number; titanPer1k: number } } | null>(null);
   const [provider, setProvider] = useState<RewriteProvider | null>(null);
 
   // draft = working copy the consultant is refining
@@ -181,6 +181,7 @@ export default function WritingReviewPage() {
   const [editingManual, setEditingManual] = useState(false);
 
   const [checking, setChecking] = useState(false);
+  const [rewriting, setRewriting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState("");
@@ -279,6 +280,46 @@ export default function WritingReviewPage() {
   const detectionStale = detection ? detectionSnapshot.current !== draft : false;
 
   // ---------- actions ----------
+
+  // Brick 3: rewrite only the selected passage — consent + cost shown first.
+  async function handleRegenerate() {
+    if (!selected || selected.stale) return;
+    const text = selected.passage.text;
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    const per1k = mode === "titan"
+      ? detectConfig?.rewritePricing?.titanPer1k ?? 0.50
+      : detectConfig?.rewritePricing?.balancedPer1k ?? 0.08;
+    const est = (words / 1000) * per1k;
+    if (!window.confirm(
+      `Send this sentence to Ryne's ${mode === "titan" ? "Titan" : "Balanced"} humanizer?\n\n` +
+      `Estimated cost: ~$${est.toFixed(4)} (${words} words at documented $${per1k}/1K words)\n\n` +
+      `Only the selected sentence is sent; a rewrite never guarantees any detector score.`)) return;
+    setRewriting(true); setNotice("");
+    try {
+      const res = await fetch(`/api/application/writing-review?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rewrite",
+          passageText: text,
+          mode,
+          confirmPaid: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setNotice(data.error || "Rewrite failed"); return; }
+      if (data.suggestion?.content) {
+        setSuggestions(prev => ({ ...prev, [selected.passage.id]: data.suggestion.content }));
+        if (typeof data.suggestion.aiScore === "number") {
+          setNotice(`Beast Mode score reported by Ryne: ${data.suggestion.aiScore}% — not guaranteed to match any detector.`);
+        }
+      }
+    } catch (e: any) {
+      setNotice(e?.message || "Rewrite failed");
+    } finally {
+      setRewriting(false);
+    }
+  }
 
   async function handleRecheck() {
     if (dirty && !window.confirm(
@@ -732,8 +773,8 @@ export default function WritingReviewPage() {
                     >
                       Edit
                     </SecondaryButton>
-                    <SecondaryButton onClick={() => setNotice("Regenerate requires a connected rewrite provider (Brick 3).")} disabled={!provider?.configured}>
-                      Regenerate
+                    <SecondaryButton onClick={handleRegenerate} disabled={!provider?.configured || selected.stale || rewriting}>
+                      {rewriting ? "Rewriting…" : "Regenerate"}
                     </SecondaryButton>
                     <SecondaryButton onClick={() => decideRevision("REJECTED")} disabled={selected.stale}>
                       Keep Original

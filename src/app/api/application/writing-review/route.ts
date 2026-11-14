@@ -25,6 +25,7 @@ import {
   listDetectorDescriptors,
 } from "@/lib/writing-review/detectors";
 import { runDetection } from "@/lib/writing-review/detection";
+import { runRewrite } from "@/lib/writing-review/rewrite";
 
 async function loadReviewContext(request: NextRequest) {
   const consultant = await requireConsultantSession(request);
@@ -84,6 +85,7 @@ export async function GET(request: NextRequest) {
         maxDetectorsPerRun: Number(process.env.RYNE_MAX_DETECTORS_PER_RUN ?? 3),
         estimatedPerDetectorUsd: Number(process.env.RYNE_COST_PER_DETECTOR_USD ?? 0.02),
         configured: listDetectorDescriptors().some(d => d.configured),
+        rewritePricing: { balancedPer1k: 0.08, titanPer1k: 0.50 },
       },
       detection: null, // no check has run; no fabricated findings
     });
@@ -110,6 +112,39 @@ export async function POST(request: NextRequest) {
     const { current } = ctx as any;
     if (!current) {
       return NextResponse.json({ error: "Document has no generated version to review." }, { status: 400 });
+    }
+    if (body.action === "rewrite") {
+      // Brick 3: rewrite ONLY the selected passage, and only after
+      // verifying the text exists in the authorized current version —
+      // the client cannot make us send arbitrary text.
+      const passageText = String(body.passageText ?? "");
+      if (!passageText || !current.content.includes(passageText)) {
+        return NextResponse.json(
+          { error: "Selected text was not found in the current document version. Reload the review and try again." },
+          { status: 409 });
+      }
+      const mode = body.mode === "titan" ? "titan" : "balanced";
+      const out = await runRewrite({
+        text: passageText,
+        mode,
+        confirmPaid: body.confirmPaid === true,
+        signal: request.signal,
+      });
+      switch (out.kind) {
+        case "OK":
+          return NextResponse.json({ suggestion: out.suggestion });
+        case "NOT_CONFIGURED":
+        case "CONSENT_REQUIRED":
+          return NextResponse.json({ error: out.notice }, { status: 400 });
+        case "OVER_BUDGET":
+          return NextResponse.json({ error: out.notice }, { status: 402 });
+        case "TOO_LONG":
+          return NextResponse.json({ error: out.notice }, { status: 413 });
+        case "CANCELLED":
+          return NextResponse.json({ error: "Rewrite cancelled." }, { status: 499 });
+        case "ERROR":
+          return NextResponse.json({ error: out.message }, { status: 502 });
+      }
     }
     if (body.action !== "recheck") {
       return NextResponse.json({ error: "Unsupported action" }, { status: 400 });

@@ -72,23 +72,30 @@ export type DetectionOutcome =
 const lastRunAt = new Map<string, number>();
 const resultCache = new Map<string, { at: number; detection: DetectionResult }>();
 const inFlight = new Map<string, Promise<DetectionOutcome>>();
-const spend = { day: "", usd: 0 }; // in-memory daily spend ledger
+const spend = { day: "", usd: 0 }; // in-memory daily spend ledger (shared with rewrite calls)
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 200;
 
 /** Daily spend ceiling — blocks further paid calls once exceeded.
  *  LIMITATION: in-memory; resets on restart and is per-process. With
  *  multiple PM2/Node processes the effective cap multiplies. */
-function dailyBudgetUsd(): number {
+export function dailyBudgetUsd(): number {
   const n = Number(process.env.RYNE_DAILY_BUDGET_USD ?? 5);
   return Number.isFinite(n) && n > 0 ? n : 5;
 }
-function checkSpend(addUsd: number): boolean {
+export function checkSpend(addUsd: number): boolean {
   const today = new Date().toISOString().slice(0, 10);
   if (spend.day !== today) { spend.day = today; spend.usd = 0; }
   if (spend.usd + addUsd > dailyBudgetUsd()) return false;
   spend.usd += addUsd;
   return true;
+}
+/** Release a reserved amount (e.g. a follower request covered by an
+ *  in-flight leader, or a call that returned before billing). */
+export function refundSpend(usd: number) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (spend.day !== today) { spend.day = today; spend.usd = 0; }
+  spend.usd = Math.max(0, spend.usd - usd);
 }
 function cacheSet(key: string, detection: DetectionResult, now: number) {
   if (resultCache.size >= CACHE_MAX_ENTRIES) {
@@ -103,7 +110,7 @@ function cacheSet(key: string, detection: DetectionResult, now: number) {
 }
 /** Never leak the API key (or other configured secrets) into an
  *  error string — strip it if a provider echoes it back. */
-function sanitizeMessage(msg: string): string {
+export function sanitizeMessage(msg: string): string {
   const key = ryneKey();
   return key ? msg.split(key).join("[redacted]") : msg;
 }
