@@ -122,6 +122,9 @@ export interface DocumentRevision {
   /** Final text applied when status is EDITED. */
   editedText?: string;
   status: RevisionStatus;
+  /** True once the revision's text has actually been written into the
+   *  draft — prevents bulk apply from replaying an applied revision. */
+  applied?: boolean;
   createdAt: string;
   decidedAt?: string;
 }

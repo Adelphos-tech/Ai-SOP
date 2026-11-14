@@ -175,6 +175,15 @@ check("ai-score response mapping preserves source + score semantics", () => {
   assert.equal(res.scorePercent, 15.3);
 });
 
+check("fallback score takes the PRODUCING provider's meaning", () => {
+  const res = mapAiScoreResponse("reilaa", {
+    source: "zerogpt", aiScore: 44, classification: "MIXED",
+    fallback: { from: "reilaa", to: "zerogpt" },
+  }, "t");
+  assert.equal(res.detector, "REILAA");          // card attribution stays requested
+  assert.equal(res.scoreMeaning, "AI_PROBABILITY_PERCENT"); // ZeroGPT semantics
+});
+
 check("fallback attribution is preserved", () => {
   const res = mapAiScoreResponse("gptzero", {
     source: "zerogpt", aiScore: 44, classification: "MIXED",

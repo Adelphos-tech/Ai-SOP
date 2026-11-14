@@ -330,17 +330,17 @@ export default function WritingReviewPage() {
       createdAt: new Date().toISOString(),
       decidedAt: new Date().toISOString(),
     };
-    setRevisions(prev => [...prev.filter(r => r.passageId !== p.id || r.status !== "APPROVED"), rev]);
     if (status === "APPROVED") {
       const out = applyApprovedRevisions(draft, [rev]);
-      if (out.applied.length) setDraft(out.content);
+      if (out.applied.length) { rev.applied = true; setDraft(out.content); }
       else setNotice("Could not apply that revision — the sentence no longer matches the draft.");
     }
+    setRevisions(prev => [...prev.filter(r => r.passageId !== p.id || r.status !== "APPROVED"), rev]);
     setEditingManual(false);
   }
 
   function applyAllApproved() {
-    const pending = revisions.filter(r => r.status === "APPROVED");
+    const pending = revisions.filter(r => r.status === "APPROVED" && !r.applied);
     if (!pending.length) { setNotice("No approved revisions to apply."); return; }
     const out = applyApprovedRevisions(draft, pending);
     if (out.skipped.length) {
@@ -348,6 +348,7 @@ export default function WritingReviewPage() {
     }
     if (out.applied.length) {
       setDraft(out.content);
+      setRevisions(prev => prev.map(r => out.applied.includes(r.id) ? { ...r, applied: true } : r));
       setNotice(`Applied ${out.applied.length} approved change(s).`);
     }
   }
@@ -401,20 +402,25 @@ export default function WritingReviewPage() {
 
   function restoreRevision(passageId: string) {
     const revs = revisions.filter(r => r.passageId === passageId);
-    const lastApproved = [...revs].reverse().find(r => r.status === "APPROVED" || r.status === "EDITED");
+    const lastApproved = [...revs].reverse().find(r => (r.status === "APPROVED" || r.status === "EDITED") && r.applied !== false);
     if (!lastApproved) return;
     if (!window.confirm("Restore the original sentence for this passage? This overwrites the approved rewrite.")) return;
     // find current text range for the applied text and swap back
     const appliedText = lastApproved.status === "EDITED" ? lastApproved.editedText! : lastApproved.suggestionText;
-    const idx = draft.indexOf(appliedText);
+    // The rewritten text may occur earlier in the draft — restore the
+    // occurrence nearest to the reviewed passage's recorded offset,
+    // never the first occurrence.
+    let idx = -1, best = Infinity;
+    for (let i = draft.indexOf(appliedText); i !== -1; i = draft.indexOf(appliedText, i + 1)) {
+      const d = Math.abs(i - lastApproved.passageStart);
+      if (d < best) { best = d; idx = i; }
+    }
     if (idx < 0) { setNotice("Could not locate the rewritten text to restore."); return; }
     setDraft(draft.slice(0, idx) + lastApproved.originalText + draft.slice(idx + appliedText.length));
-    setRevisions(prev => [...prev, {
-      ...lastApproved,
-      id: `rev-${Date.now()}-restore`,
-      status: "REJECTED",
-      decidedAt: new Date().toISOString(),
-    }]);
+    // Retire the consumed revision so bulk apply cannot reinstate it.
+    setRevisions(prev => prev.map(r => r.id === lastApproved.id
+      ? { ...r, status: "REJECTED", applied: false, decidedAt: new Date().toISOString() }
+      : r));
   }
 
   // ---------- render helpers ----------

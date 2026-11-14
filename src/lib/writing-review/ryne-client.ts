@@ -56,6 +56,10 @@ export function mapAiScoreResponse(
 ): DetectorScore {
   const requested = TOOL_TO_DETECTOR[requestedTool];
   const descriptor = listDetectorDescriptors().find(d => d.detector === requested);
+  // The score's semantics belong to the detector that PRODUCED it — on a
+  // fallback run that is res.source, not the requested tool.
+  const sourceDescriptor = listDetectorDescriptors().find(d => d.ryneTool === res.source)
+    ?? descriptor;
 
   if (res.error || res.error_msg) {
     return {
@@ -89,7 +93,7 @@ export function mapAiScoreResponse(
     classification: res.classification,
     source: res.source,
     fallback: res.fallback,
-    scoreMeaning: descriptor?.scoreMeaning,
+    scoreMeaning: sourceDescriptor?.scoreMeaning,
     granularity,
     lastCheckedAt: checkedAt,
     note: res.fallback
