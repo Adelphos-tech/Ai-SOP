@@ -165,6 +165,7 @@ export default function WritingReviewPage() {
   const [application, setApplication] = useState<Application | null>(null);
   const [version, setVersion] = useState<CurrentVersion | null>(null);
   const [detectors, setDetectors] = useState<DetectorScore[]>([]);
+  const [detectConfig, setDetectConfig] = useState<{ runnable: string[]; maxDetectorsPerRun: number; estimatedPerDetectorUsd: number; configured: boolean } | null>(null);
   const [provider, setProvider] = useState<RewriteProvider | null>(null);
 
   // draft = working copy the consultant is refining
@@ -199,6 +200,7 @@ export default function WritingReviewPage() {
       setVersion(data.currentVersion);
       setDetectors(data.detectors || []);
       setProvider(data.rewriteProvider);
+      setDetectConfig(data.detectionConfig || null);
       if (data.currentVersion) {
         setDraft(data.currentVersion.content);
         setBaseVersionId(data.currentVersion.id);
@@ -281,12 +283,27 @@ export default function WritingReviewPage() {
   async function handleRecheck() {
     if (dirty && !window.confirm(
       "The document has unsaved edits. A recheck would run on unsaved text only after saving. Continue anyway?")) return;
+    const runnable = detectConfig?.runnable ?? [];
+    if (detectConfig && !detectConfig.configured) {
+      setNotice("Ryne is not configured — set RYNE_API_KEY on the server to enable detection.");
+      return;
+    }
+    if (detectConfig && runnable.length === 0) {
+      setNotice("No detector is currently runnable. Check RYNE_API_KEY configuration.");
+      return;
+    }
+    // Explicit consent: detection sends the document text to Ryne and
+    // each selected detector is a billed request.
+    const chosen = runnable.slice(0, detectConfig?.maxDetectorsPerRun ?? runnable.length);
+    const est = chosen.length * (detectConfig?.estimatedPerDetectorUsd ?? 0);
+    if (chosen.length && !window.confirm(
+      `Run AI detection on the current document?\n\nDetectors: ${chosen.join(", ")}\nEstimated cost: ~$${est.toFixed(2)} (Ryne prepaid credits)\n\nThe document text will be sent to Ryne's detection API.`)) return;
     setChecking(true); setNotice("");
     try {
       const res = await fetch(`/api/application/writing-review?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "recheck" }),
+        body: JSON.stringify({ action: "recheck", detectors: chosen, confirmPaid: chosen.length > 0 }),
       });
       const data = await res.json();
       if (!res.ok) { setNotice(data.error || "Check failed"); return; }

@@ -22,7 +22,9 @@ import {
   computeContentHash,
   listDetectorStatuses,
   ryneRewriteStatus,
+  listDetectorDescriptors,
 } from "@/lib/writing-review/detectors";
+import { runDetection } from "@/lib/writing-review/detection";
 
 async function loadReviewContext(request: NextRequest) {
   const consultant = await requireConsultantSession(request);
@@ -75,6 +77,14 @@ export async function GET(request: NextRequest) {
       },
       detectors: listDetectorStatuses(),
       rewriteProvider: ryneRewriteStatus(),
+      detectionConfig: {
+        runnable: listDetectorDescriptors()
+          .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured)
+          .map(d => d.detector),
+        maxDetectorsPerRun: Number(process.env.RYNE_MAX_DETECTORS_PER_RUN ?? 3),
+        estimatedPerDetectorUsd: Number(process.env.RYNE_COST_PER_DETECTOR_USD ?? 0.02),
+        configured: listDetectorDescriptors().some(d => d.configured),
+      },
       detection: null, // no check has run; no fabricated findings
     });
   } catch (error: any) {
@@ -104,22 +114,36 @@ export async function POST(request: NextRequest) {
     if (body.action !== "recheck") {
       return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
     }
-    const detectors = listDetectorStatuses();
-    const runnable = detectors.filter(d => d.status !== "NOT_CONNECTED" && d.status !== "UNAVAILABLE");
-    if (runnable.length === 0) {
-      return NextResponse.json({
-        detection: {
-          baseVersionId: current.id,
-          contentHash: computeContentHash(current.content),
-          checkedAt: new Date().toISOString(),
-          scores: detectors,
-          passages: [],
-        },
-        notice: "No AI detector is connected yet, so nothing was checked. Connect Ryne (RYNE_API_KEY) to enable detection.",
-      });
+    // Brick 2: server-side Ryne calls — consent + budget + timeout +
+    // cooldown + per-detector isolation enforced inside runDetection.
+    const docId = url.searchParams.get("documentId")!;
+    const outcome = await runDetection(docId, {
+      detectors: Array.isArray(body.detectors) ? body.detectors : [],
+      confirmPaid: body.confirmPaid === true,
+      baseVersionId: current.id,
+      content: current.content,
+      signal: request.signal,
+    });
+    switch (outcome.kind) {
+      case "OK":
+        return NextResponse.json({
+          detection: outcome.detection,
+          estimatedCostUsd: outcome.estimatedCostUsd,
+        });
+      case "NOT_CONFIGURED":
+      case "CONSENT_REQUIRED":
+        return NextResponse.json({
+          detection: outcome.detection, notice: outcome.notice,
+        });
+      case "OVER_BUDGET":
+        return NextResponse.json({ error: outcome.notice }, { status: 402 });
+      case "TOO_LONG":
+        return NextResponse.json({ error: outcome.notice }, { status: 413 });
+      case "RATE_LIMITED":
+        return NextResponse.json({ error: outcome.notice }, { status: 429 });
+      case "CANCELLED":
+        return NextResponse.json({ error: "Check cancelled." }, { status: 499 });
     }
-    // Brick 2: run configured providers and map genuine responses.
-    return NextResponse.json({ error: "Detection providers are not implemented yet." }, { status: 501 });
   } catch (error: any) {
     if (error instanceof AuthError) return authErrorResponse(error);
     return NextResponse.json({ error: error?.message || "Internal server error" }, { status: 500 });
