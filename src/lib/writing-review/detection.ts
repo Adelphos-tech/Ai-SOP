@@ -176,10 +176,10 @@ async function callDetector(
         note: "Check failed — a failed detector is not a 0% score.",
       } };
     }
-    return {
-      raw: data,
-      score: mapAiScoreResponse(tool, data ?? { error: true, error_msg: "empty response" }, checkedAt),
-    };
+    const score = mapAiScoreResponse(tool, data ?? { error: true, error_msg: "empty response" }, checkedAt);
+    // Providers may echo secrets inside 200-status error messages.
+    if (score.error) score.error.message = sanitizeMessage(score.error.message);
+    return { raw: data, score };
   } catch (err: any) {
     const cancelled = ac.signal.aborted && signal?.aborted;
     return { raw: null, score: {
@@ -238,7 +238,7 @@ export async function runDetection(
     };
   }
 
-  const requested = opts.detectors.filter(d => TOOL_BY_DETECTOR[d]);
+  const requested = [...new Set(opts.detectors.filter(d => TOOL_BY_DETECTOR[d]))];
   if (!opts.confirmPaid || requested.length === 0) {
     base.scores = listDetectorStatuses();
     return {
@@ -341,7 +341,11 @@ export async function runDetection(
   }
 
   const detection: DetectionResult = { ...base, scores, passages };
-  cacheSet(ck, detection, now());
+  // Only cache clean results — a transient provider failure must not
+  // lock the user out of a retry for the cache TTL.
+  const requestedErrored = requested.some(det =>
+    scores.some(s => s.detector === det && s.status === "ERROR"));
+  if (!requestedErrored) cacheSet(ck, detection, now());
   if (opts.signal?.aborted) return { kind: "CANCELLED", detection };
 
   return {

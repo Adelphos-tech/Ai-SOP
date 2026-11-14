@@ -75,6 +75,20 @@ export function mapAiScoreResponse(
     };
   }
 
+  if (typeof res.aiScore !== "number" && !res.classification) {
+    return {
+      detector: requested ?? "REILAA",
+      status: "ERROR",
+      error: {
+        detector: requested ?? "REILAA",
+        code: "PROVIDER_ERROR",
+        message: "Provider returned no score or classification",
+        retryable: true,
+      },
+      note: "Check failed — a failed detector is not a 0% score.",
+    };
+  }
+
   const detector = requested
     ?? (Object.keys(TOOL_TO_DETECTOR).includes(res.source)
       ? TOOL_TO_DETECTOR[res.source] : "REILAA");

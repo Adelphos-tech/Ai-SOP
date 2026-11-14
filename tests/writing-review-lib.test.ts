@@ -201,6 +201,12 @@ check("provider errors map to ERROR, never a 0% score", () => {
   assert.equal(res.error?.retryable, true);
 });
 
+check("empty provider responses are ERROR, not SCORED", () => {
+  const res = mapAiScoreResponse("zerogpt", {} as any, "t");
+  assert.equal(res.status, "ERROR");
+  assert.equal(res.scorePercent, undefined);
+});
+
 check("sentence findings anchor only unambiguous text", () => {
   const found = mapSentenceFindings(DOC, "REILAA", {
     source: "x",
