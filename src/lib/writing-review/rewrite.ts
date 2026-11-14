@@ -10,6 +10,7 @@
 import {
   checkSpend,
   dailyBudgetUsd,
+  paidCallsEnabled,
   ryneBaseUrl,
   sanitizeMessage,
 } from "./detection";
@@ -76,6 +77,14 @@ export async function runRewrite(opts: RewriteRequestOptions): Promise<RewriteOu
     return {
       kind: "NOT_CONFIGURED",
       notice: "Ryne is not configured — set RYNE_API_KEY on the server to enable rewrites. No charges were made.",
+    };
+  }
+  // Brick 4A kill switch — hard OFF before consent, spend reservation
+  // or any network call.
+  if (!paidCallsEnabled()) {
+    return {
+      kind: "NOT_CONFIGURED",
+      notice: "Ryne paid calls are disabled — set RYNE_PAID_CALLS_ENABLED=1 on the server to enable rewrites. No text was sent and no charges were made.",
     };
   }
   const mode = opts.mode === "titan" ? "titan" : "balanced";

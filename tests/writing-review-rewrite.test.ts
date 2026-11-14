@@ -24,6 +24,9 @@ const base = (over: any = {}) => ({
 
 async function main() {
   process.env.RYNE_API_KEY = "ryne_sk_test";
+  // Brick 4A: kill switch must be ON for mocked paid-path tests —
+  // transport is still a stub, so no real call is ever made.
+  process.env.RYNE_PAID_CALLS_ENABLED = "1";
 
   {
     const out = await runRewrite(base({ confirmPaid: false }));

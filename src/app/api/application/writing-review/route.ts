@@ -13,7 +13,7 @@ import {
   validateDocumentOwnership,
 } from "@/lib/application/application-repository";
 import {
-  requireConsultantSession,
+  getConsultantSession,
   authorizeStudentAccess,
   authErrorResponse,
   AuthError,
@@ -28,7 +28,14 @@ import { runDetection } from "@/lib/writing-review/detection";
 import { runRewrite } from "@/lib/writing-review/rewrite";
 
 async function loadReviewContext(request: NextRequest) {
-  const consultant = await requireConsultantSession(request);
+  // Brick 4A: real session auth — requireConsultantSession() is a
+  // documented dummy bypass and must NOT gate document content or
+  // paid provider calls. Fail closed: no valid session → 401.
+  const session = await getConsultantSession(request);
+  if (!session) {
+    throw new AuthError(401, "UNAUTHENTICATED", "Authentication required. Please log in.");
+  }
+  const consultant = session.consultant;
   const { searchParams } = new URL(request.url);
   const documentId = searchParams.get("documentId");
   const applicationId = searchParams.get("applicationId");

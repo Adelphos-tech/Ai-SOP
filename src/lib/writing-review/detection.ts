@@ -30,6 +30,11 @@ function ryneKey(): string | null {
   const k = process.env.RYNE_API_KEY?.trim();
   return k || null;
 }
+/** Server-side kill switch for all billed Ryne calls. OFF unless the
+ *  env var is exactly "1"; a configured API key never overrides it. */
+export function paidCallsEnabled(): boolean {
+  return process.env.RYNE_PAID_CALLS_ENABLED === "1";
+}
 export function ryneBaseUrl(): string {
   return (process.env.RYNE_API_BASE_URL?.trim() || "https://ryne.ai")
     .replace(/\/+$/, "");
@@ -242,6 +247,16 @@ export async function runDetection(
       kind: "NOT_CONFIGURED",
       detection: base,
       notice: "Ryne is not configured — set RYNE_API_KEY on the server to enable detection. No charges were made.",
+    };
+  }
+  // Brick 4A kill switch — hard OFF before consent, cooldown, cache,
+  // spend reservation or any network call.
+  if (!paidCallsEnabled()) {
+    base.scores = listDetectorStatuses();
+    return {
+      kind: "NOT_CONFIGURED",
+      detection: base,
+      notice: "Ryne paid calls are disabled — set RYNE_PAID_CALLS_ENABLED=1 on the server to enable live detection. No text was sent and no charges were made.",
     };
   }
 
