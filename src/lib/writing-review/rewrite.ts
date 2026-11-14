@@ -92,17 +92,18 @@ export async function runRewrite(opts: RewriteRequestOptions): Promise<RewriteOu
   }
 
   const est = rewriteCostUsd(text, mode);
+  // Dedup BEFORE reserving spend: a concurrent identical request shares
+  // the leader's paid call and must not trip the budget check.
+  const fk = `${computeContentHash(text)}:${mode}`;
+  const existing = inFlight.get(fk);
+  if (existing) return existing;
+
   if (!checkSpend(est)) {
     return {
       kind: "OVER_BUDGET",
       notice: `Daily Ryne spend cap (~$${dailyBudgetUsd().toFixed(2)}) reached. Estimated cost blocked: ~$${est.toFixed(4)}.`,
     };
   }
-
-  // Dedup: identical in-flight rewrites share one paid call.
-  const fk = `${computeContentHash(text)}:${mode}`;
-  const existing = inFlight.get(fk);
-  if (existing) { refundSpend(est); return existing; }
 
   const run = (async (): Promise<RewriteOutcome> => {
     const ac = new AbortController();

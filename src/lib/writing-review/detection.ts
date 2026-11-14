@@ -290,6 +290,11 @@ export async function runDetection(
   lastRunAt.set(documentKey, now());
   const fetcher = opts.fetcher ?? fetch;
 
+  // Concurrency dedup BEFORE reserving spend: an identical in-flight
+  // run shares its promise — followers must not trip the budget check.
+  const inflight = inFlight.get(ck);
+  if (inflight) return inflight;
+
   // Daily spend ceiling — reserve the estimated cost before calling.
   // In-memory only; a restart clears the ledger (documented limit).
   const est = estimatedCostUsd(requested.length);
@@ -300,14 +305,6 @@ export async function runDetection(
       requested: requested.length,
       allowed: 0,
     };
-  }
-
-  // Concurrency dedup: an identical in-flight run shares its promise
-  // so concurrent submissions cannot produce duplicate paid calls.
-  const inflight = inFlight.get(ck);
-  if (inflight) {
-    spend.usd -= est; // already reserved by the leader
-    return inflight;
   }
   const run = (async (): Promise<DetectionOutcome> => {
   const settled = await Promise.allSettled(
