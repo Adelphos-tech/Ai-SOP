@@ -10,7 +10,6 @@
 import {
   checkSpend,
   dailyBudgetUsd,
-  refundSpend,
   ryneBaseUrl,
   sanitizeMessage,
 } from "./detection";
