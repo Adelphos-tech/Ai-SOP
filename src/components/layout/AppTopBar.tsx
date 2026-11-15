@@ -7,11 +7,31 @@
 // ============================================================
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { LogoutButton } from "@/components/auth/AuthGuard";
+import { useNavigationGuard } from "./NavigationGuardContext";
 
 export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
   const router = useRouter();
+  const { checkGuard } = useNavigationGuard();
   const [query, setQuery] = useState("");
+  const [consultantName, setConsultantName] = useState("");
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (data?.consultant?.name) setConsultantName(data.consultant.name);
+      })
+      .catch(() => {});
+  }, []);
+
+  const initials = consultantName
+    .split(/\s+/)
+    .map((w: string) => w[0] || "")
+    .slice(0, 2)
+    .join("")
+    .toUpperCase() || "DC";
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,14 +77,14 @@ export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
       </form>
 
       <div className="ml-auto flex items-center gap-3">
-        {/* Login disabled — brand initials stand in for the profile menu */}
         <div
           className="w-8 h-8 rounded-full bg-dvivid-primary-light flex items-center justify-center"
-          title="D-Vivid Consultant"
+          title={consultantName || "Consultant account"}
           aria-label="Consultant account"
         >
-          <span className="text-xs font-semibold text-dvivid-primary">DC</span>
+          <span className="text-xs font-semibold text-dvivid-primary">{initials}</span>
         </div>
+        <LogoutButton confirmLeave={() => checkGuard("/login")} />
       </div>
     </header>
   );

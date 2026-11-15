@@ -2,15 +2,8 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
-
-// ============================================================
-// LOGIN NOT REQUIRED — temporary bypass
-// ============================================================
-// The consultant profile / sign-out button is hidden while the
-// login module is disabled. To re-enable auth, restore the
-// /api/auth/me fetch and the <LogoutButton /> import below.
-// ============================================================
+import { useEffect, useState } from "react";
+import { LogoutButton } from "@/components/auth/AuthGuard";
 
 const navLinks = [
   { href: "/students", label: "Students" },
@@ -19,8 +12,23 @@ const navLinks = [
 export function AppHeader() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [consultantName, setConsultantName] = useState("");
 
-  const initials = "DC";
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (data?.consultant?.name) setConsultantName(data.consultant.name);
+      })
+      .catch(() => {});
+  }, []);
+
+  const initials = consultantName
+    .split(/\s+/)
+    .map((w: string) => w[0] || "")
+    .slice(0, 2)
+    .join("")
+    .toUpperCase() || "DC";
 
   return (
     <header className="bg-white border-b border-dvivid-border sticky top-0 z-30" style={{ height: "72px" }}>
@@ -50,11 +58,15 @@ export function AppHeader() {
           })}
         </nav>
 
-        {/* Right: Profile (login disabled — showing brand mark only) */}
+        {/* Right: Consultant profile + sign out */}
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-dvivid-primary-light flex items-center justify-center">
+          <div
+            className="w-9 h-9 rounded-full bg-dvivid-primary-light flex items-center justify-center"
+            title={consultantName || undefined}
+          >
             <span className="text-sm font-semibold text-dvivid-primary">{initials}</span>
           </div>
+          <LogoutButton />
         </div>
 
         {/* Mobile toggle */}

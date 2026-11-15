@@ -110,9 +110,19 @@ cd "$(dirname "$APP_DIR")"
 mv "$APP_DIR" "$PREVIOUS_DIR"
 mv "$STAGING_DIR" "$APP_DIR"
 
-# Step 3: Restart PM2
+# Step 3: Restart PM2. PM2_BOOTSTRAP=1 (staging only) recreates the
+# process bound to APP_PORT instead of restarting it — used where the
+# process may not exist yet or must not inherit prod's port/config.
 echo "=== Restarting PM2 ==="
-pm2 restart "$PM2_NAME" --update-env
+if [ "${PM2_BOOTSTRAP:-}" = "1" ]; then
+  pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
+  pm2 start "$APP_DIR/node_modules/next/dist/bin/next" \
+    --name "$PM2_NAME" --cwd "$APP_DIR" \
+    -- start -p "${APP_PORT:-5010}" -H 127.0.0.1
+  pm2 save
+else
+  pm2 restart "$PM2_NAME" --update-env
+fi
 
 # Step 4: Wait for startup
 sleep 3

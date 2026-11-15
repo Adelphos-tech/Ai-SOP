@@ -1,9 +1,10 @@
 // ============================================================
-// POST /api/auth/logout
-// GET  /api/auth/me
+// POST /api/auth/session  (logout)
+// GET  /api/auth/session  (current consultant)
 // ============================================================
 // POST: Destroys the current session and clears cookie.
 // GET:  Returns the current consultant (or 401 if not logged in).
+//       /api/auth/me exposes the same read for client guards.
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";

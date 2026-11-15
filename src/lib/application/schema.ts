@@ -4,7 +4,8 @@
 // ============================================================
 // Isolated database: sop_ai_app
 // Tables: students, applications, application_documents, document_versions,
-//         consultants, consultant_sessions
+//         consultants, consultant_sessions,
+//         ryne_spend_operations, ryne_spend_counters, ryne_spend_events
 // ============================================================
 
 export const SCHEMA_SQL = `
@@ -169,6 +170,69 @@ CREATE TABLE IF NOT EXISTS document_versions (
   UNIQUE KEY uq_versions_doc_number (document_id, version_number),
   CONSTRAINT fk_versions_document FOREIGN KEY (document_id)
     REFERENCES application_documents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Brick 4B-B: immutable operation identity, claimed atomically with
+-- the reservation — the cross-process dedup guarantee.
+CREATE TABLE IF NOT EXISTS ryne_spend_operations (
+  operation_id   CHAR(36) PRIMARY KEY,
+  request_kind   VARCHAR(16)  NOT NULL,
+  actor_id       VARCHAR(64)  DEFAULT NULL,
+  student_id     CHAR(36)     DEFAULT NULL,
+  application_id CHAR(36)     DEFAULT NULL,
+  document_id    CHAR(36)     DEFAULT NULL,
+  version_id     CHAR(36)     DEFAULT NULL,
+  units_key      VARCHAR(255) NOT NULL,
+  created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Brick 4B-B: Ryne spend ledger — atomic budget counters.
+-- Effective consumption = reserved_usd + settled_usd.
+CREATE TABLE IF NOT EXISTS ryne_spend_counters (
+  scope        VARCHAR(16)  NOT NULL,
+  scope_key    VARCHAR(16)  NOT NULL,
+  reserved_usd DECIMAL(14,6) NOT NULL DEFAULT 0,
+  settled_usd  DECIMAL(14,6) NOT NULL DEFAULT 0,
+  updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+               ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (scope, scope_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Brick 4B-B: one row per billable unit (detector or humanizer call).
+-- (operation_id, request_kind, request_unit) is the idempotency identity.
+-- Never stores document text, prompts or provider payloads.
+CREATE TABLE IF NOT EXISTS ryne_spend_events (
+  id                  CHAR(36) PRIMARY KEY,
+  operation_id        CHAR(36) NOT NULL,
+  request_kind        ENUM('DETECTION','HUMANIZER') NOT NULL,
+  provider            VARCHAR(32) NOT NULL DEFAULT 'ryne',
+  request_unit        VARCHAR(32) NOT NULL,
+  status              ENUM('RESERVED','SETTLED','REFUNDED','UNKNOWN')
+                      NOT NULL DEFAULT 'RESERVED',
+  counter_day         CHAR(10) NOT NULL,
+  actor_id            VARCHAR(64)  DEFAULT NULL,
+  student_id          CHAR(36)     DEFAULT NULL,
+  application_id      CHAR(36)     DEFAULT NULL,
+  document_id         CHAR(36)     DEFAULT NULL,
+  version_id          CHAR(36)     DEFAULT NULL,
+  estimated_usd       DECIMAL(12,6) NOT NULL,
+  settled_usd         DECIMAL(12,6) DEFAULT NULL,
+  provider_cost_usd   DECIMAL(12,6) DEFAULT NULL,
+  cost_basis          ENUM('ESTIMATED','UNVERIFIED_ESTIMATE','PROVIDER_REPORTED')
+                      NOT NULL,
+  price_unit          VARCHAR(16) NOT NULL,
+  unit_price_usd      DECIMAL(12,6) DEFAULT NULL,
+  unit_quantity       DECIMAL(14,2) NOT NULL,
+  pricing_version     VARCHAR(64) NOT NULL,
+  pricing_captured_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  outcome             VARCHAR(64) DEFAULT NULL,
+  provider_ref        VARCHAR(128) DEFAULT NULL,
+  reserved_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  settled_at          TIMESTAMP NULL DEFAULT NULL,
+  UNIQUE KEY uq_ryne_op_unit (operation_id, request_kind, request_unit),
+  INDEX idx_ryne_status (status),
+  INDEX idx_ryne_document (document_id),
+  INDEX idx_ryne_reserved_at (reserved_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Phase SOP-AI-34: Migration statements for existing databases.

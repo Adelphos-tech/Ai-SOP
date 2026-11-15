@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { AppSidebar, AppSidebarMobile } from "./AppSidebar";
 import { AppTopBar } from "./AppTopBar";
 import { NavigationGuardProvider } from "./NavigationGuardContext";
@@ -52,6 +53,12 @@ function StaleClientNotice() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Bare layout for the public sign-in screen — no workspace chrome.
+  if (pathname === "/login") {
+    return <main className="min-h-screen bg-dvivid-page-bg">{children}</main>;
+  }
 
   return (
     <NavigationGuardProvider>

@@ -22,7 +22,7 @@
 
 import "./test-setup";
 import { NextRequest } from "next/server";
-import { closeDbPool, assertTestDatabase, cleanupTestDb } from "./test-setup";
+import { closeDbPool, assertTestDatabase, cleanupTestDb, ensureTestSession, TEST_SESSION_TOKEN } from "./test-setup";
 import { POST as createStudentPOST } from "../src/app/api/application/student/route";
 import { POST as createApplicationPOST } from "../src/app/api/application/create/route";
 import { PUT as profilePUT, GET as profileGET } from "../src/app/api/application/profile/route";
@@ -42,22 +42,27 @@ function assert(condition: boolean, message: string) {
   else { failed++; console.error(`  ✗ FAIL: ${message}`); }
 }
 
+const AUTH_COOKIE = `dvivid_session=${TEST_SESSION_TOKEN}`;
+
 function post(url: string, body: unknown): NextRequest {
   return new NextRequest(`http://localhost${url}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", cookie: AUTH_COOKIE },
     body: JSON.stringify(body),
   });
 }
 function put(url: string, body: unknown): NextRequest {
   return new NextRequest(`http://localhost${url}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", cookie: AUTH_COOKIE },
     body: JSON.stringify(body),
   });
 }
 function get(url: string): NextRequest {
-  return new NextRequest(`http://localhost${url}`, { method: "GET" });
+  return new NextRequest(`http://localhost${url}`, {
+    method: "GET",
+    headers: { cookie: AUTH_COOKIE },
+  });
 }
 
 // ~900 real words so approval passes the SOP template's 800-1000 word gate
@@ -83,7 +88,10 @@ const fullProfile = {
   projects: [{ id: "p1", name: "ML Pipeline", description: "Built a pipeline", role: "Lead" }],
   skills: { programming: ["Python"], technical: ["ML"] },
   mastersMotivation: { whyNow: "Career pivot", whyField: "Love ML", academicMotivation: "Deep dive" },
-  countryQuestionnaire: { countryCode: "US", answers: { q1: "Top programs", q2: "Return to India" } },
+  countryQuestionnaire: { countryCode: "USA", answers: {
+    whyCountry: "Top programs", whyNotHomeCountry: "Research gaps",
+    careerSupport: "Industry links", postStudyIntentions: "Return to India",
+  } },
   careerGoals: {
     shortTerm: { role: "ML Engineer", industry: "Tech" },
     longTerm: { vision: "CTO", goals: "Lead AI teams", homeCountryPlans: "Return and build" },
@@ -92,6 +100,7 @@ const fullProfile = {
 
 async function run() {
   await assertTestDatabase();
+  await ensureTestSession();
   console.log("=== Canonical E2E: New Applicant ===\n");
 
   // 1. Create student
