@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
 const studentId = require('node:crypto').randomUUID();
+const crypto = require('node:crypto');
 const profile = { _revision: 7, personalData: { firstName: 'Existing', lastName: 'Student' } };
 
 if (process.env.CV_UPLOAD_SMOKE_CHILD === '1') {
@@ -31,6 +32,14 @@ async function main() {
   const [[database]] = await connection.query('SELECT DATABASE() AS name');
   assert.equal(database.name, 'sop_ai_app_test');
   await connection.execute('INSERT INTO students (id, first_name, last_name, email, profile_data) VALUES (?, ?, ?, ?, ?)', [studentId, 'Existing', 'Student', 'smoke@example.test', JSON.stringify(profile)]);
+  // Routes require a real consultant session — seed one in the test DB.
+  const sessionToken = 'c'.repeat(63) + 'a';
+  const tokenHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+  await connection.execute(
+    "INSERT INTO consultants (id, email, password_hash, name, role, is_active) VALUES ('cv-smoke-cons', 'cv@smoke.test', 'x', 'CV Smoke', 'ADMIN', TRUE) ON DUPLICATE KEY UPDATE is_active = TRUE");
+  await connection.execute(
+    "INSERT IGNORE INTO consultant_sessions (id, consultant_id, token_hash, expires_at) VALUES (?, 'cv-smoke-cons', ?, ?)",
+    [crypto.randomUUID(), tokenHash, new Date(Date.now() + 8 * 3600e3)]);
   const [before] = await connection.execute('SELECT * FROM students WHERE id = ?', [studentId]);
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'cv-production-smoke-'));
   const port = Number(process.env.CV_SMOKE_PORT || 5097);
@@ -72,7 +81,7 @@ async function main() {
       const form = new FormData();
       form.append('studentId', studentId);
       form.append('file', new Blob([buffer], { type: mime }), name);
-      const response = await fetch(`${origin}/api/application/cv-upload`, { method: 'POST', body: form, signal: AbortSignal.timeout(30000) });
+      const response = await fetch(`${origin}/api/application/cv-upload`, { method: 'POST', body: form, headers: { cookie: `dvivid_session=${sessionToken}` }, signal: AbortSignal.timeout(30000) });
       const body = await response.json();
       assert.equal(response.status, status, `${name}: ${body.code || 'no error code'}`);
       if (code) {
