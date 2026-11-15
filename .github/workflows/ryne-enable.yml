@@ -1,0 +1,51 @@
+# One-shot: flip RYNE_PAID_CALLS_ENABLED=1 for the owner's manual test.
+name: Prod Ryne Enable
+on:
+  push:
+    branches: [prod-ryne-ops]
+    paths: [.github/workflows/ryne-enable.yml]
+permissions:
+  contents: read
+jobs:
+  enable:
+    name: Enable paid calls
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host sop-production
+            HostName $DEPLOY_HOST
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 ~/.ssh/config
+      - name: Set RYNE_PAID_CALLS_ENABLED=1 + restart
+        run: |
+          ssh sop-production 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          ENV_FILE="/opt/sop-ai-app/.env.local"
+          cp -p "$ENV_FILE" "${ENV_FILE}.pre-ryne-enable-$(date +%Y%m%d-%H%M%S)"
+          grep -v -E '^RYNE_PAID_CALLS_ENABLED=' "$ENV_FILE" > "$ENV_FILE.new" || true
+          printf 'RYNE_PAID_CALLS_ENABLED=1\n' >> "$ENV_FILE.new"
+          chmod 600 "$ENV_FILE.new" && mv "$ENV_FILE.new" "$ENV_FILE"
+          grep -c '^RYNE_PAID_CALLS_ENABLED=1$' "$ENV_FILE" | xargs echo "paid-on lines:"
+          pm2 restart sop-app --update-env >/dev/null && pm2 save >/dev/null
+          sleep 4
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "http://127.0.0.1:5010/login" || true)
+          echo "local /login after restart: HTTP $code"
+          [ "$code" = "200" ] || exit 1
+          REMOTE
