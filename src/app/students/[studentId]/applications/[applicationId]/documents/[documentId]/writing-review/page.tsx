@@ -246,7 +246,7 @@ export default function WritingReviewPage() {
     };
     window.addEventListener("beforeunload", handler);
     if (dirty) {
-      registerGuard(() => window.confirm("You have unsaved AI Writing Review changes. Leave anyway?"));
+      registerGuard(() => window.confirm("You have unsaved AI Writing Review changes. Leave anyway?"), { signOut: true });
     } else {
       unregisterGuard();
     }
