@@ -1,0 +1,409 @@
+# ============================================================
+# Staging Pipeline — isolated staging environment on the VPS.
+#
+# Triggers:
+#   - push to the `staging` branch (works before this file is
+#     on the default branch — push-triggered workflows run from
+#     the pushed ref's own files)
+#   - workflow_dispatch with an explicit ref (once on default)
+#
+# NEVER touches production:
+#   APP_DIR  /opt/sop-ai-staging    (prod: /opt/sop-ai-app)
+#   PM2      sop-app-staging        (prod: sop-app)
+#   PORT     5011                   (prod: 5010)
+#   DB       sop_ai_staging         (prod: sop_ai_app)
+#   SHARED   /opt/sop-ai-staging-shared
+#
+# Pipeline: validate -> provision (idempotent) -> deploy ->
+# schema/seed -> health + anonymous-access check -> rollback.
+# ============================================================
+
+name: Staging Pipeline
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to deploy"
+        required: false
+        type: string
+      provision:
+        description: "Force re-provision (runs anyway — idempotent)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-deployment
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22.22.2"
+  RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+  APP_DIR: /opt/sop-ai-staging
+  SHARED_DIR: /opt/sop-ai-staging-shared
+  PM2_NAME: sop-app-staging
+  APP_PORT: "5011"
+  STUB_NAME: ryne-stub
+  LOCAL_HEALTH_URL: http://127.0.0.1:5011
+
+jobs:
+  # ============================================================
+  # Validate — tsc + writing-review suites + build.
+  # ============================================================
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: sop_ai_app_test
+          MYSQL_USER: sop_test
+          MYSQL_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+    env:
+      SOP_DB_HOST: 127.0.0.1
+      SOP_DB_USER: sop_test
+      SOP_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+      SOP_DB_NAME: sop_ai_app_test
+      SOP_TEST_DB_HOST: 127.0.0.1
+      SOP_TEST_DB_USER: sop_test
+      SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+      SOP_TEST_DB_NAME: sop_ai_app_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Initialize test database schema
+        run: npx tsx scripts/init-test-db.ts
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Writing Review suites
+        env:
+          NODE_OPTIONS: --import ./tests/mysql2-mock-preload.mjs
+        run: |
+          for t in writing-review-spend-ledger writing-review-detection-ledger \
+                   writing-review-rewrite-ledger writing-review-detection \
+                   writing-review-rewrite writing-review-lib; do
+            [ -f "tests/$t.test.ts" ] || continue
+            echo "=== $t ==="
+            npx tsx "tests/$t.test.ts"
+          done
+
+      - name: Writing Review auth suite
+        env:
+          NODE_OPTIONS: --import ./tests/writing-review-auth-preload.mjs
+        run: npx tsx tests/writing-review-auth.test.ts
+
+      - name: Deployment/rollback safety tests
+        run: node tests/ci-deployment-tests.cjs
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ID: staging-${{ github.sha }}-${{ github.run_number }}
+
+      - name: Archive build
+        run: tar --exclude=.next/cache -czf next-build.tar.gz .next
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-build
+          path: next-build.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ============================================================
+  # Provision — idempotent. Uses repo-level DEPLOY_* SSH creds
+  # (server access predates the staging deploy keypair, which
+  # this job installs for the deploy job below).
+  # ============================================================
+  provision:
+    name: Provision staging host
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host sop-server
+            HostName $DEPLOY_HOST
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Upload provisioning script
+        run: |
+          chmod 755 scripts/ci-provision-staging.sh
+          scp scripts/ci-provision-staging.sh sop-server:/tmp/ci-provision-staging.sh
+
+      - name: Run provisioning on server
+        env:
+          STAGING_HOSTNAME: ${{ vars.STAGING_HOSTNAME }}
+          STAGING_HTPASSWD: ${{ secrets.STAGING_HTPASSWD }}
+          STAGING_DEPLOY_PUBKEY: ${{ secrets.STAGING_DEPLOY_PUBKEY }}
+          STAGING_DB_ROOT_PW: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          STAGING_DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL }}
+        run: |
+          [[ "$STAGING_HOSTNAME" =~ ^[a-zA-Z0-9.-]+$ ]]
+          # Secrets shipped as a single-quoted env file over stdin —
+          # never on the remote command line, never in logs.
+          {
+            printf "STAGING_HOSTNAME='%s'\n" "$STAGING_HOSTNAME"
+            printf "STAGING_HTPASSWD='%s'\n" "$STAGING_HTPASSWD"
+            printf "STAGING_DEPLOY_PUBKEY='%s'\n" "$STAGING_DEPLOY_PUBKEY"
+            printf "STAGING_DB_ROOT_PW='%s'\n" "$STAGING_DB_ROOT_PW"
+            printf "STAGING_DB_PASSWORD='%s'\n" "$STAGING_DB_PASSWORD"
+            printf "CERTBOT_EMAIL='%s'\n" "$CERTBOT_EMAIL"
+          } | ssh sop-server "umask 077 && cat > /tmp/staging-provision.env"
+          ssh sop-server \
+            "set -a; . /tmp/staging-provision.env; set +a; \
+             bash /tmp/ci-provision-staging.sh; \
+             rm -f /tmp/staging-provision.env /tmp/ci-provision-staging.sh"
+
+      - name: Verify isolation on server
+        run: |
+          ssh sop-server '
+            set -e
+            test -d /opt/sop-ai-app
+            pm2 describe sop-app >/dev/null
+            test -d /opt/sop-ai-staging
+            test -f /opt/sop-ai-staging/.env
+            mysql -u root -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=\"sop_ai_staging\"" | grep -q sop_ai_staging
+            echo ISOLATION_OK
+          '
+
+  # ============================================================
+  # Deploy — staging env secrets, staging paths only.
+  # ============================================================
+  deploy:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: provision
+    environment: staging
+    env:
+      HEALTH_URL: https://${{ vars.STAGING_HOSTNAME }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: staging-build
+
+      - run: tar -xzf next-build.tar.gz
+
+      - name: Setup staging SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.STAGING_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host sop-staging
+            HostName $DEPLOY_HOST
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy to staging
+        id: deploy
+        run: |
+          STAGING_DIR="${APP_DIR}.incoming-${RELEASE_ID}"
+          ssh sop-staging "test ! -e '$STAGING_DIR' && mkdir -m 700 '$STAGING_DIR'"
+
+          rsync -az \
+            --exclude node_modules --exclude '.next*' --exclude .git \
+            --exclude '.env*' --exclude next-build.tar.gz \
+            --exclude uploads --exclude logs --exclude backups --exclude baselines \
+            ./ "sop-staging:$STAGING_DIR/"
+
+          rsync -az .next/ "sop-staging:$STAGING_DIR/.next/"
+
+          ssh sop-staging \
+            "APP_DIR='$APP_DIR' SHARED_DIR='$SHARED_DIR' PM2_NAME='$PM2_NAME' \
+             APP_PORT='$APP_PORT' LOCAL_HEALTH_URL='$LOCAL_HEALTH_URL' \
+             PM2_BOOTSTRAP=1 \
+             RELEASE_ID='$RELEASE_ID' NEXT_PUBLIC_BUILD_ID='staging-${{ github.sha }}-${{ github.run_number }}' \
+             bash '$STAGING_DIR/scripts/ci-deploy.sh'"
+
+          echo "deploy_done=true" >> "$GITHUB_OUTPUT"
+
+      - name: Schema, ledger migration, stub provider, smoke seed
+        env:
+          SMOKE_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+        run: |
+          ssh sop-staging \
+            "APP_DIR='$APP_DIR' STUB_NAME='$STUB_NAME' \
+             STAGING_SMOKE_EMAIL='$SMOKE_EMAIL' \
+             STAGING_SMOKE_PASSWORD='$SMOKE_PASSWORD' \
+             bash -s" <<'REMOTE'
+          set -e
+          set -a; . "$APP_DIR/.env"; set +a
+          cd "$APP_DIR"
+          # Idempotent app schema + ledger migration (staging DB only)
+          npx tsx scripts/init-schema.ts >/dev/null
+          mysql -h 127.0.0.1 -u "$SOP_DB_USER" -p"$SOP_DB_PASSWORD" "$SOP_DB_NAME" \
+            < migrations/2026-11-14-ryne-spend-ledger.sql
+          # Synthetic smoke data (credentials from env, never logged)
+          npx tsx scripts/seed-staging-smoke.ts
+          # Ryne stub provider (localhost only)
+          if ! pm2 describe "$STUB_NAME" >/dev/null 2>&1; then
+            pm2 start "$APP_DIR/scripts/ryne-stub-server.cjs" --name "$STUB_NAME"
+          fi
+          pm2 save
+          REMOTE
+
+      - name: Health check
+        id: health
+        env:
+          BA_USER: ${{ secrets.STAGING_BASIC_AUTH_USER }}
+          BA_PASS: ${{ secrets.STAGING_BASIC_AUTH_PASSWORD }}
+        run: |
+          sleep 5
+          EXPECTED_BUILD_ID=$(cat .next/BUILD_ID)
+          [[ "$EXPECTED_BUILD_ID" =~ ^[a-zA-Z0-9_-]+$ ]]
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+              -u "$BA_USER:$BA_PASS" "$HEALTH_URL/" || true)
+            echo "attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ] && \
+               curl -sf --max-time 15 -o /dev/null -u "$BA_USER:$BA_PASS" \
+                 "$HEALTH_URL/_next/static/$EXPECTED_BUILD_ID/_buildManifest.js"; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Staging health check failed"; exit 1
+
+      - name: Verify anonymous access is denied
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$HEALTH_URL/")
+          [ "$CODE" = "401" ] || { echo "::error::anonymous request returned $CODE"; exit 1; }
+          echo "Anonymous access correctly rejected (401)"
+
+      # Hosted smoke test — real session login, real seeded document,
+      # detection + rewrite routed to the LOCAL Ryne stub (no real
+      # provider calls, no credits). Verifies the paid path end-to-end.
+      - name: Hosted smoke check (login → detect → rewrite → ledger)
+        env:
+          BA_USER: ${{ secrets.STAGING_BASIC_AUTH_USER }}
+          BA_PASS: ${{ secrets.STAGING_BASIC_AUTH_PASSWORD }}
+          SMOKE_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+        run: |
+          set -e
+          JAR=$(mktemp)
+          # 1. Real login → session cookie
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+            -u "$BA_USER:$BA_PASS" -c "$JAR" -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"$SMOKE_PASSWORD\"}" \
+            "$HEALTH_URL/api/auth/login")
+          [ "$CODE" = "200" ] || { echo "::error::login returned $CODE"; exit 1; }
+          grep -q dvivid_session "$JAR" || { echo "::error::no session cookie"; exit 1; }
+          echo "login: 200 + session cookie"
+
+          # 2. Seeded smoke IDs are deterministic (see seed-staging-smoke.ts)
+          SID=deadbeef-0000-4000-8000-000000000002
+          AID=deadbeef-0000-4000-8000-000000000003
+          DID=deadbeef-0000-4000-8000-000000000004
+
+          # 3. GET writing-review — document + detector catalog
+          RES=$(curl -s --max-time 15 -u "$BA_USER:$BA_PASS" -b "$JAR" \
+            "$HEALTH_URL/api/application/writing-review?documentId=$DID&applicationId=$AID&studentId=$SID")
+          echo "$RES" | grep -q '"documentTitle":"Staging Smoke SOP"' || { echo "::error::review load failed"; echo "$RES" | head -c 300; exit 1; }
+          echo "$RES" | grep -q '"pricingUnverified":true' || { echo "::error::pricing flag missing"; exit 1; }
+          echo "review GET: document + detector catalog + pricingUnverified"
+
+          # 4. Detection run — hits the local stub, settles in the ledger
+          OPID=$(cat /proc/sys/kernel/random/uuid)
+          DET=$(curl -s --max-time 30 -u "$BA_USER:$BA_PASS" -b "$JAR" -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"recheck\",\"studentId\":\"$SID\",\"applicationId\":\"$AID\",\"documentId\":\"$DID\",\"confirmPaid\":true,\"consent\":{\"detectorRun\":true,\"rewrite\":true},\"operationId\":\"$OPID\",\"detectors\":[\"REILAA\"]}" \
+            "$HEALTH_URL/api/application/writing-review")
+          if ! echo "$DET" | grep -q '"status":"SCORED"'; then
+            echo "::error::detect not SCORED"
+            echo "$DET" | grep -o '"notice":"[^"]*"' || echo "$DET" | head -c 400
+            ssh sop-staging 'echo "--- .env var names ---"; grep -o "^[A-Z_]*" /opt/sop-ai-staging/.env | sort;
+              echo "--- pm2 cwd ---"; pm2 describe sop-app-staging | grep -E "exec cwd|script path" || true'
+            exit 1
+          fi
+          echo "detection: SCORED via stub (42%)"
+
+          # 5. Balanced rewrite — stub suggestion
+          OPID2=$(cat /proc/sys/kernel/random/uuid)
+          RW=$(curl -s --max-time 60 -u "$BA_USER:$BA_PASS" -b "$JAR" -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"rewrite\",\"documentId\":\"$DID\",\"applicationId\":\"$AID\",\"studentId\":\"$SID\",\"confirmPaid\":true,\"consent\":{\"detectorRun\":true,\"rewrite\":true},\"operationId\":\"$OPID2\",\"mode\":\"balanced\",\"passageText\":\"During my internship at a regional hospital, I built\"}" \
+            "$HEALTH_URL/api/application/writing-review")
+          echo "$RW" | grep -q '"suggestion"' || { echo "::error::rewrite failed"; echo "$RW" | head -c 400; exit 1; }
+          echo "rewrite: suggestion returned via stub"
+
+          # 6. Ledger — real events recorded against staging DB
+          ssh sop-staging 'set -a; . /opt/sop-ai-staging/.env; set +a;
+            mysql -h 127.0.0.1 -u "$SOP_DB_USER" -p"$SOP_DB_PASSWORD" "$SOP_DB_NAME" -N -e "SELECT status,request_unit,cost_basis FROM ryne_spend_events ORDER BY reserved_at"' \
+            | tee /tmp/ledger.txt
+          grep -Pq "SETTLED\treilaa\tUNVERIFIED_ESTIMATE" /tmp/ledger.txt || { echo "::error::no settled detection event"; exit 1; }
+          grep -Pq "SETTLED\tbalanced\tUNVERIFIED_ESTIMATE" /tmp/ledger.txt || { echo "::error::no settled rewrite event"; exit 1; }
+          echo "ledger: SETTLED detection + rewrite events verified"
+
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outputs.deploy_done == 'true'
+        run: |
+          ssh sop-staging \
+            "APP_DIR='$APP_DIR' PM2_NAME='$PM2_NAME' \
+             LOCAL_HEALTH_URL='$LOCAL_HEALTH_URL' RELEASE_ID='$RELEASE_ID' \
+             bash '$APP_DIR/scripts/ci-rollback.sh'" || true
