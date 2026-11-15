@@ -1,0 +1,103 @@
+# ============================================================
+# CV Parsing & Upload Validation
+# ============================================================
+# Runs the heavy CV-specific checks (Tesseract OCR, Python
+# unstructured + spaCy, parse classification, production upload
+# endpoint) on every pull request and push to main.
+#
+# This coverage was moved out of deploy.yml so it no longer sits
+# on the production deployment critical path (~2m50s of apt/pip
+# installs). It still runs on every main push — in parallel with
+# the deploy — and gates every PR before merge.
+# ============================================================
+
+name: CV Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cv-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22.22.2"
+
+jobs:
+  cv-tests:
+    name: CV Parse & Upload
+    runs-on: ubuntu-latest
+    env:
+      SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+      SOP_TEST_DB_HOST: 127.0.0.1
+      SOP_TEST_DB_USER: sop_test
+      SOP_TEST_DB_NAME: sop_ai_app_test
+      SOP_DB_HOST: 127.0.0.1
+      SOP_DB_USER: sop_test
+      SOP_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+      SOP_DB_NAME: sop_ai_app_test
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: sop_ai_app_test
+          MYSQL_USER: sop_test
+          MYSQL_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/requirements-cv.txt
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize test database schema
+        run: npx tsx scripts/init-test-db.ts
+        env:
+          SOP_TEST_DB_PASSWORD: ${{ secrets.SOP_TEST_DB_PASSWORD }}
+
+      - name: Install system dependencies for PDF processing (Tesseract OCR)
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
+
+      - name: Install Python dependencies for CV parse classification tests
+        run: pip install -r .github/requirements-cv.txt --quiet
+
+      - name: Install spaCy English model for Unstructured
+        run: pip install spacy --quiet && python -m spacy download en_core_web_sm
+
+      - name: Run CV parse classification tests
+        run: npx tsx tests/phase-cv-parse-classification-tests.ts
+
+      - name: Build for CV upload integration test
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
+
+      - name: Test production CV upload endpoint
+        run: node tests/cv-production-upload.cjs

@@ -1,0 +1,4 @@
+# Python deps for the CV parse-classification and upload tests.
+# Lives in its own file so setup-python can hash it for the pip cache.
+unstructured[pdf,docx]
+spacy

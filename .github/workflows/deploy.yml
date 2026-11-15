@@ -5,7 +5,9 @@
 #
 # Pipeline:
 #   1. Install dependencies
-#   2. Run all tests (must pass to proceed)
+#   2. Run fast gate tests — type check, phase suites, deploy safety
+#      (the heavy CV/OCR/Python validation lives in cv-tests.yml and
+#      runs on every PR and main push, off the deploy critical path)
 #   3. Build Next.js production bundle
 #   4. Deploy to production server via SSH
 #   5. Health check — auto-rollback on failure
@@ -124,28 +126,22 @@ jobs:
       - name: Run CV provenance regression test
         run: npx tsx tests/cv-provenance-verification.test.ts
 
-      - name: Install system dependencies for PDF processing (Tesseract OCR)
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
-
-      - name: Install Python dependencies for CV parse classification tests
-        run: pip install unstructured[pdf,docx] --quiet
-
-      - name: Install spaCy English model for Unstructured
-        run: pip install spacy --quiet && python -m spacy download en_core_web_sm
-
-      - name: Run CV parse classification tests
-        run: npx tsx tests/phase-cv-parse-classification-tests.ts
-
       - name: Test deployment and rollback safety
         run: node tests/ci-deployment-tests.cjs
 
-      - name: Build for CV upload integration test
+      # Reuse Next's incremental webpack/TS cache between runs. The cache
+      # is excluded from the deployed artifact below, so this only speeds
+      # up compilation; the bundle itself is still built fresh each run.
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('package-lock.json') }}
+
+      - name: Build production bundle
         run: npm run build
         env:
           NEXT_PUBLIC_BUILD_ID: ci-${{ github.sha }}-${{ github.run_number }}
-
-      - name: Test production CV upload endpoint
-        run: node tests/cv-production-upload.cjs
 
       - name: Archive tested build
         run: tar --exclude=.next/cache -czf next-build.tar.gz .next
