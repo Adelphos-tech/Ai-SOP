@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { inputClass } from "@/components/ui/FormField";
 import { PrimaryButton } from "@/components/ui";
+import { safeRedirectPath } from "@/lib/auth/safe-redirect";
 
 // ============================================================
 // /login — consultant sign-in.
@@ -32,8 +33,7 @@ function LoginForm() {
         body: JSON.stringify({ email, password }),
       });
       if (res.ok) {
-        const redirect = searchParams.get("redirect") || "/students";
-        router.replace(redirect.startsWith("/") ? redirect : "/students");
+        router.replace(safeRedirectPath(searchParams.get("redirect"), window.location.origin));
         router.refresh();
         return;
       }
