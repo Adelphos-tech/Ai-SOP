@@ -1,0 +1,27 @@
+name: One-shot — fix RYNE_API_KEY in prod env
+on:
+  push:
+    branches: [prod-ryne-unpin]
+    paths: [.github/workflows/ryne-unpin.yml]
+jobs:
+  fixkey:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write real key + restart + verify
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          env:
+            RYNE_KEY: ${{ secrets.RYNE_API_KEY }}
+          script: |
+            set -e
+            cd /opt/sop-ai-app
+            cp -a .env.local ".env.local.pre-keyfix-$(date +%Y%m%d-%H%M%S)"
+            sed -i '/RYNE_API_KEY/d' .env.local
+            printf 'RYNE_API_KEY=%s\n' "$RYNE_KEY" >> .env.local
+            echo "key lines now: $(grep -c '^RYNE_API_KEY=' .env.local), chars: $(sed -n 's/^RYNE_API_KEY=//p' .env.local | tr -d '\r\n' | wc -c)"
+            pm2 restart sop-app --update-env
+            sleep 6
+            curl -s -o /dev/null -w "health -> %{http_code}\n" http://localhost:5010/login
