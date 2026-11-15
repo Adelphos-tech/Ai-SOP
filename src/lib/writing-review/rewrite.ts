@@ -12,7 +12,7 @@ import {
   ryneBaseUrl,
   sanitizeMessage,
 } from "./detection";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import {
   canonicalUnitsKey,
   getOperation,
@@ -119,10 +119,12 @@ export async function runRewrite(opts: RewriteRequestOptions): Promise<RewriteOu
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   // Dedup BEFORE reserving spend: a concurrent retry of the SAME
   // logical operation shares the leader's paid call and must not
-  // create a second reservation. The key is scoped to the operation id
-  // AND the authenticated actor/document/version — identical text from
-  // a different consultant, document, version or deliberate new
-  // operation is a separate billable run, never a shared result.
+  // create a second reservation. The key is scoped to the operation id,
+  // the authenticated actor/document/version AND the mode + passage —
+  // identical text from a different consultant, document, version or
+  // deliberate new operation is a separate billable run, and an
+  // operation id reused for another passage or mode falls through to
+  // the ledger's identity check instead of sharing this result.
   // The run promise is registered synchronously so the dedup window
   // covers the awaited identity claim and reservation too.
   const operationId = opts.operationId ?? randomUUID();
@@ -131,6 +133,8 @@ export async function runRewrite(opts: RewriteRequestOptions): Promise<RewriteOu
     opts.actorId ?? "",
     opts.ids?.documentId ?? "",
     opts.ids?.versionId ?? "",
+    mode,
+    createHash("sha256").update(text).digest("hex"),
   ].join("|");
   const existing = inFlight.get(fk);
   if (existing) return existing;

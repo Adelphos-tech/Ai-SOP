@@ -253,6 +253,17 @@ async function main() {
     assert.ok(snap.day.reservedUsd + snap.day.settledUsd > 0);
   });
 
+  await check("concurrent opId reuse for a different passage → never served the other passage's rewrite", async () => {
+    const before = calls.n;
+    const id = randomUUID();
+    const outs = await Promise.all([
+      runRewrite(opts({ operationId: id })),
+      runRewrite(opts({ operationId: id, text: "A different passage selected elsewhere in the essay." })),
+    ]);
+    assert.deepEqual(outs.map(o => o.kind).sort(), ["DUPLICATE", "OK"]);
+    assert.equal(calls.n - before, 1);
+  });
+
   delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
   delete process.env.RYNE_DAILY_BUDGET_USD;
   console.log(`\n${pass} passed, ${fail} failed`);
