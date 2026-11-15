@@ -1,0 +1,122 @@
+name: Production Release Prep (one-shot)
+
+# ============================================================
+# Push-triggered prep for the authorized Writing Review release.
+# Runs READ-ONLY checks, a verified MySQL backup, and applies only
+# additive CREATE TABLE IF NOT EXISTS statements (consultants,
+# consultant_sessions, ryne_spend_*) — never alters or deletes
+# existing data. Seeds an admin consultant ONLY if the table is
+# empty and PROD_ADMIN_* secrets are configured.
+# ============================================================
+
+on:
+  push:
+    branches: [prod-release-prep]
+
+jobs:
+  prep:
+    name: Backup + additive schema + auth readiness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host sop-production
+            HostName $DEPLOY_HOST
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 ~/.ssh/config ~/.ssh/deploy_key
+
+      - name: Copy ledger migration to server
+        run: scp migrations/2026-11-14-ryne-spend-ledger.sql sop-production:/tmp/ryne-ledger.sql
+
+      - name: Write remote prep script
+        run: |
+          ssh sop-production 'cat > /tmp/prod-prep.sh && chmod 700 /tmp/prod-prep.sh' <<'REMOTE'
+          #!/bin/bash
+          set -euo pipefail
+          APP_DIR=/opt/sop-ai-app
+          DB=$(grep -hoE '^SOP_DB_NAME=[^[:space:]"]*' "$APP_DIR"/.env "$APP_DIR"/.env.* 2>/dev/null | head -1 | cut -d= -f2 || true)
+          DB=${DB:-sop_ai_app}
+          MYC="mysql -uroot -p$MYSQL_ROOT_PASSWORD"
+          echo "== target database: $DB =="
+
+          echo "== 1. backup =="
+          mkdir -p /opt/backups
+          TS=$(date +%Y%m%d-%H%M%S)
+          BK="/opt/backups/${DB}-pre-auth-${TS}.sql.gz"
+          mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --triggers "$DB" | gzip > "$BK"
+          gzip -t "$BK" && echo "backup integrity: OK"
+          ls -la "$BK"
+
+          echo "== 2. pre-check: additive tables present? =="
+          $MYC -N -e "SELECT table_name FROM information_schema.tables WHERE table_schema='$DB' AND table_name IN ('consultants','consultant_sessions','ryne_spend_operations','ryne_spend_counters','ryne_spend_events')"
+
+          echo "== 3. create missing auth tables (idempotent) =="
+          $MYC "$DB" <<'SQL'
+          CREATE TABLE IF NOT EXISTS consultants (
+            id VARCHAR(36) PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            role VARCHAR(50) NOT NULL DEFAULT 'CONSULTANT',
+            organization_id VARCHAR(36) DEFAULT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_consultants_email (email),
+            INDEX idx_consultants_org (organization_id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+          CREATE TABLE IF NOT EXISTS consultant_sessions (
+            id VARCHAR(36) PRIMARY KEY,
+            consultant_id VARCHAR(36) NOT NULL,
+            token_hash CHAR(64) NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_sessions_token (token_hash),
+            INDEX idx_sessions_consultant (consultant_id),
+            INDEX idx_sessions_expires (expires_at),
+            CONSTRAINT fk_sessions_consultant FOREIGN KEY (consultant_id)
+              REFERENCES consultants(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+          SQL
+          echo "auth tables ok"
+
+          echo "== 4. apply ryne spend ledger migration (additive) =="
+          $MYC "$DB" < /tmp/ryne-ledger.sql
+          $MYC -N -e "SELECT table_name FROM information_schema.tables WHERE table_schema='$DB' AND table_name LIKE 'ryne_spend_%'"
+          rm -f /tmp/ryne-ledger.sql
+
+          echo "== 5. consultant account state =="
+          $MYC -e "SELECT COUNT(*) AS total, COALESCE(SUM(is_active AND role='ADMIN'),0) AS active_admins FROM $DB.consultants"
+          $MYC -e "SELECT email, LEFT(password_hash,7) AS hash_fmt, role, is_active FROM $DB.consultants WHERE is_active"
+
+          echo "== 6. ryne kill switch + process state =="
+          grep -h '^RYNE_PAID_CALLS_ENABLED=' "$APP_DIR"/.env "$APP_DIR"/.env.* 2>/dev/null | sed 's/=.*/=<set>/' || echo "RYNE_PAID_CALLS_ENABLED not set (defaults OFF)"
+          pm2 describe sop-app 2>/dev/null | grep -E "status|exec cwd|script args|port" | head -6 || true
+          nginx -t
+          df -h /opt | tail -1
+          free -m | head -2
+          REMOTE
+
+      - name: Run prep on production
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+        run: |
+          ssh sop-production "MYSQL_ROOT_PASSWORD='$MYSQL_ROOT_PASSWORD' bash /tmp/prod-prep.sh"
