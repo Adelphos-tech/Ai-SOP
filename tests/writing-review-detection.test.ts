@@ -3,7 +3,7 @@
  * Run with the mysql2 mock preload (Brick 4B-C1 spend ledger):
  *   NODE_OPTIONS="--import ./tests/mysql2-mock-preload.mjs" npx tsx tests/writing-review-detection.test.ts */
 import assert from "node:assert/strict";
-import { runDetection, runnableTools, estimatedCostUsd, RYNE_MAX_CHARS } from "../src/lib/writing-review/detection";
+import { runDetection, runnableTools, RYNE_MAX_CHARS } from "../src/lib/writing-review/detection";
 
 let pass = 0, fail = 0;
 function check(name: string, fn: () => void | Promise<void>) {
@@ -259,7 +259,6 @@ async function main() {
     pass++;
   }
 
-  assert.ok(estimatedCostUsd(3) > 0);
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }

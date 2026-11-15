@@ -123,13 +123,10 @@ function cacheKey(documentKey: string, contentHash: string, detectors: string[])
   return `${documentKey}:${contentHash}:${[...detectors].sort().join(",")}`;
 }
 
-/** Rough public estimate: Ryne bills prepaid credits per call; exact
- *  per-detector pricing isn't published, so we report a configured
- *  per-call estimate (default $0.02) — never presented as precise. */
-export function estimatedCostUsd(detectorCount: number): number {
-  const per = Number(process.env.RYNE_COST_PER_DETECTOR_USD ?? 0.02);
-  return detectorCount * (Number.isFinite(per) && per >= 0 ? per : 0.02);
-}
+/** Per-detector billing rules are not published by Ryne — there is no
+ *  honest per-detector price to display. Reservation ceilings come
+ *  from the approved RYNE_UNVERIFIED_PRICE_CEILING_USD configuration,
+ *  never from an invented price. */
 
 /** Runnable = documented Ryne ai-score tools only. Ryne-native score
  *  comes from Beast Mode rewrites (Brick 3); Turnitin has no endpoint. */
@@ -271,7 +268,7 @@ export async function runDetection(
   if (requested.length > detectorBudget()) {
     return {
       kind: "OVER_BUDGET",
-      notice: `Request selects ${requested.length} detectors; budget allows ${detectorBudget()} per run (estimated ~$${estimatedCostUsd(requested.length).toFixed(2)}).`,
+      notice: `Request selects ${requested.length} detectors; at most ${detectorBudget()} billed detector calls are allowed per run.`,
       requested: requested.length,
       allowed: detectorBudget(),
     };

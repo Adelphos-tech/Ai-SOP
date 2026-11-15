@@ -90,7 +90,13 @@ export async function GET(request: NextRequest) {
           .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured)
           .map(d => d.detector),
         maxDetectorsPerRun: Number(process.env.RYNE_MAX_DETECTORS_PER_RUN ?? 3),
-        estimatedPerDetectorUsd: Number(process.env.RYNE_COST_PER_DETECTOR_USD ?? 0.02),
+        // Per-detector billing is unverified — the UI gets the approved
+        // reservation ceiling to display honestly, never an invented price.
+        pricingUnverified: true,
+        reservationCeilingUsd: (() => {
+          const n = Number(process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD);
+          return Number.isFinite(n) && n > 0 ? n : null;
+        })(),
         configured: listDetectorDescriptors().some(d => d.configured),
         rewritePricing: { balancedPer1k: 0.08, titanPer1k: 0.50 },
       },

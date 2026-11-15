@@ -284,7 +284,7 @@ export async function spendSnapshot(): Promise<{
 
 // ---------- reservation ----------
 
-const MAX_TXN_ATTEMPTS = 2; // retry once on deadlock only
+const MAX_TXN_ATTEMPTS = 4; // deadlock retries — serialized locks make them rare
 
 /**
  * Atomically reserve spend for every unit of one operation — all or
@@ -315,8 +315,26 @@ export async function reserveSpend(input: ReserveInput): Promise<ReserveOutcome>
       return { kind: "UNAVAILABLE", message: `spend ledger unavailable: ${err?.message ?? "no connection"}` };
     }
     try {
+      // Counter rows must exist before any lock/update — created in
+      // autocommit so a rolled-back txn can't resurrect missing rows.
+      await conn.execute(
+        "INSERT IGNORE INTO ryne_spend_counters (scope, scope_key) VALUES ('day', ?), ('total', 'ALL')",
+        [day],
+      );
       await conn.beginTransaction();
-      // Claim the operation identity FIRST — the PRIMARY KEY insert
+      // Serialize EVERY ledger transaction on the same two locks first
+      // (day counter → total counter, in this order, in every code
+      // path). Concurrent reserves/settles then queue on one row
+      // instead of forming lock cycles — real InnoDB testing showed
+      // deadlocks when the ops-table insert ran first.
+      await conn.execute(
+        "SELECT scope_key FROM ryne_spend_counters WHERE scope='day' AND scope_key=? FOR UPDATE",
+        [day],
+      );
+      await conn.execute(
+        "SELECT scope_key FROM ryne_spend_counters WHERE scope='total' AND scope_key='ALL' FOR UPDATE",
+      );
+      // Claim the operation identity — the PRIMARY KEY insert
       // atomically rejects any other process using this id, regardless
       // of whether its detector/humanizer set overlaps ours.
       await conn.execute(
@@ -330,11 +348,6 @@ export async function reserveSpend(input: ReserveInput): Promise<ReserveOutcome>
           input.ids?.documentId ?? null, input.ids?.versionId ?? null,
           canonicalUnitsKey(items.map(p => ({ unit: p.unit, quantity: p.est.quantity }))),
         ],
-      );
-      // Counter rows must exist before the conditional increments.
-      await conn.execute(
-        "INSERT IGNORE INTO ryne_spend_counters (scope, scope_key) VALUES ('day', ?), ('total', 'ALL')",
-        [day],
       );
       const [dayRes] = await conn.execute(
         `UPDATE ryne_spend_counters SET reserved_usd = reserved_usd + ?
@@ -435,6 +448,27 @@ async function withEventTxn(
   }
   try {
     await conn.beginTransaction();
+    // Uniform lock order across ALL ledger transactions: day counter →
+    // total counter → event rows. Taking the counter locks first means
+    // reserves and settlements serialize on one row instead of forming
+    // deadlocks. The event's own counter_day is needed to pick the row,
+    // so it is read first without a lock (the column is immutable).
+    const [dayRows] = await conn.execute(
+      "SELECT counter_day FROM ryne_spend_events WHERE id = ?",
+      [eventId],
+    );
+    const counterDay = (dayRows as any[])[0]?.counter_day as string | undefined;
+    if (!counterDay) {
+      await conn.rollback();
+      return false;
+    }
+    await conn.execute(
+      "SELECT scope_key FROM ryne_spend_counters WHERE scope='day' AND scope_key=? FOR UPDATE",
+      [counterDay],
+    );
+    await conn.execute(
+      "SELECT scope_key FROM ryne_spend_counters WHERE scope='total' AND scope_key='ALL' FOR UPDATE",
+    );
     const [rows] = await conn.execute(
       "SELECT id, status, estimated_usd, counter_day, cost_basis FROM ryne_spend_events WHERE id = ? FOR UPDATE",
       [eventId],

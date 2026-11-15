@@ -165,7 +165,7 @@ export default function WritingReviewPage() {
   const [application, setApplication] = useState<Application | null>(null);
   const [version, setVersion] = useState<CurrentVersion | null>(null);
   const [detectors, setDetectors] = useState<DetectorScore[]>([]);
-  const [detectConfig, setDetectConfig] = useState<{ runnable: string[]; maxDetectorsPerRun: number; estimatedPerDetectorUsd: number; configured: boolean; rewritePricing?: { balancedPer1k: number; titanPer1k: number } } | null>(null);
+  const [detectConfig, setDetectConfig] = useState<{ runnable: string[]; maxDetectorsPerRun: number; pricingUnverified?: boolean; reservationCeilingUsd?: number | null; configured: boolean; rewritePricing?: { balancedPer1k: number; titanPer1k: number } } | null>(null);
   const [provider, setProvider] = useState<RewriteProvider | null>(null);
 
   // draft = working copy the consultant is refining
@@ -357,9 +357,14 @@ export default function WritingReviewPage() {
     // Explicit consent: detection sends the document text to Ryne and
     // each selected detector is a billed request.
     const chosen = runnable.slice(0, detectConfig?.maxDetectorsPerRun ?? runnable.length);
-    const est = chosen.length * (detectConfig?.estimatedPerDetectorUsd ?? 0);
+    // Honest pricing display: per-detector billing is unverified —
+    // show the approved reservation ceiling, never an invented price.
+    const ceil = detectConfig?.reservationCeilingUsd;
+    const costLine = ceil != null
+      ? `Cost: up to ~$${(chosen.length * ceil).toFixed(2)} reserved (approved ceiling $${ceil}/detector — Ryne does not publish per-detector pricing, actual charges may differ)`
+      : `Cost: Ryne per-detector pricing is unverified — billed in prepaid credits`;
     if (chosen.length && !window.confirm(
-      `Run AI detection on the current document?\n\nDetectors: ${chosen.join(", ")}\nEstimated cost: ~$${est.toFixed(2)} (Ryne prepaid credits)\n\nThe document text will be sent to Ryne's detection API.`)) return;
+      `Run AI detection on the current document?\n\nDetectors: ${chosen.join(", ")}\n${costLine}\n\nThe document text will be sent to Ryne's detection API.`)) return;
     setChecking(true); setNotice("");
     try {
       const res = await fetch(`/api/application/writing-review?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`, {

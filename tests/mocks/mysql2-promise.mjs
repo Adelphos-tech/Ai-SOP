@@ -87,6 +87,20 @@ async function exec(sql, params = []) {
     if (ensureCounter(store, "total", "ALL")) created++;
     return [{ affectedRows: created }];
   }
+  // Serialization locks (uniform order day → total): SELECT ... FOR UPDATE
+  if (/SELECT scope_key FROM ryne_spend_counters WHERE scope='day' AND scope_key=\? FOR UPDATE/.test(s)) {
+    const c = getCounter(store, "day", params[0]);
+    return [c ? [{ scope_key: params[0] }] : []];
+  }
+  if (/SELECT scope_key FROM ryne_spend_counters WHERE scope='total' AND scope_key='ALL' FOR UPDATE/.test(s)) {
+    const c = getCounter(store, "total", "ALL");
+    return [c ? [{ scope_key: "ALL" }] : []];
+  }
+  // event's counter_day lookup (pre-lock read in withEventTxn)
+  if (/SELECT counter_day FROM ryne_spend_events WHERE id = \?$/.test(s)) {
+    const row = store.spendEvents[params[0]];
+    return [row ? [{ counter_day: row.counter_day }] : []];
+  }
   // conditional reservation (scope is a SQL literal):
   //   day:   ... WHERE scope='day'   AND scope_key=?     AND reserved_usd + settled_usd + ? <= ?  → [add, key, add, cap]
   //   total: ... WHERE scope='total' AND scope_key='ALL' AND reserved_usd + settled_usd + ? <= ?  → [add, add, cap]
