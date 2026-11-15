@@ -12,9 +12,9 @@ jobs:
         env:
           RYNE_KEY: ${{ secrets.RYNE_API_KEY }}
         with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
             cd /opt/sop-ai-app
