@@ -30,18 +30,20 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     try {
       const res = await fetch("/api/auth/me");
       if (res.status === 401) {
-        const redirect = encodeURIComponent(pathname || "/");
-        router.replace(`/login?redirect=${redirect}`);
+        // Hard navigation on purpose: a router.replace here raced the
+        // client-side RSC redirect on the prerendered `/` page and crashed
+        // the app router (React error #310). A document load cannot race
+        // the router, and the spinner stays up until the browser leaves.
+        window.location.replace(`/login?redirect=${encodeURIComponent(pathname || "/")}`);
         return;
       }
       const data = await res.json();
       if (data.consultant) {
         setConsultant(data.consultant);
       }
-    } catch {
-      router.replace("/login");
-    } finally {
       setChecking(false);
+    } catch {
+      window.location.replace("/login");
     }
   }, [router, pathname]);
 

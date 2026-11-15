@@ -1,0 +1,127 @@
+# ============================================================
+# Production Ryne controlled-test readiness — ONE-SHOT ops run.
+# Read-only ledger/config checks + inserts ONE clearly-synthetic
+# student/application/document/version for the test (additive,
+# fixed UUIDs, never touches real records). No paid calls. No
+# secret values are printed.
+# ============================================================
+name: Prod Ryne Readiness
+
+on:
+  push:
+    branches: [prod-ryne-ops]
+    paths: [.github/workflows/ryne-readiness.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    name: Ryne test readiness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host sop-production
+            HostName $DEPLOY_HOST
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Verify config + ledger + seed synthetic doc
+        run: |
+          ssh sop-production 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          ENV_FILE="/opt/sop-ai-app/.env.local"
+          echo "=== RYNE env state ==="
+          for var in RYNE_API_KEY RYNE_API_BASE_URL RYNE_PAID_CALLS_ENABLED RYNE_DAILY_BUDGET_USD RYNE_TOTAL_BUDGET_USD RYNE_UNVERIFIED_PRICE_CEILING_USD RYNE_MAX_DETECTORS_PER_RUN; do
+            line=$(grep -E "^${var}=" "$ENV_FILE" || true)
+            if [ -z "$line" ]; then echo "$var: <absent>";
+            elif [ "$var" = "RYNE_API_KEY" ]; then v=${line#RYNE_API_KEY=}; echo "$var: set (length ${#v})";
+            else echo "$var: ${line#*=}"; fi
+          done
+
+          # DB creds from the env file — extracted into shell vars, never printed
+          DB_HOST=$(grep -E '^SOP_DB_HOST=' "$ENV_FILE" | cut -d= -f2-)
+          DB_PORT=$(grep -E '^SOP_DB_PORT=' "$ENV_FILE" | cut -d= -f2- || true)
+          DB_USER=$(grep -E '^SOP_DB_USER=' "$ENV_FILE" | cut -d= -f2-)
+          DB_PASS=$(grep -E '^SOP_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)
+          DB_NAME=$(grep -E '^SOP_DB_NAME=' "$ENV_FILE" | cut -d= -f2-)
+          [ -n "$DB_USER" ] && [ -n "$DB_NAME" ] || { echo "DB creds missing"; exit 1; }
+          MQ() { mysql -h "${DB_HOST:-127.0.0.1}" -P "${DB_PORT:-3306}" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -e "$1"; }
+
+          echo "=== ledger tables ==="
+          MQ "SHOW TABLES LIKE 'ryne_spend%'"
+          echo "=== operation status counts (unresolved = RESERVED/UNKNOWN) ==="
+          MQ "SELECT status, COUNT(*) FROM ryne_spend_operations GROUP BY status" || echo "(no rows)"
+          echo "=== events / counters ==="
+          MQ "SELECT COUNT(*) FROM ryne_spend_events" || true
+          MQ "SELECT * FROM ryne_spend_counters" || echo "(no counter rows)"
+
+          echo "=== seeding synthetic test document ==="
+          cat > /tmp/ryne-synthetic-sop.txt <<'SOPTEXT'
+          Statement of Purpose — Synthetic Evaluation Document
+          
+          My name is Test Candidate, and this document was written solely to evaluate an automated writing-review pipeline. It describes a fictional applicant with no connection to any real person, institution, or application.
+          
+          I became interested in operations research during a fictional internship at Example Logistics, a made-up company used for this test. There I helped the planning team reorganize a small warehouse layout, which reduced the fictional picking time described in this scenario. The experience, though invented, illustrates the kind of analytical problem I enjoy: measuring a process, forming a hypothesis, changing one variable, and checking the result.
+          
+          At the fictional Example Institute of Technology, I studied industrial engineering. My invented coursework included statistics, queueing theory, and database systems. In a fabricated capstone project, our team modelled a campus shuttle network. We collected synthetic ridership data, identified two overloaded routes, and proposed a revised schedule. The pretend outcome was a twelve percent reduction in average wait time inside the simulation.
+          
+          After graduation in this scenario, I joined the imaginary firm Example Analytics as a junior analyst. My first assignment was to clean a deliberately messy dataset of sensor readings. I wrote small validation scripts, flagged impossible timestamps, and built a weekly summary that the fictional team used in its standup meetings. The work taught me that careful data hygiene matters more than clever modelling when the inputs cannot be trusted.
+          
+          I am applying to the fictional Master of Science in Decision Analytics at Example University because the invented curriculum combines stochastic modelling with applied projects. In particular, the made-up course on simulation-based optimization matches the direction I want to pursue: using quantitative methods on operational problems where small improvements compound at scale.
+          
+          My fictional long-term goal is to work on supply-chain resilience for mid-sized manufacturers, helping them stress-test plans against demand shocks and supplier delays. I believe a graduate program that pairs rigorous methods with real project work is the right next step in this invented narrative.
+          
+          This paragraph exists only to add length so that any automated analysis has enough material to evaluate. It reiterates that every name, company, university, metric, and outcome in this document is synthetic and was created for a controlled integration test. No part of this text describes a real applicant, and it must not be treated as an actual statement of purpose.
+          SOPTEXT
+          cat > /tmp/seed-ryne-test.cjs <<'SEED'
+          const fs = require('fs');
+          const mysql = require('/opt/sop-ai-app/node_modules/mysql2/promise');
+          const TEXT = fs.readFileSync('/tmp/ryne-synthetic-sop.txt', 'utf8');
+          (async () => {
+            const conn = await mysql.createConnection({
+              host: process.env.DB_HOST, port: Number(process.env.DB_PORT || 3306),
+              user: process.env.DB_USER, password: process.env.DB_PASS,
+              database: process.env.DB_NAME,
+            });
+            const STU='00000000-0000-4000-8000-000000000001', APP='00000000-0000-4000-8000-000000000002',
+                  DOC='00000000-0000-4000-8000-000000000003', VER='00000000-0000-4000-8000-000000000004';
+            await conn.execute(
+              "INSERT INTO students (id,first_name,last_name,email) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE first_name=VALUES(first_name)",
+              [STU,'RyneTest','Synthetic','ryne-test-synthetic@invalid.local']);
+            await conn.execute(
+              "INSERT INTO applications (id,student_id,university_name,program_name,degree,country,intake,intake_year,status) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE university_name=VALUES(university_name)",
+              [APP,STU,'EXAMPLE UNIVERSITY (SYNTHETIC)','MS Decision Analytics','Masters','USA','Fall','2026','IN_PROGRESS']);
+            await conn.execute(
+              "INSERT INTO application_documents (id,application_id,document_type,document_title,prompt_text,prompt_source,generation_status,current_version_id) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE current_version_id=VALUES(current_version_id)",
+              [DOC,APP,'SOP','Ryne Synthetic Test SOP','Synthetic Ryne test doc','MANUAL','COMPLETED',VER]);
+            await conn.execute(
+              "INSERT INTO document_versions (id,document_id,version_number,content,content_format,created_by_type) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE content=VALUES(content)",
+              [VER,DOC,1,TEXT,'MARKDOWN','SYSTEM']);
+            await conn.end();
+            console.log('SEED_OK doc=' + DOC + ' words=' + TEXT.split(/\s+/).length);
+          })().catch(e => { console.error('SEED_FAIL ' + e.message); process.exit(1); });
+          SEED
+          DB_HOST="${DB_HOST:-127.0.0.1}" DB_PORT="${DB_PORT:-3306}" DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" \
+            node /tmp/seed-ryne-test.cjs
+          rm -f /tmp/ryne-synthetic-sop.txt /tmp/seed-ryne-test.cjs
+          echo "=== final ledger state (should be unchanged) ==="
+          MQ "SELECT status, COUNT(*) FROM ryne_spend_operations GROUP BY status" || echo "(no rows)"
+          REMOTE
