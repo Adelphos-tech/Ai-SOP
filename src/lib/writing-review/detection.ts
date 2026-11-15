@@ -13,12 +13,22 @@ import type {
   DetectorScore,
   FlaggedPassage,
 } from "./types";
+import { randomUUID } from "crypto";
 import {
   computeContentHash,
   listDetectorDescriptors,
   listDetectorStatuses,
 } from "./detectors";
 import { mapAiScoreResponse, mapSentenceFindings } from "./ryne-client";
+import {
+  canonicalUnitsKey,
+  getOperation,
+  markUnknown,
+  refundSpend as refundLedgerEvent, // alias — this file exports refundSpend for rewrite.ts
+  reserveSpend,
+  settleSpend,
+  type OperationRecord,
+} from "./spend-ledger";
 
 // ---------- configuration (server-side env) ----------
 
@@ -56,6 +66,13 @@ export interface DetectionRequestOptions {
   content: string;
   /** Caller abort signal. */
   signal?: AbortSignal;
+  /** Stable id for retries of ONE logical user action — a new run
+   *  must pass a fresh id. Generated when absent (direct callers). */
+  operationId?: string;
+  /** Authenticated consultant id — recorded on every ledger event. */
+  actorId?: string | null;
+  /** Authorization context recorded on every ledger event. */
+  ids?: { studentId?: string; applicationId?: string; versionId?: string };
   /** Injected transport — tests must pass a mock. */
   fetcher?: typeof fetch;
   now?: () => number;
@@ -67,6 +84,10 @@ export type DetectionOutcome =
   | { kind: "OVER_BUDGET"; notice: string; requested: number; allowed: number }
   | { kind: "TOO_LONG"; notice: string; chars: number }
   | { kind: "RATE_LIMITED"; notice: string; retryAfterMs: number }
+  /** Same operationId already recorded — either an honest duplicate of
+   *  an in-flight/finished run, or a rejected id reuse with different
+   *  parameters. Never a fabricated score. */
+  | { kind: "DUPLICATE"; detection: DetectionResult; notice: string }
   | { kind: "CANCELLED"; detection: DetectionResult }
   | { kind: "OK"; detection: DetectionResult; estimatedCostUsd: number };
 
@@ -77,13 +98,16 @@ export type DetectionOutcome =
 const lastRunAt = new Map<string, number>();
 const resultCache = new Map<string, { at: number; detection: DetectionResult }>();
 const inFlight = new Map<string, Promise<DetectionOutcome>>();
-const spend = { day: "", usd: 0 }; // in-memory daily spend ledger (shared with rewrite calls)
+// Brick 4B-C1: detection reserves via the persistent MySQL ledger.
+// The in-memory counter below remains ONLY for rewrite.ts until the
+// humanizer brick lands — do not remove while it is imported there.
+const spend = { day: "", usd: 0 };
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 200;
 
-/** Daily spend ceiling — blocks further paid calls once exceeded.
- *  LIMITATION: in-memory; resets on restart and is per-process. With
- *  multiple PM2/Node processes the effective cap multiplies. */
+/** Daily spend ceiling — used by the persistent ledger (detection)
+ *  and, until its own brick lands, by the in-memory rewrite path.
+ *  LIMITATION (rewrite only): in-memory; resets on restart. */
 export function dailyBudgetUsd(): number {
   const n = Number(process.env.RYNE_DAILY_BUDGET_USD ?? 5);
   return Number.isFinite(n) && n > 0 ? n : 5;
@@ -306,27 +330,133 @@ export async function runDetection(
   const fetcher = opts.fetcher ?? fetch;
 
   // Concurrency dedup BEFORE reserving spend: an identical in-flight
-  // run shares its promise — followers must not trip the budget check.
+  // run shares its promise — followers must not create a reservation.
   const inflight = inFlight.get(ck);
   if (inflight) return inflight;
 
-  // Daily spend ceiling — reserve the estimated cost before calling.
-  // In-memory only; a restart clears the ledger (documented limit).
-  const est = estimatedCostUsd(requested.length);
-  if (!checkSpend(est)) {
+  // Brick 4B-C1: durable per-detector reservation BEFORE any provider
+  // call. One ledger event per selected detector (real billing
+  // granularity); all-or-nothing; cross-process duplicate-safe via the
+  // operation id. Detector prices are unverified — reservation amounts
+  // come from the approved ceiling, never from invented pricing.
+  const operationId = opts.operationId ?? randomUUID();
+  const tools = requested.map(det => TOOL_BY_DETECTOR[det]);
+
+  // Operation identity: an opId already claimed may only continue as
+  // an identical retry — same kind, actor, student/application/
+  // document/version and canonical detector set. Anything else is a
+  // rejected identity conflict; the claim is enforced atomically in
+  // the reservation transaction, so non-overlapping detector sets on
+  // different processes can never both bill under one id.
+  const wantUnitsKey = canonicalUnitsKey(tools.map(unit => ({ unit, quantity: 1 })));
+  const opIdentityMatches = (op: OperationRecord | null) =>
+    !!op &&
+    op.requestKind === "DETECTION" &&
+    op.actorId === (opts.actorId ?? null) &&
+    op.studentId === (opts.ids?.studentId ?? null) &&
+    op.applicationId === (opts.ids?.applicationId ?? null) &&
+    op.documentId === documentKey &&
+    op.versionId === (opts.ids?.versionId ?? null) &&
+    op.unitsKey === wantUnitsKey;
+  let prior: OperationRecord | null | undefined;
+  try {
+    prior = await getOperation(operationId);
+  } catch {
     return {
-      kind: "OVER_BUDGET",
-      notice: `Daily Ryne spend cap (~$${dailyBudgetUsd().toFixed(2)}) reached. Estimated cost blocked: ~$${est.toFixed(2)}. This cap is approximate — Ryne does not publish per-detector pricing.`,
-      requested: requested.length,
-      allowed: 0,
+      kind: "NOT_CONFIGURED",
+      detection: base,
+      notice: "Paid detection is blocked — spend ledger unavailable: no connection. No text was sent and no charges were made.",
     };
   }
+  if (prior) {
+    return {
+      kind: "DUPLICATE",
+      detection: base,
+      notice: opIdentityMatches(prior)
+        ? "This check is already recorded — a duplicate submission was ignored and no additional charge was made. Results, if any, come from the original run."
+        : "This check identifier was already used for a different request — it cannot be reused. Start a new check.",
+    };
+  }
+
+  const reservation = await reserveSpend({
+    operationId,
+    kind: "DETECTION",
+    units: tools.map(unit => ({ unit })),
+    actorId: opts.actorId ?? null,
+    ids: {
+      studentId: opts.ids?.studentId,
+      applicationId: opts.ids?.applicationId,
+      documentId: documentKey,
+      versionId: opts.ids?.versionId,
+    },
+  });
+  switch (reservation.kind) {
+    case "UNAVAILABLE":
+      return {
+        kind: "NOT_CONFIGURED",
+        detection: base,
+        notice: `Paid detection is blocked — ${reservation.message}. No text was sent and no charges were made.`,
+      };
+    case "UNPRICED":
+      return {
+        kind: "NOT_CONFIGURED",
+        detection: base,
+        notice: `Paid detection is blocked — ${reservation.reason}. No text was sent and no charges were made.`,
+      };
+    case "OVER_BUDGET":
+      return {
+        kind: "OVER_BUDGET",
+        notice: `Ryne ${reservation.scope === "total" ? "overall" : "daily"} spend cap (~$${reservation.limitUsd.toFixed(2)}) reached. Estimated reservation blocked: ~$${reservation.attemptedUsd.toFixed(4)} (unverified estimate — Ryne does not publish confirmed per-detector pricing).`,
+        requested: requested.length,
+        allowed: 0,
+      };
+    case "FOLLOWER": {
+      // Lost a race: another process claimed this opId between our
+      // pre-check and our insert. Re-validate against the winner's
+      // immutable identity — identical retry vs rejected conflict.
+      return {
+        kind: "DUPLICATE",
+        detection: base,
+        notice: opIdentityMatches(reservation.operation)
+          ? "This check is already recorded — a duplicate submission was ignored and no additional charge was made. Results, if any, come from the original run."
+          : "This check identifier was already used for a different request — it cannot be reused. Start a new check.",
+      };
+    }
+  }
+  const events = reservation.events;
+  const eventByUnit = new Map(events.map(e => [e.requestUnit, e]));
+
+  // Cancellation after the reservation but before dispatch: provably
+  // unbilled → release every event as REFUNDED.
+  if (opts.signal?.aborted) {
+    await Promise.all(events.map(e => refundLedgerEvent(e.id, "CANCELLED_PRE_SEND").catch(() => false)));
+    return { kind: "CANCELLED", detection: base };
+  }
+
   const run = (async (): Promise<DetectionOutcome> => {
   const settled = await Promise.allSettled(
     requested.map(det =>
       callDetector(TOOL_BY_DETECTOR[det], opts.content, key, checkedAt, fetcher, opts.signal),
     ),
   );
+
+  // Settle each detector's ledger event independently: a genuine score
+  // settles at the reserved estimate; any failure or ambiguous outcome
+  // (timeout, network, HTTP error, crash) stays UNKNOWN and keeps
+  // consuming budget — a failed call is never presumed unbilled.
+  await Promise.all(settled.map(async (s, i) => {
+    const ev = eventByUnit.get(tools[i]);
+    if (!ev) return;
+    if (s.status === "fulfilled" && s.value.score.status === "SCORED") {
+      const ok = await settleSpend(ev.id, { outcome: "OK" }).catch(() => false);
+      if (!ok) await markUnknown(ev.id, "SETTLEMENT_FAILED").catch(() => {});
+      return;
+    }
+    const code = s.status === "fulfilled"
+      ? (s.value.score.error?.code ?? "ERROR")
+      : "INTERNAL";
+    await markUnknown(ev.id, code).catch(() => {});
+  }));
 
   const scores: DetectorScore[] = [];
   const passages: FlaggedPassage[] = [];
@@ -370,7 +500,9 @@ export async function runDetection(
   return {
     kind: "OK",
     detection,
-    estimatedCostUsd: est,
+    // Sum of per-detector reservations — an internal estimate only,
+    // never a provider-confirmed charge.
+    estimatedCostUsd: reservation.totalUsd,
   };
   })().finally(() => inFlight.delete(ck));
   inFlight.set(ck, run);

@@ -195,6 +195,7 @@ async function main() {
   await check("POST valid session + key configured + switch OFF → detection stays disabled (no call)", async () => {
     const res = await POST(req(qs, withCookie(postInit({
       action: "recheck", detectors: ["REILAA"], confirmPaid: true,
+      operationId: "11111111-2222-3333-4444-555555555555",
     }), goodToken)));
     assert.equal(res.status, 200); // existing NOT_CONFIGURED response shape
     const body = await res.json();
@@ -220,15 +221,18 @@ async function main() {
   await check("kill switch OFF: runDetection makes zero provider calls and reserves no spend", async () => {
     const spy = neverFetch();
     delete process.env.RYNE_PAID_CALLS_ENABLED;
-    // Ledger is shared with rewrite calls ($0.0004 already spent);
-    // a wrong ~$0.02 reservation here overflows the $0.03 cap.
+    // Brick 4B-C1: detection reserves via the persistent ledger — the
+    // switch-off run must create zero ledger events.
+    process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = "0.02";
     process.env.RYNE_DAILY_BUDGET_USD = "0.03";
+    const before = Object.keys((globalThis.__MOCK_DB as any).spendEvents ?? {}).length;
     const out = await runDetection("d-kill-off", {
       detectors: ["REILAA"], confirmPaid: true, baseVersionId: "v1",
       content: "Some document text.", fetcher: spy.fetcher,
     });
     assert.equal(out.kind, "NOT_CONFIGURED");
     assert.equal(spy.calls(), 0);
+    assert.equal(Object.keys((globalThis.__MOCK_DB as any).spendEvents ?? {}).length, before);
     process.env.RYNE_PAID_CALLS_ENABLED = "1";
     const on = await runDetection("d-kill-on", {
       detectors: ["REILAA"], confirmPaid: true, baseVersionId: "v1",
@@ -237,6 +241,7 @@ async function main() {
     assert.equal(on.kind, "OK");
     assert.equal(spy.calls(), 1);
     delete process.env.RYNE_DAILY_BUDGET_USD;
+    delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
   });
 
   await check("configured RYNE_API_KEY does not bypass the kill switch", async () => {

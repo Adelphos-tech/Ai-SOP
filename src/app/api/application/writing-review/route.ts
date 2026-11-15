@@ -58,7 +58,7 @@ async function loadReviewContext(request: NextRequest) {
   const current = versions.find(v => v.id === document.currentVersionId)
     || versions[versions.length - 1]
     || null;
-  return { document, versions, current };
+  return { consultant, document, versions, current };
 }
 
 export async function GET(request: NextRequest) {
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
     const fakeRequest = new NextRequest(url.toString(), { headers: request.headers });
     const ctx = await loadReviewContext(fakeRequest);
     if ("error" in ctx && ctx.error) return ctx.error;
-    const { current } = ctx as any;
+    const { consultant, current } = ctx as any;
     if (!current) {
       return NextResponse.json({ error: "Document has no generated version to review." }, { status: 400 });
     }
@@ -156,14 +156,30 @@ export async function POST(request: NextRequest) {
     if (body.action !== "recheck") {
       return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
     }
-    // Brick 2: server-side Ryne calls — consent + budget + timeout +
-    // cooldown + per-detector isolation enforced inside runDetection.
+    // Brick 4B-C1: a stable operationId is required so retries of one
+    // user action cannot double-bill across processes; a new check
+    // sends a fresh id.
+    const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+      return NextResponse.json(
+        { error: "A valid operationId (UUID) is required for a detection run." }, { status: 400 });
+    }
+    // Brick 2/4B-C1: server-side Ryne calls — consent + persistent
+    // budget ledger + timeout + cooldown + per-detector isolation
+    // enforced inside runDetection.
     const docId = url.searchParams.get("documentId")!;
     const outcome = await runDetection(docId, {
       detectors: Array.isArray(body.detectors) ? body.detectors : [],
       confirmPaid: body.confirmPaid === true,
       baseVersionId: current.id,
       content: current.content,
+      operationId,
+      actorId: consultant.id,
+      ids: {
+        studentId: url.searchParams.get("studentId") ?? undefined,
+        applicationId: url.searchParams.get("applicationId") ?? undefined,
+        versionId: current.id,
+      },
       signal: request.signal,
     });
     switch (outcome.kind) {
@@ -183,6 +199,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: outcome.notice }, { status: 413 });
       case "RATE_LIMITED":
         return NextResponse.json({ error: outcome.notice }, { status: 429 });
+      case "DUPLICATE":
+        return NextResponse.json({ error: outcome.notice }, { status: 409 });
       case "CANCELLED":
         return NextResponse.json({ error: "Check cancelled." }, { status: 499 });
     }

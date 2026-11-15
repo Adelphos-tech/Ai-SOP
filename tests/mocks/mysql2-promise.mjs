@@ -25,10 +25,14 @@ function db() {
   if (!globalThis.__MOCK_DB) globalThis.__MOCK_DB = {};
   if (!globalThis.__MOCK_DB.spendCounters) globalThis.__MOCK_DB.spendCounters = {};
   if (!globalThis.__MOCK_DB.spendEvents) globalThis.__MOCK_DB.spendEvents = {};
+  if (!globalThis.__MOCK_DB.spendOps) globalThis.__MOCK_DB.spendOps = {};
   return globalThis.__MOCK_DB;
 }
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
+// DECIMAL(14,6) emulation — real MySQL is exact at 6dp; raw JS floats
+// drift (0.06-0.02-0.02 !== 0.02) and would trip the guarded updates.
+const r6 = (n) => Math.round(n * 1e6) / 1e6;
 
 function counterKey(scope, key) { return `${scope}|${key}`; }
 function getCounter(store, scope, key) {
@@ -90,8 +94,8 @@ async function exec(sql, params = []) {
     const isDay = /scope='day'/.test(s);
     const [add, key, add2, cap] = isDay ? params : [params[0], "ALL", params[1], params[2]];
     const c = getCounter(store, isDay ? "day" : "total", key);
-    if (c && c.reserved_usd + c.settled_usd + add2 <= cap) {
-      c.reserved_usd += add;
+    if (c && r6(c.reserved_usd + c.settled_usd + add2) <= cap) {
+      c.reserved_usd = r6(c.reserved_usd + add);
       return [{ affectedRows: 1 }];
     }
     return [{ affectedRows: 0 }];
@@ -100,7 +104,7 @@ async function exec(sql, params = []) {
   if (/UPDATE ryne_spend_counters SET reserved_usd = reserved_usd \+ \?/.test(s)) {
     const c = getCounter(store, "total", "ALL");
     if (!c) return [{ affectedRows: 0 }];
-    c.reserved_usd += params[0];
+    c.reserved_usd = r6(c.reserved_usd + params[0]);
     return [{ affectedRows: 1 }];
   }
   // settle (guarded): reserved_usd = reserved_usd - ?, settled_usd = settled_usd + ?
@@ -109,9 +113,9 @@ async function exec(sql, params = []) {
     const isDay = /scope='day'/.test(s);
     const [dec, inc, key, guard] = isDay ? params : [params[0], params[1], "ALL", params[2]];
     const c = getCounter(store, isDay ? "day" : "total", key);
-    if (!c || c.reserved_usd < guard) return [{ affectedRows: 0 }];
-    c.reserved_usd -= dec;
-    c.settled_usd += inc;
+    if (!c || r6(c.reserved_usd) < r6(guard)) return [{ affectedRows: 0 }];
+    c.reserved_usd = r6(c.reserved_usd - dec);
+    c.settled_usd = r6(c.settled_usd + inc);
     return [{ affectedRows: 1 }];
   }
   // refund (guarded): reserved_usd = reserved_usd - ?
@@ -120,9 +124,30 @@ async function exec(sql, params = []) {
     const isDay = /scope='day'/.test(s);
     const [dec, key, guard] = isDay ? params : [params[0], "ALL", params[1]];
     const c = getCounter(store, isDay ? "day" : "total", key);
-    if (!c || c.reserved_usd < guard) return [{ affectedRows: 0 }];
-    c.reserved_usd -= dec;
+    if (!c || r6(c.reserved_usd) < r6(guard)) return [{ affectedRows: 0 }];
+    c.reserved_usd = r6(c.reserved_usd - dec);
     return [{ affectedRows: 1 }];
+  }
+  // INSERT INTO ryne_spend_operations — PK claim; duplicate id → ER_DUP_ENTRY
+  if (/^INSERT INTO ryne_spend_operations/.test(s)) {
+    const [operationId, kind, actorId, studentId, appId, docId, verId, unitsKey] = params;
+    if (store.spendOps[operationId]) {
+      const err = new Error(`Duplicate entry for key 'PRIMARY'`);
+      err.code = "ER_DUP_ENTRY";
+      throw err;
+    }
+    store.spendOps[operationId] = {
+      operation_id: operationId, request_kind: kind, actor_id: actorId,
+      student_id: studentId, application_id: appId, document_id: docId,
+      version_id: verId, units_key: unitsKey,
+      created_at: new Date().toISOString(),
+    };
+    return [{ affectedRows: 1 }];
+  }
+  // SELECT operation identity by id
+  if (/SELECT \* FROM ryne_spend_operations WHERE operation_id = \?/.test(s)) {
+    const row = store.spendOps[params[0]];
+    return [row ? [{ ...row }] : []];
   }
   // INSERT INTO ryne_spend_events — duplicate op+kind+unit → ER_DUP_ENTRY
   if (/^INSERT INTO ryne_spend_events/.test(s)) {

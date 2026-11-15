@@ -29,8 +29,9 @@ async function check(name: string, fn: () => void | Promise<void>) {
 const DAY = new Date().toISOString().slice(0, 10);
 const counter = (scope: string, key: string) =>
   (globalThis.__MOCK_DB as any).spendCounters?.[`${scope}|${key}`] ?? { reserved_usd: 0, settled_usd: 0 };
+const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
 const dayEffective = () =>
-  counter("day", DAY).reserved_usd + counter("day", DAY).settled_usd;
+  r6(counter("day", DAY).reserved_usd + counter("day", DAY).settled_usd);
 const reset = () => {
   (globalThis.__MOCK_DB as any) = {};
 };
@@ -106,13 +107,71 @@ async function main() {
     assert.equal(dayEffective(), 0.02);
   });
 
+  await check("operation identity: same opId + non-overlapping units concurrently → one wins", async () => {
+    reset();
+    const opId = randomUUID();
+    // The old per-unit unique key allowed BOTH to reserve; the ops
+    // claim makes exactly one reservation possible across processes.
+    const [a, b] = await Promise.all([
+      reserveSpend(op([{ unit: "reilaa" }], { operationId: opId })),
+      reserveSpend(op([{ unit: "gptzero" }], { operationId: opId })),
+    ]);
+    assert.deepEqual([a.kind, b.kind].sort(), ["FOLLOWER", "RESERVED"]);
+    const follower = a.kind === "FOLLOWER" ? a : b;
+    assert.equal(follower.kind, "FOLLOWER");
+    if (follower.kind === "FOLLOWER" && follower.operation) {
+      // follower's units are NOT in the stored identity — conflict,
+      // not an identical retry; caller must reject it
+      assert.equal(["reilaa:1", "gptzero:1"].includes(follower.operation.unitsKey), true);
+    }
+    const evs = await getOperationEvents(opId);
+    assert.equal(evs.length, 1); // only the winner's unit
+    assert.equal(dayEffective(), 0.02);
+  });
+
+  await check("same opId + different actor → loser follows, no extra spend", async () => {
+    const opId = randomUUID();
+    const a = await reserveSpend(op([{ unit: "surfer" }], { operationId: opId, actorId: "cons-1" }));
+    assert.equal(a.kind, "RESERVED");
+    const b = await reserveSpend(op([{ unit: "surfer" }], { operationId: opId, actorId: "cons-2" }));
+    assert.equal(b.kind, "FOLLOWER");
+    if (b.kind === "FOLLOWER") {
+      // stored identity is the winner's — caller compares and rejects
+      assert.equal(b.operation?.actorId, "cons-1");
+    }
+    assert.equal((await getOperationEvents(opId)).length, 1);
+  });
+
+  await check("identity-conflict loser rolls back fully — counters and events untouched", async () => {
+    reset();
+    const opId = randomUUID();
+    const winner = await reserveSpend(op([{ unit: "reilaa" }, { unit: "gptzero" }], { operationId: opId }));
+    assert.equal(winner.kind, "RESERVED");
+    const eff0 = dayEffective();
+    const loser = await reserveSpend(op([{ unit: "zerogpt" }, { unit: "surfer" }], { operationId: opId }));
+    assert.equal(loser.kind, "FOLLOWER");
+    assert.equal(dayEffective(), eff0); // nothing added
+    assert.equal((await getOperationEvents(opId)).length, 2);
+  });
+
+  await check("different opIds reserve independently — legitimate new scans allowed", async () => {
+    const a = await reserveSpend(op([{ unit: "reilaa" }]));
+    const b = await reserveSpend(op([{ unit: "reilaa" }]));
+    assert.equal(a.kind, "RESERVED");
+    assert.equal(b.kind, "RESERVED");
+  });
+
   await check("deliberately NEW scan of same document gets its own ledger events", async () => {
+    reset();
+    const first = await reserveSpend(op([{ unit: "reilaa" }]));
+    assert.equal(first.kind, "RESERVED");
     const again = await reserveSpend(op([{ unit: "reilaa" }]));
     assert.equal(again.kind, "RESERVED");
-    assert.equal(dayEffective(), 0.04); // 0.02 prior + 0.02 new
+    assert.equal(dayEffective(), 0.04); // two independent operations
   });
 
   await check("per-unit pricing: word-priced humanizer vs per-request detector, snapshot kept", async () => {
+    reset();
     const d = estimateFor("reilaa");
     const h = estimateFor("balanced", 100); // quote $0.008 ≤ ceiling 0.02
     assert.ok(d.ok && h.ok);
@@ -167,7 +226,7 @@ async function main() {
       outcome: "OK", providerCostUsd: 0.05, providerRef: "ryne-req-123",
     }), true);
     // effective = reported 0.05, not estimate 0.02
-    assert.equal(dayEffective(), eff0 - 0.02 + 0.05);
+    assert.equal(dayEffective(), r6(eff0 - 0.02 + 0.05));
     const ev = (await getOperationEvents(out.events[0].operationId))[0];
     assert.equal(ev.costBasis, "PROVIDER_REPORTED");
     assert.equal(ev.providerCostUsd, 0.05);
@@ -183,7 +242,7 @@ async function main() {
     assert.equal(await refundSpend(out.events[0].id, "TIMEOUT" as any), false);
     assert.equal(dayEffective(), eff0);
     assert.equal(await refundSpend(out.events[0].id, "NOT_DISPATCHED"), true);
-    assert.equal(dayEffective(), eff0 - 0.02);
+    assert.equal(dayEffective(), r6(eff0 - 0.02));
   });
 
   await check("UNKNOWN keeps consuming budget until reconciled, then settles", async () => {

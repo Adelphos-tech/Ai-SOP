@@ -1,5 +1,7 @@
 /* Brick 2 contract tests — runDetection with a MOCKED transport.
- * No network, no paid calls, no credentials logged. */
+ * No network, no paid calls, no credentials logged.
+ * Run with the mysql2 mock preload (Brick 4B-C1 spend ledger):
+ *   NODE_OPTIONS="--import ./tests/mysql2-mock-preload.mjs" npx tsx tests/writing-review-detection.test.ts */
 import assert from "node:assert/strict";
 import { runDetection, runnableTools, estimatedCostUsd, RYNE_MAX_CHARS } from "../src/lib/writing-review/detection";
 
@@ -36,6 +38,10 @@ async function main() {
   // Brick 4A: kill switch must be ON for mocked paid-path tests —
   // transport is still a stub, so no real call is ever made.
   process.env.RYNE_PAID_CALLS_ENABLED = "1";
+  // Brick 4B-C1: mocked ledger — approve the conservative ceiling so
+  // unverified-priced detectors may be reserved, with a wide budget.
+  process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = "0.02";
+  process.env.RYNE_DAILY_BUDGET_USD = "100";
 
   assert.ok(runnableTools().includes("reilaa"));
   assert.equal(runnableTools().length, 6);

@@ -5,7 +5,7 @@
 // Isolated database: sop_ai_app
 // Tables: students, applications, application_documents, document_versions,
 //         consultants, consultant_sessions,
-//         ryne_spend_counters, ryne_spend_events
+//         ryne_spend_operations, ryne_spend_counters, ryne_spend_events
 // ============================================================
 
 export const SCHEMA_SQL = `
@@ -170,6 +170,20 @@ CREATE TABLE IF NOT EXISTS document_versions (
   UNIQUE KEY uq_versions_doc_number (document_id, version_number),
   CONSTRAINT fk_versions_document FOREIGN KEY (document_id)
     REFERENCES application_documents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Brick 4B-B: immutable operation identity, claimed atomically with
+-- the reservation — the cross-process dedup guarantee.
+CREATE TABLE IF NOT EXISTS ryne_spend_operations (
+  operation_id   CHAR(36) PRIMARY KEY,
+  request_kind   VARCHAR(16)  NOT NULL,
+  actor_id       VARCHAR(64)  DEFAULT NULL,
+  student_id     CHAR(36)     DEFAULT NULL,
+  application_id CHAR(36)     DEFAULT NULL,
+  document_id    CHAR(36)     DEFAULT NULL,
+  version_id     CHAR(36)     DEFAULT NULL,
+  units_key      VARCHAR(255) NOT NULL,
+  created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Brick 4B-B: Ryne spend ledger — atomic budget counters.

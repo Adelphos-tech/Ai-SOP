@@ -140,10 +140,56 @@ export interface ReserveInput {
 
 export type ReserveOutcome =
   | { kind: "RESERVED"; events: SpendEvent[]; totalUsd: number }
-  | { kind: "FOLLOWER"; events: SpendEvent[] }
+  | { kind: "FOLLOWER"; events: SpendEvent[]; operation: OperationRecord | null }
   | { kind: "OVER_BUDGET"; scope: "day" | "total"; limitUsd: number; attemptedUsd: number }
   | { kind: "UNPRICED"; unit: string; reason: string }
   | { kind: "UNAVAILABLE"; message: string };
+
+/** Immutable operation identity, claimed atomically with the
+ *  reservation — the row that makes one operation id mean exactly
+ *  one paid request shape across every Node process. */
+export interface OperationRecord {
+  operationId: string;
+  requestKind: string;
+  actorId: string | null;
+  studentId: string | null;
+  applicationId: string | null;
+  documentId: string | null;
+  versionId: string | null;
+  unitsKey: string;
+  createdAt: string;
+}
+
+/** Canonical billing-relevant identity of the unit set — sorted
+ *  "unit:quantity" pairs, so {reilaa,gptzero} and {gptzero,reilaa}
+ *  share a key but {reilaa} and {reilaa,gptzero} never do. */
+export function canonicalUnitsKey(units: { unit: string; quantity?: number }[]): string {
+  return units
+    .map(u => `${u.unit}:${u.quantity ?? 1}`)
+    .sort()
+    .join(",");
+}
+
+export async function getOperation(operationId: string): Promise<OperationRecord | null> {
+  const pool = getDbPool();
+  const [rows] = await pool.execute(
+    "SELECT * FROM ryne_spend_operations WHERE operation_id = ?",
+    [operationId],
+  );
+  const r = (rows as any[])[0];
+  if (!r) return null;
+  return {
+    operationId: r.operation_id,
+    requestKind: r.request_kind,
+    actorId: r.actor_id ?? null,
+    studentId: r.student_id ?? null,
+    applicationId: r.application_id ?? null,
+    documentId: r.document_id ?? null,
+    versionId: r.version_id ?? null,
+    unitsKey: r.units_key,
+    createdAt: String(r.created_at),
+  };
+}
 
 /** Only these proofs may release a reservation as REFUNDED — cases
  *  where the request provably never reached the provider. */
@@ -270,6 +316,21 @@ export async function reserveSpend(input: ReserveInput): Promise<ReserveOutcome>
     }
     try {
       await conn.beginTransaction();
+      // Claim the operation identity FIRST — the PRIMARY KEY insert
+      // atomically rejects any other process using this id, regardless
+      // of whether its detector/humanizer set overlaps ours.
+      await conn.execute(
+        `INSERT INTO ryne_spend_operations
+           (operation_id, request_kind, actor_id, student_id, application_id,
+            document_id, version_id, units_key)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [
+          input.operationId, input.kind, input.actorId ?? null,
+          input.ids?.studentId ?? null, input.ids?.applicationId ?? null,
+          input.ids?.documentId ?? null, input.ids?.versionId ?? null,
+          canonicalUnitsKey(items.map(p => ({ unit: p.unit, quantity: p.est.quantity }))),
+        ],
+      );
       // Counter rows must exist before the conditional increments.
       await conn.execute(
         "INSERT IGNORE INTO ryne_spend_counters (scope, scope_key) VALUES ('day', ?), ('total', 'ALL')",
@@ -339,9 +400,14 @@ export async function reserveSpend(input: ReserveInput): Promise<ReserveOutcome>
     } catch (err: any) {
       await conn.rollback().catch(() => {});
       if (err?.code === "ER_DUP_ENTRY") {
-        // Same logical operation raced us — follow its reservation.
-        const existing = await getOperationEvents(input.operationId).catch(() => [] as SpendEvent[]);
-        return { kind: "FOLLOWER", events: existing };
+        // Same logical operation raced us — report its stored identity
+        // so the caller can distinguish an identical retry from an
+        // opId reuse with different billing parameters.
+        const [operation, existing] = await Promise.all([
+          getOperation(input.operationId).catch(() => null),
+          getOperationEvents(input.operationId).catch(() => [] as SpendEvent[]),
+        ]);
+        return { kind: "FOLLOWER", events: existing, operation };
       }
       if (err?.code === "ER_LOCK_DEADLOCK" && attempt < MAX_TXN_ATTEMPTS) continue;
       return { kind: "UNAVAILABLE", message: `spend ledger unavailable: ${err?.message ?? err}` };

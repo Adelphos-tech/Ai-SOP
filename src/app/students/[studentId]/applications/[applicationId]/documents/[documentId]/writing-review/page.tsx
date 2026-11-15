@@ -344,7 +344,12 @@ export default function WritingReviewPage() {
       const res = await fetch(`/api/application/writing-review?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "recheck", detectors: chosen, confirmPaid: chosen.length > 0 }),
+        // One operationId per deliberate recheck — retries of this same
+        // submission dedupe server-side; a new click = a new operation.
+        body: JSON.stringify({
+          action: "recheck", detectors: chosen, confirmPaid: chosen.length > 0,
+          operationId: crypto.randomUUID(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) { setNotice(data.error || "Check failed"); return; }

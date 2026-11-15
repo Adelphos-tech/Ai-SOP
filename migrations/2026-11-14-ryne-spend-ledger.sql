@@ -12,6 +12,22 @@
 --   its own rows. No document text, prompts or provider payloads are
 --   ever stored here.
 
+-- ryne_spend_operations: immutable operation identity, claimed
+-- atomically in the same transaction as the reservation. The PK is the
+-- cross-process dedup guarantee — two requests using one operation id
+-- can never both reserve, even with non-overlapping detector sets.
+CREATE TABLE IF NOT EXISTS ryne_spend_operations (
+  operation_id   CHAR(36) PRIMARY KEY,
+  request_kind   VARCHAR(16)  NOT NULL,
+  actor_id       VARCHAR(64)  DEFAULT NULL,
+  student_id     CHAR(36)     DEFAULT NULL,
+  application_id CHAR(36)     DEFAULT NULL,
+  document_id    CHAR(36)     DEFAULT NULL,
+  version_id     CHAR(36)     DEFAULT NULL,
+  units_key      VARCHAR(255) NOT NULL,
+  created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS ryne_spend_counters (
   scope        VARCHAR(16)  NOT NULL,
   scope_key    VARCHAR(16)  NOT NULL,
