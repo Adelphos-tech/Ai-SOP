@@ -401,6 +401,15 @@ async function main() {
     assert.equal(counter("day", DAY).settled_usd, 0);
   });
 
+  await check("a unit repeated within one operation is refused up front, not reported as a lost race", async () => {
+    reset();
+    const input = op([{ unit: "reilaa" }, { unit: "reilaa" }]);
+    const out = await reserveSpend(input);
+    assert.equal(out.kind, "UNPRICED");
+    assert.equal(dayEffective(), 0);
+    assert.equal((await getOperationEvents(input.operationId)).length, 0);
+  });
+
   delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
   delete process.env.RYNE_DAILY_BUDGET_USD;
   console.log(`\n${pass} passed, ${fail} failed`);

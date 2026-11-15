@@ -297,6 +297,12 @@ export async function reserveSpend(input: ReserveInput): Promise<ReserveOutcome>
   if (!input.operationId || input.units.length === 0) {
     return { kind: "UNPRICED", unit: "", reason: "operationId and at least one unit are required" };
   }
+  // One event per (operation, unit): a repeated unit would trip the
+  // events unique key mid-transaction and look like a lost race.
+  const repeated = input.units.find((u, i) => input.units.findIndex(o => o.unit === u.unit) !== i);
+  if (repeated) {
+    return { kind: "UNPRICED", unit: repeated.unit, reason: `unit "${repeated.unit}" is listed more than once in one operation` };
+  }
   const priced = input.units.map(u => ({ ...u, est: estimateFor(u.unit, u.quantity ?? 1) }));
   const bad = priced.find(p => !p.est.ok);
   if (bad || !priced.every(p => p.est.ok)) {
