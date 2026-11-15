@@ -21,7 +21,7 @@
 
 import "./test-setup";
 import { NextRequest } from "next/server";
-import { closeDbPool, assertTestDatabase, cleanupTestDb } from "./test-setup";
+import { closeDbPool, assertTestDatabase, cleanupTestDb, ensureTestSession, TEST_SESSION_TOKEN } from "./test-setup";
 import {
   createStudent,
   createApplication,
@@ -54,20 +54,26 @@ function assert(condition: boolean, message: string) {
   }
 }
 
+const AUTH_COOKIE = `dvivid_session=${TEST_SESSION_TOKEN}`;
+
 function jsonReq(url: string, body: unknown, method = "POST"): NextRequest {
   return new NextRequest(`http://localhost${url}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", cookie: AUTH_COOKIE },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
 
 function getReq(url: string): NextRequest {
-  return new NextRequest(`http://localhost${url}`, { method: "GET" });
+  return new NextRequest(`http://localhost${url}`, {
+    method: "GET",
+    headers: { cookie: AUTH_COOKIE },
+  });
 }
 
 async function run() {
   await assertTestDatabase();
+  await ensureTestSession();
   console.log("=== API Contract Tests ===\n");
 
   // ---------------------------------------------------------------

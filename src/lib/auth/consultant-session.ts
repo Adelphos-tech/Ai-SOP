@@ -244,29 +244,13 @@ export async function getConsultantSession(request: NextRequest): Promise<Consul
  * Require a valid consultant session. Throws AuthError(401) if not authenticated.
  * Use in API routes:
  *   const consultant = await requireConsultantSession(request);
- *
- * NOTE: Login is NOT required for now. This function returns a dummy consultant
- * so all endpoints work without authentication. To enable login enforcement,
- * remove the bypass block below and uncomment the real session check.
  */
 export async function requireConsultantSession(request: NextRequest): Promise<Consultant> {
-  // ===== LOGIN NOT REQUIRED — temporary bypass =====
-  // To enable auth: delete this block and uncomment the code below.
-  return {
-    id: "system",
-    email: "system@dvivid.local",
-    name: "System",
-    role: "ADMIN",
-    organizationId: null,
-    isActive: true,
-  };
-  // ===== END bypass =====
-
-  // const session = await getConsultantSession(request);
-  // if (!session) {
-  //   throw new AuthError(401, "UNAUTHENTICATED", "Authentication required. Please log in.");
-  // }
-  // return session.consultant;
+  const session = await getConsultantSession(request);
+  if (!session) {
+    throw new AuthError(401, "UNAUTHENTICATED", "Authentication required. Please log in.");
+  }
+  return session.consultant;
 }
 
 /**

@@ -99,6 +99,38 @@ export async function cleanupTestDb(): Promise<void> {
   await pool.execute("SET FOREIGN_KEY_CHECKS = 1");
 }
 
+// ============================================================
+// TEST CONSULTANT SESSION
+// ============================================================
+
+/**
+ * Fixed test session token (64 hex chars, as required by
+ * getTokenFromRequest). The matching row is seeded via
+ * ensureTestSession() so route-level tests authenticate exactly
+ * like a real sign-in — no auth bypass in test code.
+ */
+export const TEST_SESSION_TOKEN =
+  "5e55a10c0000000000000000000000000000000000000000000000000000abcd";
+
+export async function ensureTestSession(): Promise<string> {
+  await assertTestDatabase();
+  const { createHash, randomUUID } = await import("crypto");
+  const { getDbPool } = await import("../src/lib/application/db");
+  const pool = getDbPool();
+  const tokenHash = createHash("sha256").update(TEST_SESSION_TOKEN).digest("hex");
+  await pool.execute(
+    `INSERT INTO consultants (id, email, password_hash, name, role, is_active)
+     VALUES ('test-consultant-1', 'test@dvivid.test', 'unused', 'Test Consultant', 'ADMIN', TRUE)
+     ON DUPLICATE KEY UPDATE is_active = TRUE`,
+  );
+  await pool.execute(
+    `INSERT IGNORE INTO consultant_sessions (id, consultant_id, token_hash, expires_at)
+     VALUES (?, 'test-consultant-1', ?, ?)`,
+    [randomUUID(), tokenHash, new Date(Date.now() + 8 * 3600 * 1000)],
+  );
+  return TEST_SESSION_TOKEN;
+}
+
 /**
  * Get production row counts for verification.
  * This connects to the PRODUCTION database read-only to
