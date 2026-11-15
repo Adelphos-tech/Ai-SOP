@@ -1,0 +1,51 @@
+# One-shot: count consultant accounts (account-restriction feasibility).
+name: Prod Consultant Count
+on:
+  push:
+    branches: [prod-ryne-ops]
+    paths: [.github/workflows/ryne-acct-check.yml]
+permissions:
+  contents: read
+jobs:
+  check:
+    name: Consultant account check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host sop-production
+            HostName $DEPLOY_HOST
+            User root
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 ~/.ssh/config
+      - name: Count consultants + active sessions
+        run: |
+          ssh sop-production 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          ENV_FILE="/opt/sop-ai-app/.env.local"
+          DB_HOST=$(grep -E '^SOP_DB_HOST=' "$ENV_FILE" | cut -d= -f2-)
+          DB_PORT=$(grep -E '^SOP_DB_PORT=' "$ENV_FILE" | cut -d= -f2- || true)
+          DB_USER=$(grep -E '^SOP_DB_USER=' "$ENV_FILE" | cut -d= -f2-)
+          DB_PASS=$(grep -E '^SOP_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)
+          DB_NAME=$(grep -E '^SOP_DB_NAME=' "$ENV_FILE" | cut -d= -f2-)
+          MQ() { mysql -h "${DB_HOST:-127.0.0.1}" -P "${DB_PORT:-3306}" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -N -e "$1"; }
+          echo "total consultants: $(MQ 'SELECT COUNT(*) FROM consultants')"
+          echo "active consultants: $(MQ 'SELECT COUNT(*) FROM consultants WHERE is_active=1')"
+          echo "roles: $(MQ 'SELECT role, COUNT(*) FROM consultants GROUP BY role' | tr '\n' ' ')"
+          echo "live sessions now: $(MQ 'SELECT COUNT(*) FROM consultant_sessions WHERE expires_at > NOW()')"
+          REMOTE
