@@ -23,6 +23,12 @@ const IDS = { studentId: randomUUID(), applicationId: randomUUID(), documentId: 
 
 async function reset() {
   const pool = getDbPool();
+  // These deletes wipe the whole ledger — only ever in a disposable *_test database.
+  const [dbRows] = await pool.execute("SELECT DATABASE() AS db");
+  const db = String((dbRows as any[])[0]?.db ?? "");
+  if (!db.endsWith("_test")) {
+    throw new Error(`Refusing to clear the spend ledger in "${db}": set SOP_DB_NAME to a disposable *_test database.`);
+  }
   await pool.execute("DELETE FROM ryne_spend_events");
   await pool.execute("DELETE FROM ryne_spend_operations");
   await pool.execute("DELETE FROM ryne_spend_counters");
