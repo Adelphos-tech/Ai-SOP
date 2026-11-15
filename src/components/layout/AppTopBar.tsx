@@ -13,7 +13,7 @@ import { useNavigationGuard } from "./NavigationGuardContext";
 
 export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
   const router = useRouter();
-  const { checkGuard } = useNavigationGuard();
+  const { checkSignOut } = useNavigationGuard();
   const [query, setQuery] = useState("");
   const [consultantName, setConsultantName] = useState("");
 
@@ -84,7 +84,7 @@ export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
         >
           <span className="text-xs font-semibold text-dvivid-primary">{initials}</span>
         </div>
-        <LogoutButton confirmLeave={() => checkGuard("/login")} />
+        <LogoutButton confirmLeave={checkSignOut} />
       </div>
     </header>
   );
