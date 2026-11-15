@@ -64,11 +64,12 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
  * Logout button — calls POST /api/auth/session (destroys session)
  * then redirects to /login.
  */
-export function LogoutButton() {
+export function LogoutButton({ confirmLeave }: { confirmLeave?: () => boolean }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
   const handleLogout = async () => {
+    if (confirmLeave && !confirmLeave()) return;
     setLoading(true);
     try {
       await fetch("/api/auth/session", { method: "POST" });

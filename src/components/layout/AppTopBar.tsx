@@ -9,9 +9,11 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { LogoutButton } from "@/components/auth/AuthGuard";
+import { useNavigationGuard } from "./NavigationGuardContext";
 
 export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
   const router = useRouter();
+  const { checkGuard } = useNavigationGuard();
   const [query, setQuery] = useState("");
   const [consultantName, setConsultantName] = useState("");
 
@@ -82,7 +84,7 @@ export function AppTopBar({ onMenuToggle }: { onMenuToggle: () => void }) {
         >
           <span className="text-xs font-semibold text-dvivid-primary">{initials}</span>
         </div>
-        <LogoutButton />
+        <LogoutButton confirmLeave={() => checkGuard("/login")} />
       </div>
     </header>
   );
