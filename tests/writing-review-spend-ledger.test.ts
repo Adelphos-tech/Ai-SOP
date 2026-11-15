@@ -49,12 +49,28 @@ async function main() {
   delete process.env.RYNE_TOTAL_BUDGET_USD;
   reset();
 
-  await check("unverified pricing without ceiling → reservation refused", async () => {
+  await check("unverified pricing without ceiling → reserved at $0, never assumed free", async () => {
     delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
     const out = await reserveSpend(op([{ unit: "reilaa" }]));
-    assert.equal(out.kind, "UNPRICED");
-    assert.equal(dayEffective(), 0);
+    assert.equal(out.kind, "RESERVED");
+    if (out.kind === "RESERVED") {
+      assert.equal(out.events[0].estimatedUsd, 0);
+      assert.equal(out.events[0].costBasis, "UNVERIFIED_ESTIMATE");
+    }
+    assert.equal(dayEffective(), 0); // $0 reservation consumes no budget
     process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = CEIL;
+  });
+
+  await check("daily budget unset → no cap, every reservation proceeds", async () => {
+    reset();
+    delete process.env.RYNE_DAILY_BUDGET_USD;
+    delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
+    for (let i = 0; i < 10; i++) {
+      const out = await reserveSpend(op([{ unit: "reilaa" }]));
+      assert.equal(out.kind, "RESERVED");
+    }
+    process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = CEIL;
+    process.env.RYNE_DAILY_BUDGET_USD = "0.10";
   });
 
   await check("daily budget: reservations stop at cap, failed attempt reserves nothing", async () => {

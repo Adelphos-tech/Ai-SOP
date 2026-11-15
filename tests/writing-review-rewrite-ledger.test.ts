@@ -84,17 +84,19 @@ async function main() {
     delete store().failConnect;
   });
 
-  await check("no approved ceiling → blocked; titan quote above ceiling → blocked", async () => {
+  await check("no ceiling → allowed at $0 reservation; titan quote above ceiling → blocked", async () => {
     delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
     calls.n = 0;
     const out = await runRewrite(opts());
-    assert.equal(out.kind, "NOT_CONFIGURED");
-    assert.match(out.kind === "NOT_CONFIGURED" ? out.notice : "", /unverified/);
+    assert.equal(out.kind, "OK"); // unpriced, not blocked — recorded UNVERIFIED_ESTIMATE
+    assert.equal(calls.n, 1);
     process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = "0.02";
+    calls.n = 0;
     // titan quote: 100 words × $0.0005 = $0.05 > ceiling 0.02 → refused
     const big = await runRewrite(opts({ mode: "titan", text: "w ".repeat(100) }));
     assert.equal(big.kind, "NOT_CONFIGURED");
     assert.equal(calls.n, 0);
+    (globalThis.__MOCK_DB as any) = {}; // drop this check's event so global counts hold
   });
 
   await check("budget exceeded → OVER_BUDGET, zero calls", async () => {
