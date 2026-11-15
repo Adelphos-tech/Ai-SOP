@@ -205,17 +205,23 @@ async function main() {
 
   await check("kill switch OFF: runRewrite makes zero provider calls and reserves no spend", async () => {
     const spy = neverFetch();
+    // Brick 4B-C2: rewriting reserves via the persistent ledger — the
+    // switch-off run must create zero ledger events.
+    process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = "0.0004";
     process.env.RYNE_DAILY_BUDGET_USD = "0.0006";
     const text = "A short passage to rewrite.";
+    const before = Object.keys((globalThis.__MOCK_DB as any).spendEvents ?? {}).length;
     const out = await runRewrite({ text, mode: "balanced", confirmPaid: true, fetcher: spy.fetcher });
     assert.equal(out.kind, "NOT_CONFIGURED");
     assert.equal(spy.calls(), 0);
-    // The ~$0.0004 estimate fits the $0.0006 cap only if the blocked
-    // run reserved nothing — a wrong reservation makes this OVER_BUDGET.
+    assert.equal(Object.keys((globalThis.__MOCK_DB as any).spendEvents ?? {}).length, before);
+    // The $0.0004 ceiling reservation fits the $0.0006 cap only if the
+    // blocked run reserved nothing — a wrong reservation → OVER_BUDGET.
     process.env.RYNE_PAID_CALLS_ENABLED = "1";
     const on = await runRewrite({ text, mode: "balanced", confirmPaid: true, fetcher: spy.fetcher });
     assert.equal(on.kind, "OK");
     assert.equal(spy.calls(), 1);
+    delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
   });
 
   await check("kill switch OFF: runDetection makes zero provider calls and reserves no spend", async () => {

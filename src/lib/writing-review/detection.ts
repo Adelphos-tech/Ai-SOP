@@ -24,7 +24,7 @@ import {
   canonicalUnitsKey,
   getOperation,
   markUnknown,
-  refundSpend as refundLedgerEvent, // alias — this file exports refundSpend for rewrite.ts
+  refundSpend as refundLedgerEvent,
   reserveSpend,
   settleSpend,
   type OperationRecord,
@@ -98,34 +98,9 @@ export type DetectionOutcome =
 const lastRunAt = new Map<string, number>();
 const resultCache = new Map<string, { at: number; detection: DetectionResult }>();
 const inFlight = new Map<string, Promise<DetectionOutcome>>();
-// Brick 4B-C1: detection reserves via the persistent MySQL ledger.
-// The in-memory counter below remains ONLY for rewrite.ts until the
-// humanizer brick lands — do not remove while it is imported there.
-const spend = { day: "", usd: 0 };
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 200;
 
-/** Daily spend ceiling — used by the persistent ledger (detection)
- *  and, until its own brick lands, by the in-memory rewrite path.
- *  LIMITATION (rewrite only): in-memory; resets on restart. */
-export function dailyBudgetUsd(): number {
-  const n = Number(process.env.RYNE_DAILY_BUDGET_USD ?? 5);
-  return Number.isFinite(n) && n > 0 ? n : 5;
-}
-export function checkSpend(addUsd: number): boolean {
-  const today = new Date().toISOString().slice(0, 10);
-  if (spend.day !== today) { spend.day = today; spend.usd = 0; }
-  if (spend.usd + addUsd > dailyBudgetUsd()) return false;
-  spend.usd += addUsd;
-  return true;
-}
-/** Release a reserved amount (e.g. a follower request covered by an
- *  in-flight leader, or a call that returned before billing). */
-export function refundSpend(usd: number) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (spend.day !== today) { spend.day = today; spend.usd = 0; }
-  spend.usd = Math.max(0, spend.usd - usd);
-}
 function cacheSet(key: string, detection: DetectionResult, now: number) {
   if (resultCache.size >= CACHE_MAX_ENTRIES) {
     // evict expired/oldest entries — bounded memory
@@ -331,179 +306,181 @@ export async function runDetection(
 
   // Concurrency dedup BEFORE reserving spend: an identical in-flight
   // run shares its promise — followers must not create a reservation.
+  // The run promise is registered synchronously so the dedup window
+  // covers the awaited identity claim and reservation too.
   const inflight = inFlight.get(ck);
   if (inflight) return inflight;
 
-  // Brick 4B-C1: durable per-detector reservation BEFORE any provider
-  // call. One ledger event per selected detector (real billing
-  // granularity); all-or-nothing; cross-process duplicate-safe via the
-  // operation id. Detector prices are unverified — reservation amounts
-  // come from the approved ceiling, never from invented pricing.
-  const operationId = opts.operationId ?? randomUUID();
-  const tools = requested.map(det => TOOL_BY_DETECTOR[det]);
+  const run = (async (): Promise<DetectionOutcome> => {
+    // Brick 4B-C1: durable per-detector reservation BEFORE any provider
+    // call. One ledger event per selected detector (real billing
+    // granularity); all-or-nothing; cross-process duplicate-safe via the
+    // operation id. Detector prices are unverified — reservation amounts
+    // come from the approved ceiling, never from invented pricing.
+    const operationId = opts.operationId ?? randomUUID();
+    const tools = requested.map(det => TOOL_BY_DETECTOR[det]);
 
-  // Operation identity: an opId already claimed may only continue as
-  // an identical retry — same kind, actor, student/application/
-  // document/version and canonical detector set. Anything else is a
-  // rejected identity conflict; the claim is enforced atomically in
-  // the reservation transaction, so non-overlapping detector sets on
-  // different processes can never both bill under one id.
-  const wantUnitsKey = canonicalUnitsKey(tools.map(unit => ({ unit, quantity: 1 })));
-  const opIdentityMatches = (op: OperationRecord | null) =>
-    !!op &&
-    op.requestKind === "DETECTION" &&
-    op.actorId === (opts.actorId ?? null) &&
-    op.studentId === (opts.ids?.studentId ?? null) &&
-    op.applicationId === (opts.ids?.applicationId ?? null) &&
-    op.documentId === documentKey &&
-    op.versionId === (opts.ids?.versionId ?? null) &&
-    op.unitsKey === wantUnitsKey;
-  let prior: OperationRecord | null | undefined;
-  try {
-    prior = await getOperation(operationId);
-  } catch {
-    return {
-      kind: "NOT_CONFIGURED",
-      detection: base,
-      notice: "Paid detection is blocked — spend ledger unavailable: no connection. No text was sent and no charges were made.",
-    };
-  }
-  if (prior) {
-    return {
-      kind: "DUPLICATE",
-      detection: base,
-      notice: opIdentityMatches(prior)
-        ? "This check is already recorded — a duplicate submission was ignored and no additional charge was made. Results, if any, come from the original run."
-        : "This check identifier was already used for a different request — it cannot be reused. Start a new check.",
-    };
-  }
-
-  const reservation = await reserveSpend({
-    operationId,
-    kind: "DETECTION",
-    units: tools.map(unit => ({ unit })),
-    actorId: opts.actorId ?? null,
-    ids: {
-      studentId: opts.ids?.studentId,
-      applicationId: opts.ids?.applicationId,
-      documentId: documentKey,
-      versionId: opts.ids?.versionId,
-    },
-  });
-  switch (reservation.kind) {
-    case "UNAVAILABLE":
+    // Operation identity: an opId already claimed may only continue as
+    // an identical retry — same kind, actor, student/application/
+    // document/version and canonical detector set. Anything else is a
+    // rejected identity conflict; the claim is enforced atomically in
+    // the reservation transaction, so non-overlapping detector sets on
+    // different processes can never both bill under one id.
+    const wantUnitsKey = canonicalUnitsKey(tools.map(unit => ({ unit, quantity: 1 })));
+    const opIdentityMatches = (op: OperationRecord | null) =>
+      !!op &&
+      op.requestKind === "DETECTION" &&
+      op.actorId === (opts.actorId ?? null) &&
+      op.studentId === (opts.ids?.studentId ?? null) &&
+      op.applicationId === (opts.ids?.applicationId ?? null) &&
+      op.documentId === documentKey &&
+      op.versionId === (opts.ids?.versionId ?? null) &&
+      op.unitsKey === wantUnitsKey;
+    let prior: OperationRecord | null | undefined;
+    try {
+      prior = await getOperation(operationId);
+    } catch {
       return {
         kind: "NOT_CONFIGURED",
         detection: base,
-        notice: `Paid detection is blocked — ${reservation.message}. No text was sent and no charges were made.`,
+        notice: "Paid detection is blocked — spend ledger unavailable: no connection. No text was sent and no charges were made.",
       };
-    case "UNPRICED":
-      return {
-        kind: "NOT_CONFIGURED",
-        detection: base,
-        notice: `Paid detection is blocked — ${reservation.reason}. No text was sent and no charges were made.`,
-      };
-    case "OVER_BUDGET":
-      return {
-        kind: "OVER_BUDGET",
-        notice: `Ryne ${reservation.scope === "total" ? "overall" : "daily"} spend cap (~$${reservation.limitUsd.toFixed(2)}) reached. Estimated reservation blocked: ~$${reservation.attemptedUsd.toFixed(4)} (unverified estimate — Ryne does not publish confirmed per-detector pricing).`,
-        requested: requested.length,
-        allowed: 0,
-      };
-    case "FOLLOWER": {
-      // Lost a race: another process claimed this opId between our
-      // pre-check and our insert. Re-validate against the winner's
-      // immutable identity — identical retry vs rejected conflict.
+    }
+    if (prior) {
       return {
         kind: "DUPLICATE",
         detection: base,
-        notice: opIdentityMatches(reservation.operation)
+        notice: opIdentityMatches(prior)
           ? "This check is already recorded — a duplicate submission was ignored and no additional charge was made. Results, if any, come from the original run."
           : "This check identifier was already used for a different request — it cannot be reused. Start a new check.",
       };
     }
-  }
-  const events = reservation.events;
-  const eventByUnit = new Map(events.map(e => [e.requestUnit, e]));
 
-  // Cancellation after the reservation but before dispatch: provably
-  // unbilled → release every event as REFUNDED.
-  if (opts.signal?.aborted) {
-    await Promise.all(events.map(e => refundLedgerEvent(e.id, "CANCELLED_PRE_SEND").catch(() => false)));
-    return { kind: "CANCELLED", detection: base };
-  }
-
-  const run = (async (): Promise<DetectionOutcome> => {
-  const settled = await Promise.allSettled(
-    requested.map(det =>
-      callDetector(TOOL_BY_DETECTOR[det], opts.content, key, checkedAt, fetcher, opts.signal),
-    ),
-  );
-
-  // Settle each detector's ledger event independently: a genuine score
-  // settles at the reserved estimate; any failure or ambiguous outcome
-  // (timeout, network, HTTP error, crash) stays UNKNOWN and keeps
-  // consuming budget — a failed call is never presumed unbilled.
-  await Promise.all(settled.map(async (s, i) => {
-    const ev = eventByUnit.get(tools[i]);
-    if (!ev) return;
-    if (s.status === "fulfilled" && s.value.score.status === "SCORED") {
-      const ok = await settleSpend(ev.id, { outcome: "OK" }).catch(() => false);
-      if (!ok) await markUnknown(ev.id, "SETTLEMENT_FAILED").catch(() => {});
-      return;
+    const reservation = await reserveSpend({
+      operationId,
+      kind: "DETECTION",
+      units: tools.map(unit => ({ unit })),
+      actorId: opts.actorId ?? null,
+      ids: {
+        studentId: opts.ids?.studentId,
+        applicationId: opts.ids?.applicationId,
+        documentId: documentKey,
+        versionId: opts.ids?.versionId,
+      },
+    });
+    switch (reservation.kind) {
+      case "UNAVAILABLE":
+        return {
+          kind: "NOT_CONFIGURED",
+          detection: base,
+          notice: `Paid detection is blocked — ${reservation.message}. No text was sent and no charges were made.`,
+        };
+      case "UNPRICED":
+        return {
+          kind: "NOT_CONFIGURED",
+          detection: base,
+          notice: `Paid detection is blocked — ${reservation.reason}. No text was sent and no charges were made.`,
+        };
+      case "OVER_BUDGET":
+        return {
+          kind: "OVER_BUDGET",
+          notice: `Ryne ${reservation.scope === "total" ? "overall" : "daily"} spend cap (~$${reservation.limitUsd.toFixed(2)}) reached. Estimated reservation blocked: ~$${reservation.attemptedUsd.toFixed(4)} (unverified estimate — Ryne does not publish confirmed per-detector pricing).`,
+          requested: requested.length,
+          allowed: 0,
+        };
+      case "FOLLOWER": {
+        // Lost a race: another process claimed this opId between our
+        // pre-check and our insert. Re-validate against the winner's
+        // immutable identity — identical retry vs rejected conflict.
+        return {
+          kind: "DUPLICATE",
+          detection: base,
+          notice: opIdentityMatches(reservation.operation)
+            ? "This check is already recorded — a duplicate submission was ignored and no additional charge was made. Results, if any, come from the original run."
+            : "This check identifier was already used for a different request — it cannot be reused. Start a new check.",
+        };
+      }
     }
-    const code = s.status === "fulfilled"
-      ? (s.value.score.error?.code ?? "ERROR")
-      : "INTERNAL";
-    await markUnknown(ev.id, code).catch(() => {});
-  }));
+    const events = reservation.events;
+    const eventByUnit = new Map(events.map(e => [e.requestUnit, e]));
 
-  const scores: DetectorScore[] = [];
-  const passages: FlaggedPassage[] = [];
-  settled.forEach((s, i) => {
-    const det = requested[i];
-    if (s.status !== "fulfilled") {
-      scores.push({
-        detector: det as DetectorScore["detector"],
-        status: "ERROR",
-        error: {
+    // Cancellation after the reservation but before dispatch: provably
+    // unbilled → release every event as REFUNDED.
+    if (opts.signal?.aborted) {
+      await Promise.all(events.map(e => refundLedgerEvent(e.id, "CANCELLED_PRE_SEND").catch(() => false)));
+      return { kind: "CANCELLED", detection: base };
+    }
+
+    const settled = await Promise.allSettled(
+      requested.map(det =>
+        callDetector(TOOL_BY_DETECTOR[det], opts.content, key, checkedAt, fetcher, opts.signal),
+      ),
+    );
+
+    // Settle each detector's ledger event independently: a genuine score
+    // settles at the reserved estimate; any failure or ambiguous outcome
+    // (timeout, network, HTTP error, crash) stays UNKNOWN and keeps
+    // consuming budget — a failed call is never presumed unbilled.
+    await Promise.all(settled.map(async (s, i) => {
+      const ev = eventByUnit.get(tools[i]);
+      if (!ev) return;
+      if (s.status === "fulfilled" && s.value.score.status === "SCORED") {
+        const ok = await settleSpend(ev.id, { outcome: "OK" }).catch(() => false);
+        if (!ok) await markUnknown(ev.id, "SETTLEMENT_FAILED").catch(() => {});
+        return;
+      }
+      const code = s.status === "fulfilled"
+        ? (s.value.score.error?.code ?? "ERROR")
+        : "INTERNAL";
+      await markUnknown(ev.id, code).catch(() => {});
+    }));
+
+    const scores: DetectorScore[] = [];
+    const passages: FlaggedPassage[] = [];
+    settled.forEach((s, i) => {
+      const det = requested[i];
+      if (s.status !== "fulfilled") {
+        scores.push({
           detector: det as DetectorScore["detector"],
-          code: "INTERNAL",
-          message: String(s.reason),
-          retryable: true,
-        },
-      });
-      return;
+          status: "ERROR",
+          error: {
+            detector: det as DetectorScore["detector"],
+            code: "INTERNAL",
+            message: String(s.reason),
+            retryable: true,
+          },
+        });
+        return;
+      }
+      scores.push(s.value.score);
+      // Sentence findings only when the provider genuinely returned
+      // them — ambiguity-safe matching, document-level → no highlights.
+      if (s.value.score.status === "SCORED" && s.value.raw) {
+        passages.push(...mapSentenceFindings(opts.content, det as DetectorScore["detector"], s.value.raw));
+      }
+    });
+
+    // Non-selected detectors keep their honest registry state.
+    const selected = new Set(requested);
+    for (const s of listDetectorStatuses()) {
+      if (!selected.has(s.detector)) scores.push(s);
     }
-    scores.push(s.value.score);
-    // Sentence findings only when the provider genuinely returned
-    // them — ambiguity-safe matching, document-level → no highlights.
-    if (s.value.score.status === "SCORED" && s.value.raw) {
-      passages.push(...mapSentenceFindings(opts.content, det as DetectorScore["detector"], s.value.raw));
-    }
-  });
 
-  // Non-selected detectors keep their honest registry state.
-  const selected = new Set(requested);
-  for (const s of listDetectorStatuses()) {
-    if (!selected.has(s.detector)) scores.push(s);
-  }
+    const detection: DetectionResult = { ...base, scores, passages };
+    // Only cache clean results — a transient provider failure must not
+    // lock the user out of a retry for the cache TTL.
+    const requestedErrored = requested.some(det =>
+      scores.some(s => s.detector === det && s.status === "ERROR"));
+    if (!requestedErrored) cacheSet(ck, detection, now());
+    if (opts.signal?.aborted) return { kind: "CANCELLED", detection };
 
-  const detection: DetectionResult = { ...base, scores, passages };
-  // Only cache clean results — a transient provider failure must not
-  // lock the user out of a retry for the cache TTL.
-  const requestedErrored = requested.some(det =>
-    scores.some(s => s.detector === det && s.status === "ERROR"));
-  if (!requestedErrored) cacheSet(ck, detection, now());
-  if (opts.signal?.aborted) return { kind: "CANCELLED", detection };
-
-  return {
-    kind: "OK",
-    detection,
-    // Sum of per-detector reservations — an internal estimate only,
-    // never a provider-confirmed charge.
-    estimatedCostUsd: reservation.totalUsd,
-  };
+    return {
+      kind: "OK",
+      detection,
+      // Sum of per-detector reservations — an internal estimate only,
+      // never a provider-confirmed charge.
+      estimatedCostUsd: reservation.totalUsd,
+    };
   })().finally(() => inFlight.delete(ck));
   inFlight.set(ck, run);
   return run;

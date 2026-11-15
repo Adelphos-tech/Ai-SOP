@@ -120,6 +120,10 @@ export async function POST(request: NextRequest) {
     if (!current) {
       return NextResponse.json({ error: "Document has no generated version to review." }, { status: 400 });
     }
+    // Brick 4B-C1/C2: a stable operationId is required for paid
+    // actions so retries of one user action cannot double-bill across
+    // processes; a new deliberate action sends a fresh id.
+    const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
     if (body.action === "rewrite") {
       // Brick 3: rewrite ONLY the selected passage, and only after
       // verifying the text exists in the authorized current version —
@@ -130,11 +134,23 @@ export async function POST(request: NextRequest) {
           { error: "Selected text was not found in the current document version. Reload the review and try again." },
           { status: 409 });
       }
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+        return NextResponse.json(
+          { error: "A valid operationId (UUID) is required for a rewrite." }, { status: 400 });
+      }
       const mode = body.mode === "titan" ? "titan" : "balanced";
       const out = await runRewrite({
         text: passageText,
         mode,
         confirmPaid: body.confirmPaid === true,
+        operationId,
+        actorId: consultant.id,
+        ids: {
+          studentId: url.searchParams.get("studentId") ?? undefined,
+          applicationId: url.searchParams.get("applicationId") ?? undefined,
+          documentId: url.searchParams.get("documentId") ?? undefined,
+          versionId: current.id,
+        },
         signal: request.signal,
       });
       switch (out.kind) {
@@ -147,6 +163,8 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: out.notice }, { status: 402 });
         case "TOO_LONG":
           return NextResponse.json({ error: out.notice }, { status: 413 });
+        case "DUPLICATE":
+          return NextResponse.json({ error: out.notice }, { status: 409 });
         case "CANCELLED":
           return NextResponse.json({ error: "Rewrite cancelled." }, { status: 499 });
         case "ERROR":
@@ -156,10 +174,6 @@ export async function POST(request: NextRequest) {
     if (body.action !== "recheck") {
       return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
     }
-    // Brick 4B-C1: a stable operationId is required so retries of one
-    // user action cannot double-bill across processes; a new check
-    // sends a fresh id.
-    const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
       return NextResponse.json(
         { error: "A valid operationId (UUID) is required for a detection run." }, { status: 400 });

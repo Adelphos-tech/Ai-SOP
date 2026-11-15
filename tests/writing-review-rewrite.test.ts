@@ -1,6 +1,9 @@
 /* Brick 3 contract tests — runRewrite with a MOCKED transport.
- * No network, no paid calls, no credentials logged. */
+ * No network, no paid calls, no credentials logged.
+ * Run with the mysql2 mock preload (Brick 4B-C2 spend ledger):
+ *   NODE_OPTIONS="--import ./tests/mysql2-mock-preload.mjs" npx tsx tests/writing-review-rewrite.test.ts */
 import assert from "node:assert/strict";
+import { randomUUID } from "crypto";
 import { runRewrite, rewriteCostUsd } from "../src/lib/writing-review/rewrite";
 
 let pass = 0, fail = 0;
@@ -27,6 +30,10 @@ async function main() {
   // Brick 4A: kill switch must be ON for mocked paid-path tests —
   // transport is still a stub, so no real call is ever made.
   process.env.RYNE_PAID_CALLS_ENABLED = "1";
+  // Brick 4B-C2: mocked ledger — approve the conservative ceiling so
+  // unverified-priced humanizer units may be reserved.
+  process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = "0.02";
+  process.env.RYNE_DAILY_BUDGET_USD = "10";
 
   {
     const out = await runRewrite(base({ confirmPaid: false }));
@@ -85,13 +92,34 @@ async function main() {
       await new Promise(r => setTimeout(r, 30));
       return new Response(JSON.stringify({ content: "x" }), { status: 200 });
     }) as any;
+    // Same operationId + same identity = retries of one logical op —
+    // they must share the leader, never bill twice.
+    const retry = { operationId: randomUUID(), actorId: "cons-1", ids: { documentId: "doc-iso", versionId: "v1" } };
     const [a, b] = await Promise.all([
-      runRewrite(base({ fetcher: counting })),
-      runRewrite(base({ fetcher: counting })),
+      runRewrite(base({ fetcher: counting, ...retry })),
+      runRewrite(base({ fetcher: counting, ...retry })),
     ]);
     assert.equal(a.kind, "OK");
     assert.ok(calls <= 1, `duplicate paid calls: ${calls}`);
     ok("concurrent identical rewrites deduplicate — no duplicate billing");
+  }
+  {
+    let calls = 0;
+    const counting: typeof fetch = (async (_u: any, init: any) => {
+      calls++;
+      await new Promise(r => setTimeout(r, 30));
+      return new Response(JSON.stringify({ content: "x" }), { status: 200 });
+    }) as any;
+    // Same text+mode but DIFFERENT operations/documents must never
+    // share a result — each is a separate attributed billable run.
+    const [a, b] = await Promise.all([
+      runRewrite(base({ fetcher: counting, operationId: randomUUID(), actorId: "cons-1", ids: { documentId: "doc-A", versionId: "v1" } })),
+      runRewrite(base({ fetcher: counting, operationId: randomUUID(), actorId: "cons-2", ids: { documentId: "doc-B", versionId: "v1" } })),
+    ]);
+    assert.equal(a.kind, "OK");
+    assert.equal(b.kind, "OK");
+    assert.equal(calls, 2);
+    ok("cross-consultant/cross-document identical text never shares a result");
   }
   {
     const out = await runRewrite(base({ text: "x".repeat(20_001) }));

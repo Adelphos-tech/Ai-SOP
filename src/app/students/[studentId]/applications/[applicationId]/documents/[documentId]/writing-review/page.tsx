@@ -189,6 +189,10 @@ export default function WritingReviewPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const { registerGuard, unregisterGuard, checkGuard } = useNavigationGuard();
   const passageRefs = useRef<Record<string, HTMLElement | null>>({});
+  // One operationId per deliberate rewrite of a given passage+mode —
+  // a retry after a failure reuses it (server dedupes/blocks), while a
+  // success or a different passage/mode earns a fresh id.
+  const rewriteOpRef = useRef<{ key: string; id: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -294,21 +298,38 @@ export default function WritingReviewPage() {
       `Send this sentence to Ryne's ${mode === "titan" ? "Titan" : "Balanced"} humanizer?\n\n` +
       `Estimated cost: ~$${est.toFixed(4)} (${words} words at documented $${per1k}/1K words)\n\n` +
       `Only the selected sentence is sent; a rewrite never guarantees any detector score.`)) return;
+    const opKey = `${selected.passage.id}:${mode}`;
+    if (rewriteOpRef.current?.key !== opKey) {
+      rewriteOpRef.current = { key: opKey, id: crypto.randomUUID() };
+    }
+    const operationId = rewriteOpRef.current.id;
     setRewriting(true); setNotice("");
     try {
       const res = await fetch(`/api/application/writing-review?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // The operationId is stashed above — a retry of THIS action
+        // reuses it; a new deliberate rewrite gets a fresh id.
         body: JSON.stringify({
           action: "rewrite",
           passageText: text,
           mode,
           confirmPaid: true,
+          operationId,
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setNotice(data.error || "Rewrite failed"); return; }
+      if (!res.ok) {
+        // 409 = this operation is already recorded (or its id was
+        // rejected) — it can never produce a result now, so the next
+        // consented click must start fresh rather than retry a dead id.
+        // Other failures keep the id so an immediate retry stays a
+        // retry of the same submission, not a second charge.
+        if (res.status === 409) rewriteOpRef.current = null;
+        setNotice(data.error || "Rewrite failed"); return;
+      }
       if (data.suggestion?.content) {
+        rewriteOpRef.current = null; // action completed — next click is a new operation
         setSuggestions(prev => ({ ...prev, [selected.passage.id]: data.suggestion.content }));
         if (typeof data.suggestion.aiScore === "number") {
           setNotice(`Beast Mode score reported by Ryne: ${data.suggestion.aiScore}% — not guaranteed to match any detector.`);
