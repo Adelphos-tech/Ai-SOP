@@ -114,9 +114,11 @@ async function exec(sql, params = []) {
     }
     return [{ affectedRows: 0 }];
   }
-  // unconditional total increment when no total cap is configured → [add]
+  // unconditional increments when no cap is configured:
+  //   day → [add, key]   total → [add]
   if (/UPDATE ryne_spend_counters SET reserved_usd = reserved_usd \+ \?/.test(s)) {
-    const c = getCounter(store, "total", "ALL");
+    const isDay = /scope='day'/.test(s);
+    const c = getCounter(store, isDay ? "day" : "total", isDay ? params[1] : "ALL");
     if (!c) return [{ affectedRows: 0 }];
     c.reserved_usd = r6(c.reserved_usd + params[0]);
     return [{ affectedRows: 1 }];

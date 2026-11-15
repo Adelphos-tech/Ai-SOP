@@ -80,16 +80,19 @@ async function main() {
     delete store().failConnect;
   });
 
-  await check("no verified price and no approved ceiling → blocked, zero calls", async () => {
+  await check("no verified price and no ceiling → runs, records $0 unverified event", async () => {
     delete process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD;
     (globalThis.__MOCK_DB as any) = {};
     calls.n = 0;
     const out = await runDetection("d-noprice", opts());
-    assert.equal(out.kind, "NOT_CONFIGURED");
-    assert.match(out.kind === "NOT_CONFIGURED" ? out.notice : "", /unverified/);
-    assert.equal(calls.n, 0);
-    assert.equal(events().length, 0);
+    assert.equal(out.kind, "OK"); // unpriced, not blocked — never assumed free
+    assert.equal(calls.n, 1);
+    const evs = events();
+    assert.equal(evs.length, 1);
+    assert.equal(evs[0].estimated_usd, 0);
+    assert.equal(evs[0].cost_basis, "UNVERIFIED_ESTIMATE");
     process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD = "0.02";
+    (globalThis.__MOCK_DB as any) = {}; // drop this check's event so global counts hold
   });
 
   await check("budget exceeded → OVER_BUDGET, zero provider calls", async () => {

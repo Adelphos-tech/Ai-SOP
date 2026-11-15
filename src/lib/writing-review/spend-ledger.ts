@@ -61,20 +61,25 @@ export function priceSpec(unit: string): PriceSpec | null {
 
 // ---------- budget configuration ----------
 
-export function dailyBudgetUsd(): number {
-  const n = Number(process.env.RYNE_DAILY_BUDGET_USD ?? 5);
-  return Number.isFinite(n) && n > 0 ? n : 5;
+/** Optional daily cap — owner-configured. Unset/invalid = no daily
+ *  cap; requests are recorded but never refused as over-budget. */
+export function dailyBudgetUsd(): number | null {
+  const n = Number(process.env.RYNE_DAILY_BUDGET_USD);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** Optional overall cap. Unset/invalid = no total cap (daily still
- *  applies) — preserves previous effective behavior. */
+ *  applies when configured) — preserves previous effective behavior. */
 export function totalBudgetUsd(): number | null {
   const n = Number(process.env.RYNE_TOTAL_BUDGET_USD);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-/** Approved conservative ceiling per unverified-priced billable unit.
- *  Unset = unverified-priced units cannot be reserved at all. */
+/** Optional conservative ceiling per unverified-priced billable unit.
+ *  When set it becomes the reservation amount for unverified-priced
+ *  units (so budgets can be enforced against an estimate). Unset =
+ *  unverified-priced units reserve $0 and are recorded with an
+ *  UNVERIFIED_ESTIMATE basis — never treated as free or refused. */
 export function unverifiedPriceCeilingUsd(): number | null {
   const n = Number(process.env.RYNE_UNVERIFIED_PRICE_CEILING_USD);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -210,12 +215,14 @@ export function estimateFor(unit: string, quantity = 1): Estimate {
   if (spec.verified && quoted != null) {
     return { ok: true, estimatedUsd: quoted, basis: "ESTIMATED", spec, quantity: qty };
   }
-  // Unverified pricing: allowed only under an explicitly configured
-  // conservative ceiling, which becomes the reservation amount. A
-  // quote that would exceed the approved ceiling blocks outright.
+  // Unverified pricing: when a ceiling is configured it becomes the
+  // reservation amount so budgets can be enforced; without one the
+  // request reserves $0 and is recorded UNVERIFIED_ESTIMATE — the cost
+  // stays honestly unknown, never assumed free. A configured ceiling
+  // still blocks quotes that would exceed it.
   const ceiling = unverifiedPriceCeilingUsd();
   if (ceiling == null) {
-    return { ok: false, reason: `price for "${unit}" is unverified — set RYNE_UNVERIFIED_PRICE_CEILING_USD to approve a conservative ceiling` };
+    return { ok: true, estimatedUsd: 0, basis: "UNVERIFIED_ESTIMATE", spec, quantity: qty };
   }
   if (quoted != null && quoted > ceiling) {
     return { ok: false, reason: `quoted price for "${unit}" (~$${quoted.toFixed(4)}) exceeds the approved ceiling $${ceiling}` };
@@ -264,7 +271,7 @@ export async function getOperationEvents(operationId: string): Promise<SpendEven
 /** Counter snapshot for reporting — all amounts are ledger estimates,
  *  not verified provider charges. */
 export async function spendSnapshot(): Promise<{
-  day: { day: string; reservedUsd: number; settledUsd: number; limitUsd: number };
+  day: { day: string; reservedUsd: number; settledUsd: number; limitUsd: number | null };
   total: { reservedUsd: number; settledUsd: number; limitUsd: number | null };
 }> {
   const pool = getDbPool();
@@ -355,14 +362,25 @@ export async function reserveSpend(input: ReserveInput): Promise<ReserveOutcome>
           canonicalUnitsKey(items.map(p => ({ unit: p.unit, quantity: p.est.quantity }))),
         ],
       );
-      const [dayRes] = await conn.execute(
-        `UPDATE ryne_spend_counters SET reserved_usd = reserved_usd + ?
-          WHERE scope='day' AND scope_key=? AND reserved_usd + settled_usd + ? <= ?`,
-        [total, day, total, dailyBudgetUsd()],
-      );
-      if ((dayRes as any).affectedRows === 0) {
-        await conn.rollback();
-        return { kind: "OVER_BUDGET", scope: "day", limitUsd: dailyBudgetUsd(), attemptedUsd: total };
+      // Daily consumption is ALWAYS tracked — the cap predicate only
+      // applies when RYNE_DAILY_BUDGET_USD is configured.
+      const dayCap = dailyBudgetUsd();
+      if (dayCap != null) {
+        const [dayRes] = await conn.execute(
+          `UPDATE ryne_spend_counters SET reserved_usd = reserved_usd + ?
+            WHERE scope='day' AND scope_key=? AND reserved_usd + settled_usd + ? <= ?`,
+          [total, day, total, dayCap],
+        );
+        if ((dayRes as any).affectedRows === 0) {
+          await conn.rollback();
+          return { kind: "OVER_BUDGET", scope: "day", limitUsd: dayCap, attemptedUsd: total };
+        }
+      } else {
+        await conn.execute(
+          `UPDATE ryne_spend_counters SET reserved_usd = reserved_usd + ?
+            WHERE scope='day' AND scope_key=?`,
+          [total, day],
+        );
       }
       // Lifetime consumption is ALWAYS tracked — the cap predicate
       // only applies when RYNE_TOTAL_BUDGET_USD is configured.
