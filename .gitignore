@@ -46,3 +46,6 @@ services/cv-parser/.venv/
 services/cv-parser/fixtures/
 __pycache__/
 tsconfig.tsbuildinfo
+
+# Untracked local consultant credentials (never commit)
+/src/lib/writing-review/cred

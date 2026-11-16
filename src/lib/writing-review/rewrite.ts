@@ -210,83 +210,103 @@ export async function runRewrite(opts: RewriteRequestOptions): Promise<RewriteOu
       return { kind: "CANCELLED" };
     }
 
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
-    const onOuter = () => ac.abort();
-    opts.signal?.addEventListener("abort", onOuter);
-    try {
-      const res = await (opts.fetcher ?? fetch)(
-        `${ryneBaseUrl()}/api/humanizer/models/supernova`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text,                     // only the selected passage
-            user_id: key,             // server-side key
-            humanizerMode: mode,      // documented mode selector
-            shouldStream: false,      // single JSON response
-            mode: "normal",           // beast_mode stays on; score not billed separately
-            beast_mode: true,
-            tone: "academic",
-            purpose: "statement of purpose / admissions essay",
-            language: "english",      // Titan is English-only per docs
-          }),
-          signal: ac.signal,
-        },
-      );
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        // Ambiguous — the request may have been billed; keep the
-        // reservation as UNKNOWN, never silently released.
-        await markUnknown(event.id, "PROVIDER_ERROR").catch(() => {});
-        return {
-          kind: "ERROR",
-          message: sanitizeMessage(
-            `Ryne returned HTTP ${res.status}${data?.error_msg || data?.status ? ` — ${data?.error_msg ?? data?.status}` : ""}`),
-          retryable: res.status >= 500 || res.status === 429,
-        };
-      }
-      const content = typeof data?.content === "string" ? data.content.trim() : "";
-      if (!content) {
-        await markUnknown(event.id, "EMPTY_RESPONSE").catch(() => {});
-        return { kind: "ERROR", message: "Ryne returned an empty rewrite.", retryable: true };
-      }
-      const settled = await settleSpend(event.id, { outcome: "OK" }).catch(() => false);
-      if (!settled) await markUnknown(event.id, "SETTLEMENT_FAILED").catch(() => {});
-      return {
-        kind: "OK",
-        suggestion: {
-          content,
-          mode,
-          aiScore: typeof data.aiScore === "number" ? data.aiScore : undefined,
-          aiScoreUnavailable: data.aiScoreUnavailable === true,
-          // Reserved amount — internal estimate only, never a
-          // provider-confirmed charge.
-          estimatedCostUsd: reservation.totalUsd,
-        },
-      };
-    } catch (err: any) {
-      const cancelled = ac.signal.aborted && opts.signal?.aborted;
-      // Mid-flight: dispatch may have reached the provider → UNKNOWN.
-      await markUnknown(event.id, cancelled
-        ? "CANCELLED"
-        : err?.name === "AbortError" ? "TIMEOUT" : "NETWORK").catch(() => {});
-      return {
-        kind: cancelled ? "CANCELLED" : "ERROR",
-        message: cancelled
-          ? "Cancelled."
-          : err?.name === "AbortError"
-            ? `No response within ${TIMEOUT_MS / 1000}s.`
-            : sanitizeMessage(err?.message || "Network error"),
-        retryable: true,
-      };
-    } finally {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onOuter);
+    const call = await callRyneHumanizer({ text, mode, key, signal: opts.signal, fetcher: opts.fetcher });
+    if (!call.ok) {
+      // Ambiguous — the request may have been billed; keep the
+      // reservation as UNKNOWN, never silently released.
+      await markUnknown(event.id, call.code).catch(() => {});
+      return call.code === "CANCELLED"
+        ? { kind: "CANCELLED" }
+        : { kind: "ERROR", message: call.message, retryable: call.retryable };
     }
+    const settled = await settleSpend(event.id, { outcome: "OK" }).catch(() => false);
+    if (!settled) await markUnknown(event.id, "SETTLEMENT_FAILED").catch(() => {});
+    return {
+      kind: "OK",
+      suggestion: {
+        content: call.content,
+        mode,
+        aiScore: call.aiScore,
+        aiScoreUnavailable: call.aiScoreUnavailable,
+        // Reserved amount — internal estimate only, never a
+        // provider-confirmed charge.
+        estimatedCostUsd: reservation.totalUsd,
+      },
+    };
   })().finally(() => inFlight.delete(fk));
   inFlight.set(fk, run);
   return run;
 }
 
 
+
+export type HumanizerCall =
+  | { ok: true; content: string; aiScore?: number; aiScoreUnavailable: boolean }
+  | { ok: false; code: string; message: string; retryable: boolean };
+
+/**
+ * One documented POST /api/humanizer/models/supernova call. Never
+ * retries (a repeat may be billable). Errors are sanitized; an empty
+ * rewrite is an error, never returned as content.
+ */
+export async function callRyneHumanizer(opts: {
+  text: string; mode: RewriteMode; key: string;
+  signal?: AbortSignal; fetcher?: typeof fetch; timeoutMs?: number;
+}): Promise<HumanizerCall> {
+  const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const onOuter = () => ac.abort();
+  opts.signal?.addEventListener("abort", onOuter);
+  try {
+    const res = await (opts.fetcher ?? fetch)(`${ryneBaseUrl()}/api/humanizer/models/supernova`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: opts.text,
+        user_id: opts.key,          // server-side key
+        humanizerMode: opts.mode,   // documented mode selector
+        shouldStream: false,        // single JSON response
+        mode: "normal",             // beast_mode stays on; score not billed separately
+        beast_mode: true,
+        tone: "academic",           // required by Balanced; ignored by Titan
+        purpose: "statement of purpose / admissions essay",
+        language: "english",        // Titan is English-only per docs
+      }),
+      signal: ac.signal,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data?.error === true) {
+      const detail = data?.error_msg ?? data?.code ?? data?.status;
+      return {
+        ok: false,
+        code: "PROVIDER_ERROR",
+        message: sanitizeMessage(`Ryne returned HTTP ${res.status}${detail ? ` — ${detail}` : ""}`),
+        retryable: res.status >= 500 || res.status === 429,
+      };
+    }
+    const content = typeof data?.content === "string" ? data.content.trim() : "";
+    if (!content) return { ok: false, code: "EMPTY_RESPONSE", message: "Ryne returned an empty rewrite.", retryable: true };
+    return {
+      ok: true,
+      content,
+      aiScore: typeof data.aiScore === "number" ? data.aiScore : undefined,
+      aiScoreUnavailable: data.aiScoreUnavailable === true,
+    };
+  } catch (err: any) {
+    const cancelled = ac.signal.aborted && !!opts.signal?.aborted;
+    return {
+      ok: false,
+      code: cancelled ? "CANCELLED" : err?.name === "AbortError" ? "TIMEOUT" : "NETWORK",
+      message: cancelled
+        ? "Cancelled."
+        : err?.name === "AbortError"
+          ? `No response within ${timeoutMs / 1000}s.`
+          : sanitizeMessage(err?.message || "Network error"),
+      retryable: true,
+    };
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onOuter);
+  }
+}

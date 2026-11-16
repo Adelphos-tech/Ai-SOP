@@ -80,6 +80,8 @@ export interface FlaggedPassage {
   /** The text slice at [start,end) when the check ran. */
   text: string;
   scorePercent?: number;
+  /** Provider's own per-sentence AI verdict, when supplied. */
+  isAI?: boolean;
   explanation?: string;
 }
 

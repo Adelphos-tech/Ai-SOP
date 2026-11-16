@@ -1,0 +1,91 @@
+// ============================================================
+// AI Writing Studio — detection report aggregation (pure, no I/O)
+// Collapses per-detector sentence findings onto UNIQUE document
+// sentences: one entry per sentence, listing every detector that
+// flagged it with that detector's own score. Counts are against the
+// document's real sentence total — never a sum across detectors.
+// No composite percentage is ever computed.
+// ============================================================
+
+import type { DetectionResult, DetectorId, DetectorScore, FlaggedPassage } from "./types";
+import { resolvePassageRange, segmentDocumentSentences } from "./segmentation";
+
+export interface DetectorFlag {
+  detector: DetectorId;
+  scorePercent?: number;
+  isAI?: boolean;
+}
+
+export interface SentenceFinding {
+  /** Document sentence index, or null when the flagged range does not
+   *  coincide with a segmented sentence (kept by its own range). */
+  sentenceIndex: number | null;
+  start: number;
+  end: number;
+  text: string;
+  detectors: DetectorFlag[];
+}
+
+export interface ReportAggregate {
+  totalSentences: number;
+  flaggedSentences: number;
+  findings: SentenceFinding[];
+  /** Detectors that returned a score but no sentence-level evidence. */
+  documentLevelOnly: DetectorId[];
+}
+
+export function aggregateFindings(content: string, passages: FlaggedPassage[], scores: DetectorScore[] = []): ReportAggregate {
+  const sentences = segmentDocumentSentences(content);
+  const groups = new Map<string, SentenceFinding>();
+  for (const p of passages) {
+    const range = resolvePassageRange(content, p);
+    if (!range) continue; // text no longer present — never re-anchored by guesswork
+    const s = sentences.find(x => range.start < x.end && range.end > x.start);
+    const key = s ? `s${s.index}` : `r${range.start}:${range.end}`;
+    const g = groups.get(key) ?? {
+      sentenceIndex: s?.index ?? null,
+      start: s?.start ?? range.start,
+      end: s?.end ?? range.end,
+      text: s?.text ?? p.text,
+      detectors: [],
+    };
+    const prev = g.detectors.find(d => d.detector === p.detector);
+    if (!prev) g.detectors.push({ detector: p.detector, scorePercent: p.scorePercent, isAI: p.isAI });
+    else if ((p.scorePercent ?? -1) > (prev.scorePercent ?? -1)) prev.scorePercent = p.scorePercent;
+    groups.set(key, g);
+  }
+  const findings = [...groups.values()].sort((a, b) => a.start - b.start);
+  const withSentences = new Set(passages.map(p => p.detector));
+  return {
+    totalSentences: sentences.length,
+    flaggedSentences: findings.length,
+    findings,
+    documentLevelOnly: scores
+      .filter(s => s.status === "SCORED" && !withSentences.has(s.detector))
+      .map(s => s.detector),
+  };
+}
+
+/** A detector's own verdict: its classification label when present,
+ *  otherwise its AI-probability score against 50%. Null = no verdict. */
+export function detectorVerdict(s: DetectorScore): "AI" | "HUMAN" | "MIXED" | null {
+  if (s.status !== "SCORED") return null;
+  const c = (s.classification ?? "").toUpperCase();
+  if (c.includes("MIXED")) return "MIXED";
+  if (c.includes("AI")) return "AI";
+  if (c.includes("HUMAN")) return "HUMAN";
+  if (s.scoreMeaning === "AI_PROBABILITY_PERCENT" && typeof s.scorePercent === "number") {
+    return s.scorePercent >= 50 ? "AI" : "HUMAN";
+  }
+  return null;
+}
+
+/** A stored report run (client-side history). */
+export interface ReportRun {
+  id: string;
+  checkedAt: string;
+  versionId: string;
+  contentHash: string;
+  detectors: DetectorId[];
+  detection: DetectionResult;
+}
