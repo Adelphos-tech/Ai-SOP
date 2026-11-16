@@ -116,12 +116,25 @@ export function mapAiScoreResponse(
   };
 }
 
+/** Per-sentence AI probability as a percent, from the documented or
+ *  observed provider fields (GPTZero: aiProbability 0-100). */
+function sentencePercent(s: Record<string, unknown>): number | undefined {
+  for (const k of ["aiProbability", "score", "ai_probability"]) {
+    if (typeof s[k] === "number" && Number.isFinite(s[k])) return s[k] as number;
+  }
+  if (typeof s.generated_prob === "number") return (s.generated_prob as number) * 100;
+  return undefined;
+}
+
 /**
  * Map sentence-level findings to flagged passages by resolving each
  * provider-supplied sentence against the document with safe unique
- * matching. Sentences that cannot be resolved unambiguously are
- * dropped — never anchored by guesswork. Document-level responses
- * produce no passages.
+ * matching. Only sentences the provider itself marks as AI are
+ * flagged: its isAI verdict when present, otherwise a per-sentence
+ * probability of at least 50%. Providers often list every sentence —
+ * the unflagged ones are not findings. Sentences that cannot be
+ * resolved unambiguously are dropped — never anchored by guesswork.
+ * Document-level responses produce no passages.
  */
 export function mapSentenceFindings(
   content: string,
@@ -131,11 +144,18 @@ export function mapSentenceFindings(
   const sentences = res.details?.sentences;
   if (!Array.isArray(sentences) || sentences.length === 0) return [];
   const passages: FlaggedPassage[] = [];
+  const seen = new Set<string>();
   sentences.forEach((s, i) => {
     const text = typeof s.text === "string" ? s.text.trim() : "";
     if (!text) return;
+    const isAI = typeof s.isAI === "boolean" ? s.isAI : undefined;
+    const scorePercent = sentencePercent(s);
+    if (isAI === false || (isAI === undefined && scorePercent !== undefined && scorePercent < 50)) return;
     const range = resolvePassageRange(content, { start: -1, end: -1, text });
     if (!range) return; // ambiguous or absent → never fabricate an anchor
+    const key = `${range.start}:${range.end}`;
+    if (seen.has(key)) return; // provider listed the same sentence twice
+    seen.add(key);
     passages.push({
       id: `${detector.toLowerCase()}-${i}`,
       detector,
@@ -143,7 +163,8 @@ export function mapSentenceFindings(
       end: range.end,
       text,
       // Only assign a per-sentence score when the provider returned one.
-      scorePercent: typeof s.score === "number" ? s.score : undefined,
+      scorePercent,
+      isAI,
       explanation: typeof s.explanation === "string" ? s.explanation : undefined,
     });
   });

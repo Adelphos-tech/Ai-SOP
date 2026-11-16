@@ -217,12 +217,13 @@ export function estimateFor(unit: string, quantity = 1): Estimate {
   }
   // Unverified pricing: when a ceiling is configured it becomes the
   // reservation amount so budgets can be enforced; without one the
-  // request reserves $0 and is recorded UNVERIFIED_ESTIMATE — the cost
-  // stays honestly unknown, never assumed free. A configured ceiling
-  // still blocks quotes that would exceed it.
+  // request reserves the provider's published quote when there is one
+  // (Humanizer per-word prices) and $0 when there is none (detectors).
+  // Either way it is recorded UNVERIFIED_ESTIMATE — never assumed free.
+  // A configured ceiling still blocks quotes that would exceed it.
   const ceiling = unverifiedPriceCeilingUsd();
   if (ceiling == null) {
-    return { ok: true, estimatedUsd: 0, basis: "UNVERIFIED_ESTIMATE", spec, quantity: qty };
+    return { ok: true, estimatedUsd: quoted ?? 0, basis: "UNVERIFIED_ESTIMATE", spec, quantity: qty };
   }
   if (quoted != null && quoted > ceiling) {
     return { ok: false, reason: `quoted price for "${unit}" (~$${quoted.toFixed(4)}) exceeds the approved ceiling $${ceiling}` };

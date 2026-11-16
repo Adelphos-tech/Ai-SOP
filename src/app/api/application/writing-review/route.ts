@@ -26,6 +26,7 @@ import {
 } from "@/lib/writing-review/detectors";
 import { runDetection } from "@/lib/writing-review/detection";
 import { runRewrite } from "@/lib/writing-review/rewrite";
+import { runDocumentHumanize } from "@/lib/writing-review/document-humanizer";
 
 async function loadReviewContext(request: NextRequest) {
   // Brick 4A: real session auth — requireConsultantSession() is a
@@ -130,6 +131,44 @@ export async function POST(request: NextRequest) {
     // actions so retries of one user action cannot double-bill across
     // processes; a new deliberate action sends a fresh id.
     const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (body.action === "humanize-document") {
+      // Full-document humanization of the AUTHORIZED saved version —
+      // the client names the version it is looking at; the text itself
+      // is always read server-side. Nothing is written to the document.
+      if (body.baseVersionId !== current.id) {
+        return NextResponse.json(
+          { error: "The document was saved since this page loaded. Reload to humanize the latest version." },
+          { status: 409 });
+      }
+      if (!UUID_RE.test(operationId)) {
+        return NextResponse.json({ error: "A valid operationId (UUID) is required." }, { status: 400 });
+      }
+      const out = await runDocumentHumanize({
+        content: current.content,
+        versionId: current.id,
+        mode: body.mode === "titan" ? "titan" : "balanced",
+        confirmPaid: body.confirmPaid === true,
+        operationId,
+        actorId: consultant.id,
+        ids: {
+          studentId: url.searchParams.get("studentId") ?? undefined,
+          applicationId: url.searchParams.get("applicationId") ?? undefined,
+          documentId: url.searchParams.get("documentId") ?? undefined,
+        },
+        signal: request.signal,
+      });
+      switch (out.kind) {
+        case "OK": return NextResponse.json({ result: out.result });
+        case "NOT_CONFIGURED":
+        case "CONSENT_REQUIRED": return NextResponse.json({ error: out.notice }, { status: 400 });
+        case "OVER_BUDGET": return NextResponse.json({ error: out.notice }, { status: 402 });
+        case "TOO_LONG": return NextResponse.json({ error: out.notice }, { status: 413 });
+        case "DUPLICATE": return NextResponse.json({ error: out.notice }, { status: 409 });
+        case "CANCELLED": return NextResponse.json({ error: "Humanization cancelled." }, { status: 499 });
+        case "ERROR": return NextResponse.json({ error: out.message, retryable: out.retryable }, { status: 502 });
+      }
+    }
     if (body.action === "rewrite") {
       // Brick 3: rewrite ONLY the selected passage, and only after
       // verifying the text exists in the authorized current version —
