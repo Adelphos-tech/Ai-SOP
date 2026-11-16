@@ -354,6 +354,9 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
               {humBadge.pct <= origScore.scorePercent! ? "−" : "+"}{Math.abs(Math.round(humBadge.pct - origScore.scorePercent!))} pts
             </b>
           </span>
+          {humBadge.label !== DETECTOR_NAMES[origScore.detector] && (
+            <span className="text-dvivid-warning">Different detectors — scores aren&apos;t directly comparable.</span>
+          )}
           <span className="text-dvivid-text-muted">AI detection scores are estimates — a lower score does not guarantee the text won&apos;t be flagged.</span>
         </div>
       )}
@@ -386,9 +389,10 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
             </h2>
             {result && (
               <div className="flex items-center gap-1.5 shrink-0">
-                {humBadge
-                  ? <ScoreBadge label={humBadge.label} percent={humBadge.pct} title={humBadge.title} />
-                  : checkButton("humanized", output)}
+                {humBadge && <ScoreBadge label={humBadge.label} percent={humBadge.pct} title={humBadge.title} />}
+                {/* The named-detector check stays available next to the
+                    free Ryne score — same detector on both panes. */}
+                {!validDraftCheck && checkButton("humanized", output)}
                 <button type="button" onClick={() => { if (!editing && edited === null) setEdited(result.content); setEditing(!editing); }}
                   className="px-2.5 py-1 text-xs font-medium border border-dvivid-border rounded-button bg-white hover:border-dvivid-primary hover:text-dvivid-primary">
                   {editing ? "Done" : "Edit"}
