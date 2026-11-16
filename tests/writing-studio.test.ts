@@ -192,6 +192,19 @@ async function main() {
     assert.equal(latestVersionScore(runs, "never-checked"), null); // stale/missing → no badge, Check AI instead
   });
 
+  await check("latestVersionScore: hash B never displays hash A's score (stale-badge regression)", () => {
+    const run = (hash: string, at: string, pct: number): ReportRun => ({
+      id: at, checkedAt: at, versionId: `v-${hash}`, contentHash: hash, detectors: ["GPTZERO"],
+      detection: { scores: [{ detector: "GPTZERO", status: "SCORED", scorePercent: pct }] } as any,
+    });
+    // The reported bug shape: original text scored 100, rewrite scored 7.
+    const runs = [run("hash-A", "2026-01-01", 100), run("hash-B", "2026-01-02", 7)];
+    assert.equal(latestVersionScore(runs, "hash-B")?.scorePercent, 7);
+    assert.equal(latestVersionScore(runs, "hash-A")?.scorePercent, 100);
+    // A run under a different hash never bleeds into this text's badge.
+    assert.equal(latestVersionScore(runs, "hash-C"), null);
+  });
+
   await check("beastModeBadge: worst section score; undefined when provider returned none", () => {
     assert.equal(beastModeBadge([{ aiScore: 3.1 }, { aiScore: 8.4 }, {}]), 8.4);
     assert.equal(beastModeBadge([{}, {}]), undefined);
