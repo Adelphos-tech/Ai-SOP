@@ -89,3 +89,36 @@ export interface ReportRun {
   detectors: DetectorId[];
   detection: DetectionResult;
 }
+
+// ---------- compact badge helpers (pure, unit-tested) ----------
+
+/** The one detector score a compact badge may show: GPTZero first
+ *  (real AI-probability semantics, sentence-level evidence), then the
+ *  first other detector with a genuine numeric score. Errors,
+ *  unconfigured detectors and scoreless responses yield null — a
+ *  badge is never invented. */
+export function primaryScore(scores: DetectorScore[], detectorIds?: string[]): DetectorScore | null {
+  const pool = scores.filter(s =>
+    s.status === "SCORED" && typeof s.scorePercent === "number" &&
+    (!detectorIds || detectorIds.includes(s.detector)));
+  return pool.find(s => s.detector === "GPTZERO") ?? pool[0] ?? null;
+}
+
+/** Latest stored run matching the exact version content — hash
+ *  anchored, so a score from an older version is never shown as
+ *  current. Returns the badge-eligible score or null. */
+export function latestVersionScore(runs: ReportRun[], contentHash: string): DetectorScore | null {
+  const match = runs
+    .filter(r => r.contentHash === contentHash)
+    .sort((a, b) => b.checkedAt.localeCompare(a.checkedAt))[0];
+  return match ? primaryScore(match.detection.scores, match.detectors) : null;
+}
+
+/** Worst (highest) Beast Mode score across sections — conservative
+ *  single number for the badge; undefined when no section scored.
+ *  This is the provider's unnamed-detector score of the rewrite,
+ *  never conflated with a named-detector result. */
+export function beastModeBadge(sections: { aiScore?: number }[]): number | undefined {
+  const nums = sections.map(s => s.aiScore).filter((n): n is number => typeof n === "number");
+  return nums.length ? Math.max(...nums) : undefined;
+}

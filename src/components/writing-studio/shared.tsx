@@ -93,3 +93,41 @@ export function TabBar<T extends string>({ tabs, value, onChange, label, classNa
     </div>
   );
 }
+
+// ---------- report-run store (shared by both panels) ----------
+
+import type { ReportRun } from "@/lib/writing-review/report";
+
+export const REPORT_HISTORY_LIMIT = 10;
+export function reportStoreKey(documentId: string): string {
+  return `dvivid-writing-studio-reports:${documentId}`;
+}
+export function readReportRuns(documentId: string): ReportRun[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(reportStoreKey(documentId)) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+/** Merge one run into the browser-local history (dedup by id,
+ *  newest first, demo runs never persisted). */
+export function persistReportRun(documentId: string, run: ReportRun): void {
+  const next = [run, ...readReportRuns(documentId).filter(r => r.id !== run.id)];
+  try {
+    localStorage.setItem(reportStoreKey(documentId),
+      JSON.stringify(next.filter(r => r.id !== "demo").slice(0, REPORT_HISTORY_LIMIT)));
+  } catch { /* quota */ }
+}
+
+/** Compact inline AI-detection badge for panel headings. Subtle
+ *  color only — a percentage is always an estimate, never a verdict. */
+export function ScoreBadge({ label, percent, title }: { label: string; percent: number; title?: string }) {
+  const cls = percent >= 50
+    ? "bg-amber-50 text-amber-700 border-amber-200"
+    : "bg-green-50 text-green-700 border-green-200";
+  return (
+    <span title={title ?? `AI detection estimate from ${label} — detectors can be wrong; not a guarantee.`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${cls}`}>
+      {label} · {Math.round(percent)}% AI
+    </span>
+  );
+}

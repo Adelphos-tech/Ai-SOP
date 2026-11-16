@@ -15,9 +15,9 @@ import type { DetectionResult, DetectorId, DetectorScore } from "@/lib/writing-r
 import { listDetectorDescriptors } from "@/lib/writing-review/detectors";
 import { aggregateFindings, detectorVerdict, type ReportRun } from "@/lib/writing-review/report";
 import { segmentDocumentSentences, type DocumentSentence } from "@/lib/writing-review/segmentation";
-import { DETECTOR_NAMES, Gauge, Notice, Toggle, type StudioVersion } from "./shared";
-
-const HISTORY_LIMIT = 10;
+import {
+  DETECTOR_NAMES, Gauge, Notice, REPORT_HISTORY_LIMIT, reportStoreKey, Toggle, type StudioVersion,
+} from "./shared";
 const VERDICT: Record<string, { label: string; cls: string }> = {
   AI: { label: "AI-written", cls: "text-dvivid-error" },
   MIXED: { label: "Mixed", cls: "text-dvivid-warning" },
@@ -61,7 +61,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, document
   hasUnsavedRewrite: boolean;
   demoRun?: ReportRun | null;
 }) {
-  const storeKey = `dvivid-writing-studio-reports:${documentId}`;
+  const storeKey = reportStoreKey(documentId);
   const descriptors = useMemo(() => listDetectorDescriptors(), []);
   const runnable = useMemo(() => new Set(config?.runnable ?? []), [config]);
   const max = config?.maxDetectorsPerRun ?? 3;
@@ -84,7 +84,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, document
 
   const persist = (next: ReportRun[]) => {
     setRuns(next);
-    try { localStorage.setItem(storeKey, JSON.stringify(next.filter(r => r.id !== "demo").slice(0, HISTORY_LIMIT))); } catch { /* quota */ }
+    try { localStorage.setItem(storeKey, JSON.stringify(next.filter(r => r.id !== "demo").slice(0, REPORT_HISTORY_LIMIT))); } catch { /* quota */ }
   };
 
   const active = runs.find(r => r.id === activeId) ?? null;
