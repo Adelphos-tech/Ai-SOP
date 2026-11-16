@@ -259,6 +259,95 @@ async function main() {
     pass++;
   }
 
+  // ---- stale/incorrect score regressions (GPTZero 100% investigation) ----
+
+  {
+    // The EXACT submitted text is what reaches the provider — a text
+    // override is never replaced by another version's content.
+    let sentText = "";
+    const spy = (async (_u: any, init: any) => {
+      sentText = JSON.parse(init.body).text;
+      return new Response(JSON.stringify({ source: "gptzero", aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any;
+    }) as any;
+    const out = await runDetection("d-exact", baseOpts({ detectors: ["GPTZERO"], content: "The humanized draft text.", fetcher: spy }));
+    assert.equal(out.kind, "OK");
+    assert.equal(sentText, "The humanized draft text.");
+    console.log("PASS  exact submitted text is sent to the detector");
+    pass++;
+  }
+
+  {
+    // A score for text A can never be returned for text B: the changed
+    // text gets its OWN provider response, and a later B lookup hits
+    // B's cache entry — never A's.
+    let calls = 0;
+    const f = (async (_u: any, init: any) => {
+      calls++;
+      const t = JSON.parse(init.body).text as string;
+      const pct = t.includes("ALPHA") ? 90 : 7;
+      return new Response(JSON.stringify({ source: "gptzero", aiScore: pct, classification: pct > 50 ? "AI_ONLY" : "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any;
+    }) as any;
+    const t0 = Date.now();
+    const a = await runDetection("d-hash", baseOpts({ detectors: ["GPTZERO"], content: "ALPHA original text.", fetcher: f, now: () => t0 }));
+    const b = await runDetection("d-hash", baseOpts({ detectors: ["GPTZERO"], content: "BETA rewritten text.", fetcher: f, now: () => t0 + 20_000 }));
+    const b2 = await runDetection("d-hash", baseOpts({ detectors: ["GPTZERO"], content: "BETA rewritten text.", fetcher: f, now: () => t0 + 40_000 }));
+    assert.equal(a.kind, "OK"); assert.equal(b.kind, "OK"); assert.equal(b2.kind, "OK");
+    if (a.kind === "OK" && b.kind === "OK" && b2.kind === "OK") {
+      const pa = a.detection.scores.find(s => s.detector === "GPTZERO")!.scorePercent;
+      const pb = b.detection.scores.find(s => s.detector === "GPTZERO")!.scorePercent;
+      const pb2 = b2.detection.scores.find(s => s.detector === "GPTZERO")!.scorePercent;
+      assert.equal(pa, 90); assert.equal(pb, 7); assert.equal(pb2, 7);
+      assert.notEqual(a.detection.contentHash, b.detection.contentHash);
+    }
+    assert.equal(calls, 2);
+    console.log("PASS  hash B never returns hash A's score; B-cache serves B only");
+    pass++;
+  }
+
+  {
+    // A provider failure is an ERROR — never a score and never cached —
+    // so a retry reaches the provider and gets the fresh response.
+    let calls = 0;
+    const flaky = (async (_u: any, _init: any) => {
+      calls++;
+      if (calls === 1) return new Response(JSON.stringify({ error: true, error_msg: "upstream timeout" }), { status: 502 }) as any;
+      return new Response(JSON.stringify({ source: "gptzero", aiScore: 41, classification: "MIXED", details: { sentences: [] } }), { status: 200 }) as any;
+    }) as any;
+    const t0 = Date.now();
+    const bad = await runDetection("d-flaky", baseOpts({ detectors: ["GPTZERO"], fetcher: flaky, now: () => t0 }));
+    assert.equal(bad.kind, "OK");
+    if (bad.kind === "OK") {
+      const s = bad.detection.scores.find(x => x.detector === "GPTZERO")!;
+      assert.equal(s.status, "ERROR");
+      assert.equal(s.scorePercent, undefined);
+    }
+    const retry = await runDetection("d-flaky", baseOpts({ detectors: ["GPTZERO"], fetcher: flaky, now: () => t0 + 20_000 }));
+    assert.equal(calls, 2);
+    if (retry.kind === "OK") assert.equal(retry.detection.scores.find(x => x.detector === "GPTZERO")!.scorePercent, 41);
+    console.log("PASS  failed check is never a score, not cached, retry refetches");
+    pass++;
+  }
+
+  {
+    // GPTZero field semantics: aiScore is the AI-probability percent,
+    // classification is the predicted class — one is never substituted
+    // for the other.
+    const out = await runDetection("d-parse", baseOpts({
+      detectors: ["GPTZERO"],
+      fetcher: mockFetch({ gptzero: { body: { source: "gptzero", aiScore: 6.7, classification: "HUMAN_ONLY", details: { sentences: [] } } } }),
+      now: () => Date.now(),
+    }));
+    assert.equal(out.kind, "OK");
+    if (out.kind === "OK") {
+      const s = out.detection.scores.find(x => x.detector === "GPTZERO")!;
+      assert.equal(s.scorePercent, 6.7);
+      assert.equal(s.classification, "HUMAN_ONLY");
+      assert.equal(s.scoreMeaning, "AI_PROBABILITY_PERCENT");
+    }
+    console.log("PASS  GPTZero aiScore/classification keep distinct semantics");
+    pass++;
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }

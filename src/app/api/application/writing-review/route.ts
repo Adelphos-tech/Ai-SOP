@@ -250,6 +250,19 @@ export async function POST(request: NextRequest) {
       },
       signal: request.signal,
     });
+    if (outcome.kind === "OK" && process.env.WRITING_REVIEW_DEBUG === "1") {
+      // Safe diagnostics: lengths/hashes/ids/scores only — never text or keys.
+      console.log("[writing-review:recheck]", JSON.stringify({
+        op: operationId, doc: docId,
+        textOverride: suppliedText !== null,
+        contentLength: (suppliedText ?? current.content).length,
+        savedHash: computeContentHash(current.content),
+        checkedHash: outcome.detection.contentHash,
+        baseVersionId: outcome.detection.baseVersionId,
+        checkedAt: outcome.detection.checkedAt,
+        scores: outcome.detection.scores.map(s => ({ d: s.detector, st: s.status, pct: s.scorePercent, src: s.source })),
+      }));
+    }
     switch (outcome.kind) {
       case "OK":
         return NextResponse.json({

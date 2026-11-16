@@ -62,9 +62,13 @@ export interface HumanizerPanelProps {
   onDirtyChange: (dirty: boolean) => void;
   restorable: { content: string; versionNumber: number } | null;
   onRestore: () => void;
+  /** Called when the server's saved version moved ahead of the version
+   *  this page is displaying (saved elsewhere since load) — the page
+   *  reloads so badge, text and hash realign. */
+  onVersionDrift?: () => Promise<void> | void;
 }
 
-export default function HumanizerPanel({ version, configured, pricing, apiUrl, documentId, detection, onSave, onDirtyChange, restorable, onRestore }: HumanizerPanelProps) {
+export default function HumanizerPanel({ version, configured, pricing, apiUrl, documentId, detection, onSave, onDirtyChange, restorable, onRestore, onVersionDrift }: HumanizerPanelProps) {
   const [mode, setMode] = useState<Mode>("balanced");
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -170,6 +174,14 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
         };
         persistReportRun(documentId, run);
         setReportRuns(readReportRuns(documentId));
+        // The server always checks the CURRENT saved version. If it
+        // moved ahead of what this page shows (saved elsewhere since
+        // load), the fresh score belongs to a different text than the
+        // one on screen — realign instead of leaving the old badge up.
+        if (data.detection.contentHash !== version.contentHash) {
+          setNotice({ tone: "warning", text: "The saved document changed since this page loaded — the check ran on the latest saved version. Reloading so the score matches the text shown." });
+          await onVersionDrift?.();
+        }
       }
     } finally { setChecking(null); }
   }
@@ -353,7 +365,8 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
             <h2 className="text-sm font-semibold text-dvivid-text-primary truncate">Original SOP <span className="font-normal text-dvivid-text-muted">· v{version.versionNumber}</span></h2>
             <span className="shrink-0">
               {origScore
-                ? <ScoreBadge label={DETECTOR_NAMES[origScore.detector]} percent={origScore.scorePercent!} />
+                ? <ScoreBadge label={DETECTOR_NAMES[origScore.detector]} percent={origScore.scorePercent!}
+                    title={`${DETECTOR_NAMES[origScore.detector]} score for the saved version shown — checked ${origScore.lastCheckedAt ? new Date(origScore.lastCheckedAt).toLocaleString() : "earlier"}. Applies to this exact text only.`} />
                 : checkButton("original", version.content)}
             </span>
           </div>

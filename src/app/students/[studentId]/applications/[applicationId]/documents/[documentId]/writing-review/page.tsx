@@ -214,6 +214,7 @@ export default function WritingStudioPage() {
               onDirtyChange={onDirtyChange}
               restorable={restorable}
               onRestore={onRestore}
+              onVersionDrift={load}
             />
           </div>
           <div hidden={studio !== "report"}>
