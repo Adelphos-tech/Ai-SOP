@@ -92,16 +92,16 @@ export interface ReportRun {
 
 // ---------- compact badge helpers (pure, unit-tested) ----------
 
-/** The one detector score a compact badge may show: GPTZero first
- *  (real AI-probability semantics, sentence-level evidence), then the
- *  first other detector with a genuine numeric score. Errors,
- *  unconfigured detectors and scoreless responses yield null — a
- *  badge is never invented. */
+/** The one detector score a compact badge may show: Reilaa first
+ *  (Ryne's own standalone detector — same provider family as the
+ *  rewrite's Beast Mode score), then the first other detector with a
+ *  genuine numeric score. Errors, unconfigured detectors and
+ *  scoreless responses yield null — a badge is never invented. */
 export function primaryScore(scores: DetectorScore[], detectorIds?: string[]): DetectorScore | null {
   const pool = scores.filter(s =>
     s.status === "SCORED" && typeof s.scorePercent === "number" &&
     (!detectorIds || detectorIds.includes(s.detector)));
-  return pool.find(s => s.detector === "GPTZERO") ?? pool[0] ?? null;
+  return pool.find(s => s.detector === "REILAA") ?? pool[0] ?? null;
 }
 
 /** Latest stored run matching the exact version content — hash

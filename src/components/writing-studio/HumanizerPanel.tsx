@@ -119,11 +119,12 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
     rw: countWords(output), rs: countSentences(output),
   }), [version.content, output]);
 
-  // Badge detector: GPTZero when runnable (real %AI + sentence
-  // evidence), otherwise the first runnable tool — one billed request.
+  // Badge detector: Reilaa when runnable (Ryne's own standalone
+  // detector — same provider family as the rewrite's Beast Mode
+  // score), otherwise the first runnable tool — one billed request.
   const checkDetector = useMemo(() => {
     const r = detection?.runnable ?? [];
-    return (r.includes("GPTZERO") ? "GPTZERO" : r[0]) as DetectorId | undefined;
+    return (r.includes("REILAA") ? "REILAA" : r[0]) as DetectorId | undefined;
   }, [detection]);
   // Original badge: only a stored score for THIS version's exact hash.
   const origScore = useMemo(() => latestVersionScore(reportRuns, version.contentHash), [reportRuns, version.contentHash]);
@@ -131,8 +132,10 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
   // first (named detector); else the provider's Beast Mode score.
   const validDraftCheck = draftCheck && draftCheck.text === output ? draftCheck : null;
   const beast = result ? beastModeBadge(result.sections) : undefined;
+  const meaningNote = (m?: string) => m === "RAW_MODEL_SIGNAL_PERCENT" ? " Raw model signal — not a calibrated probability." : "";
   const humBadge: { label: string; pct: number; title?: string } | null = validDraftCheck
-    ? { label: DETECTOR_NAMES[validDraftCheck.detector], pct: validDraftCheck.pct }
+    ? { label: DETECTOR_NAMES[validDraftCheck.detector], pct: validDraftCheck.pct,
+        title: `${DETECTOR_NAMES[validDraftCheck.detector]} check on this exact draft text.${meaningNote(validDraftCheck.meaning)}` }
     : beast !== undefined
       ? { label: "Ryne check", pct: beast, title: "Ryne's Beast Mode detector score for this rewrite (detector not named by the provider) — an estimate, not a guarantee." }
       : null;
@@ -369,7 +372,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
             <span className="shrink-0">
               {origScore
                 ? <ScoreBadge label={DETECTOR_NAMES[origScore.detector]} percent={origScore.scorePercent!}
-                    title={`${DETECTOR_NAMES[origScore.detector]} score for the saved version shown — checked ${origScore.lastCheckedAt ? new Date(origScore.lastCheckedAt).toLocaleString() : "earlier"}. Applies to this exact text only.`} />
+                    title={`${DETECTOR_NAMES[origScore.detector]} score for the saved version shown — checked ${origScore.lastCheckedAt ? new Date(origScore.lastCheckedAt).toLocaleString() : "earlier"}. Applies to this exact text only.${meaningNote(origScore.scoreMeaning)}`} />
                 : checkButton("original", version.content)}
             </span>
           </div>

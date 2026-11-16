@@ -170,14 +170,14 @@ async function main() {
   });
 
   // ---------- compact badge helpers ----------
-  await check("primaryScore: GPTZero preferred, errors and scoreless skipped, null when none", () => {
+  await check("primaryScore: Ryne AI (Reilaa) preferred, errors and scoreless skipped, null when none", () => {
     const scores: any[] = [
       { detector: "ZEROGPT", status: "ERROR" },
       { detector: "REILAA", status: "SCORED", scorePercent: 35 },
       { detector: "GPTZERO", status: "SCORED", scorePercent: 78 },
     ];
-    assert.equal(primaryScore(scores)?.detector, "GPTZERO");
-    assert.equal(primaryScore(scores, ["REILAA"])?.detector, "REILAA");
+    assert.equal(primaryScore(scores)?.detector, "REILAA");
+    assert.equal(primaryScore(scores, ["GPTZERO"])?.detector, "GPTZERO");
     assert.equal(primaryScore([{ detector: "ZEROGPT", status: "ERROR" }] as any), null);
     assert.equal(primaryScore([{ detector: "REILAA", status: "SCORED" }] as any), null); // no numeric score → no badge
   });
