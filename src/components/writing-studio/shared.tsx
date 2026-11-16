@@ -5,8 +5,8 @@
 import type { DetectorId } from "@/lib/writing-review/types";
 
 export const DETECTOR_NAMES: Record<DetectorId, string> = {
-  RYNE_AI: "Ryne AI", TURNITIN: "Turnitin", GPTZERO: "GPTZero",
-  ZEROGPT: "ZeroGPT", REILAA: "Reilaa", ORIGINALITY: "Originality.ai",
+  RYNE_AI: "Ryne AI (Beast Mode)", TURNITIN: "Turnitin", GPTZERO: "GPTZero",
+  ZEROGPT: "ZeroGPT", REILAA: "Ryne AI", ORIGINALITY: "Originality.ai",
   QUILLBOT: "QuillBot", SURFER: "Surfer",
 };
 

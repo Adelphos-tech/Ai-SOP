@@ -265,14 +265,17 @@ async function main() {
     // The EXACT submitted text is what reaches the provider — a text
     // override is never replaced by another version's content.
     let sentText = "";
+    let sentTool = "";
     const spy = (async (_u: any, init: any) => {
       sentText = JSON.parse(init.body).text;
-      return new Response(JSON.stringify({ source: "gptzero", aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any;
+      sentTool = init?.headers?.tool ?? "";
+      return new Response(JSON.stringify({ source: "reilaa", aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any;
     }) as any;
-    const out = await runDetection("d-exact", baseOpts({ detectors: ["GPTZERO"], content: "The humanized draft text.", fetcher: spy }));
+    const out = await runDetection("d-exact", baseOpts({ detectors: ["REILAA"], content: "The humanized draft text.", fetcher: spy }));
     assert.equal(out.kind, "OK");
     assert.equal(sentText, "The humanized draft text.");
-    console.log("PASS  exact submitted text is sent to the detector");
+    assert.equal(sentTool, "reilaa"); // Ryne standalone endpoint, reilaa tool
+    console.log("PASS  exact submitted text is sent to the detector (Ryne reilaa)");
     pass++;
   }
 
@@ -285,17 +288,17 @@ async function main() {
       calls++;
       const t = JSON.parse(init.body).text as string;
       const pct = t.includes("ALPHA") ? 90 : 7;
-      return new Response(JSON.stringify({ source: "gptzero", aiScore: pct, classification: pct > 50 ? "AI_ONLY" : "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any;
+      return new Response(JSON.stringify({ source: "reilaa", aiScore: pct, classification: pct > 50 ? "AI_ONLY" : "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any;
     }) as any;
     const t0 = Date.now();
-    const a = await runDetection("d-hash", baseOpts({ detectors: ["GPTZERO"], content: "ALPHA original text.", fetcher: f, now: () => t0 }));
-    const b = await runDetection("d-hash", baseOpts({ detectors: ["GPTZERO"], content: "BETA rewritten text.", fetcher: f, now: () => t0 + 20_000 }));
-    const b2 = await runDetection("d-hash", baseOpts({ detectors: ["GPTZERO"], content: "BETA rewritten text.", fetcher: f, now: () => t0 + 40_000 }));
+    const a = await runDetection("d-hash", baseOpts({ detectors: ["REILAA"], content: "ALPHA original text.", fetcher: f, now: () => t0 }));
+    const b = await runDetection("d-hash", baseOpts({ detectors: ["REILAA"], content: "BETA rewritten text.", fetcher: f, now: () => t0 + 20_000 }));
+    const b2 = await runDetection("d-hash", baseOpts({ detectors: ["REILAA"], content: "BETA rewritten text.", fetcher: f, now: () => t0 + 40_000 }));
     assert.equal(a.kind, "OK"); assert.equal(b.kind, "OK"); assert.equal(b2.kind, "OK");
     if (a.kind === "OK" && b.kind === "OK" && b2.kind === "OK") {
-      const pa = a.detection.scores.find(s => s.detector === "GPTZERO")!.scorePercent;
-      const pb = b.detection.scores.find(s => s.detector === "GPTZERO")!.scorePercent;
-      const pb2 = b2.detection.scores.find(s => s.detector === "GPTZERO")!.scorePercent;
+      const pa = a.detection.scores.find(s => s.detector === "REILAA")!.scorePercent;
+      const pb = b.detection.scores.find(s => s.detector === "REILAA")!.scorePercent;
+      const pb2 = b2.detection.scores.find(s => s.detector === "REILAA")!.scorePercent;
       assert.equal(pa, 90); assert.equal(pb, 7); assert.equal(pb2, 7);
       assert.notEqual(a.detection.contentHash, b.detection.contentHash);
     }
@@ -311,40 +314,41 @@ async function main() {
     const flaky = (async (_u: any, _init: any) => {
       calls++;
       if (calls === 1) return new Response(JSON.stringify({ error: true, error_msg: "upstream timeout" }), { status: 502 }) as any;
-      return new Response(JSON.stringify({ source: "gptzero", aiScore: 41, classification: "MIXED", details: { sentences: [] } }), { status: 200 }) as any;
+      return new Response(JSON.stringify({ source: "reilaa", aiScore: 41, classification: "MIXED", details: { sentences: [] } }), { status: 200 }) as any;
     }) as any;
     const t0 = Date.now();
-    const bad = await runDetection("d-flaky", baseOpts({ detectors: ["GPTZERO"], fetcher: flaky, now: () => t0 }));
+    const bad = await runDetection("d-flaky", baseOpts({ detectors: ["REILAA"], fetcher: flaky, now: () => t0 }));
     assert.equal(bad.kind, "OK");
     if (bad.kind === "OK") {
-      const s = bad.detection.scores.find(x => x.detector === "GPTZERO")!;
+      const s = bad.detection.scores.find(x => x.detector === "REILAA")!;
       assert.equal(s.status, "ERROR");
       assert.equal(s.scorePercent, undefined);
     }
-    const retry = await runDetection("d-flaky", baseOpts({ detectors: ["GPTZERO"], fetcher: flaky, now: () => t0 + 20_000 }));
+    const retry = await runDetection("d-flaky", baseOpts({ detectors: ["REILAA"], fetcher: flaky, now: () => t0 + 20_000 }));
     assert.equal(calls, 2);
-    if (retry.kind === "OK") assert.equal(retry.detection.scores.find(x => x.detector === "GPTZERO")!.scorePercent, 41);
+    if (retry.kind === "OK") assert.equal(retry.detection.scores.find(x => x.detector === "REILAA")!.scorePercent, 41);
     console.log("PASS  failed check is never a score, not cached, retry refetches");
     pass++;
   }
 
   {
-    // GPTZero field semantics: aiScore is the AI-probability percent,
-    // classification is the predicted class — one is never substituted
-    // for the other.
+    // Reilaa (Ryne standalone) field semantics: aiScore is a raw model
+    // signal x100 — NOT a calibrated AI probability — and stays marked
+    // as such; classification is the predicted class.
     const out = await runDetection("d-parse", baseOpts({
-      detectors: ["GPTZERO"],
-      fetcher: mockFetch({ gptzero: { body: { source: "gptzero", aiScore: 6.7, classification: "HUMAN_ONLY", details: { sentences: [] } } } }),
+      detectors: ["REILAA"],
+      fetcher: mockFetch({ reilaa: { body: { source: "reilaa", aiScore: 6.7, classification: "HUMAN_ONLY", details: { scoreType: "uncalibrated_model_signal", granularity: "document", sentences: [] } } } }),
       now: () => Date.now(),
     }));
     assert.equal(out.kind, "OK");
     if (out.kind === "OK") {
-      const s = out.detection.scores.find(x => x.detector === "GPTZERO")!;
+      const s = out.detection.scores.find(x => x.detector === "REILAA")!;
       assert.equal(s.scorePercent, 6.7);
       assert.equal(s.classification, "HUMAN_ONLY");
-      assert.equal(s.scoreMeaning, "AI_PROBABILITY_PERCENT");
+      assert.equal(s.scoreMeaning, "RAW_MODEL_SIGNAL_PERCENT");
+      assert.equal(s.source, "reilaa");
     }
-    console.log("PASS  GPTZero aiScore/classification keep distinct semantics");
+    console.log("PASS  Reilaa aiScore keeps raw-signal semantics, source reilaa");
     pass++;
   }
 
