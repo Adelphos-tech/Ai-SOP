@@ -14,7 +14,12 @@ import {
   countSentences, countWords, missingDetails, planSections, splitParagraphs, wordDiff, type DiffToken,
 } from "@/lib/writing-review/document-structure";
 import type { DocumentHumanizeResult } from "@/lib/writing-review/document-humanizer";
-import { fmtUsd, Notice, prefersReducedMotion, TabBar, Toggle, type StudioVersion } from "./shared";
+import { beastModeBadge, latestVersionScore, type ReportRun } from "@/lib/writing-review/report";
+import type { DetectorId, DetectorScore } from "@/lib/writing-review/types";
+import {
+  DETECTOR_NAMES, fmtUsd, Notice, persistReportRun, prefersReducedMotion,
+  readReportRuns, ScoreBadge, TabBar, Toggle, type StudioVersion,
+} from "./shared";
 
 type Mode = "balanced" | "titan";
 
@@ -50,13 +55,16 @@ export interface HumanizerPanelProps {
   configured: boolean;
   pricing: { balancedPer1k: number; titanPer1k: number };
   apiUrl: string;
+  documentId: string;
+  /** Runnable ai-score detectors + server kill-switch for Check AI. */
+  detection: { runnable: string[]; configured: boolean } | null;
   onSave: (content: string) => Promise<boolean>;
   onDirtyChange: (dirty: boolean) => void;
   restorable: { content: string; versionNumber: number } | null;
   onRestore: () => void;
 }
 
-export default function HumanizerPanel({ version, configured, pricing, apiUrl, onSave, onDirtyChange, restorable, onRestore }: HumanizerPanelProps) {
+export default function HumanizerPanel({ version, configured, pricing, apiUrl, documentId, detection, onSave, onDirtyChange, restorable, onRestore }: HumanizerPanelProps) {
   const [mode, setMode] = useState<Mode>("balanced");
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -69,6 +77,13 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, o
   const [view, setView] = useState<"original" | "humanized">("original");
   const [active, setActive] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: "info" | "warning" | "error" | "success"; text: string } | null>(null);
+  // Compact AI-detection badges — never fetched implicitly. Original
+  // reuses the stored report history for THIS exact version hash;
+  // the draft badge is an explicit Check AI on the exact draft text
+  // (or Ryne's own Beast Mode score when the provider returned one).
+  const [reportRuns, setReportRuns] = useState<ReportRun[]>([]);
+  const [draftCheck, setDraftCheck] = useState<{ text: string; detector: DetectorId; pct: number; meaning?: string } | null>(null);
+  const [checking, setChecking] = useState<"original" | "humanized" | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Reused ONLY when the previous attempt never got a response (network
   // failure) — the server then dedupes instead of billing twice.
@@ -77,7 +92,8 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, o
   const rightRefs = useRef(new Map<string, HTMLElement>());
 
   // A new saved version invalidates any draft built from the old one.
-  useEffect(() => { setResult(null); setEdited(null); setApplied(false); setEditing(false); }, [version.id]);
+  useEffect(() => { setResult(null); setEdited(null); setApplied(false); setEditing(false); setDraftCheck(null); }, [version.id]);
+  useEffect(() => { setReportRuns(readReportRuns(documentId)); }, [documentId]);
   useEffect(() => { onDirtyChange(!!result); }, [result, onDirtyChange]);
   useEffect(() => {
     if (!running) return;
@@ -98,6 +114,74 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, o
     ow: countWords(version.content), os: countSentences(version.content),
     rw: countWords(output), rs: countSentences(output),
   }), [version.content, output]);
+
+  // Badge detector: GPTZero when runnable (real %AI + sentence
+  // evidence), otherwise the first runnable tool — one billed request.
+  const checkDetector = useMemo(() => {
+    const r = detection?.runnable ?? [];
+    return (r.includes("GPTZERO") ? "GPTZERO" : r[0]) as DetectorId | undefined;
+  }, [detection]);
+  // Original badge: only a stored score for THIS version's exact hash.
+  const origScore = useMemo(() => latestVersionScore(reportRuns, version.contentHash), [reportRuns, version.contentHash]);
+  // Humanized badge: an explicit Check AI on the CURRENT draft text
+  // first (named detector); else the provider's Beast Mode score.
+  const validDraftCheck = draftCheck && draftCheck.text === output ? draftCheck : null;
+  const beast = result ? beastModeBadge(result.sections) : undefined;
+  const humBadge: { label: string; pct: number; title?: string } | null = validDraftCheck
+    ? { label: DETECTOR_NAMES[validDraftCheck.detector], pct: validDraftCheck.pct }
+    : beast !== undefined
+      ? { label: "Ryne check", pct: beast, title: "Ryne's Beast Mode detector score for this rewrite (detector not named by the provider) — an estimate, not a guarantee." }
+      : null;
+  const canCheck = !!detection?.configured && !!checkDetector && !running && !checking;
+
+  async function checkAi(text: string, side: "original" | "humanized") {
+    const detector = checkDetector;
+    if (!detector || !canCheck) return;
+    const what = side === "original" ? `the saved original (v${version.versionNumber})` : "the current humanized draft";
+    if (!window.confirm(
+      `Check ${what} with ${DETECTOR_NAMES[detector]}?\n\n` +
+      `This sends the text to Ryne's ai-score API — 1 billed request (per-detector pricing unverified).\n\n` +
+      `AI detection scores are estimates — detectors can be wrong.`)) return;
+    setChecking(side);
+    try {
+      const res = await fetch(apiUrl, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "recheck", detectors: [detector], confirmPaid: true,
+          operationId: crypto.randomUUID(),
+          ...(side === "humanized" ? { text } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setNotice({ tone: "error", text: data.error || `Check failed (HTTP ${res.status}).` }); return; }
+      const s = (data.detection?.scores ?? []).find((x: DetectorScore) => x.detector === detector && x.status === "SCORED");
+      if (!s || typeof s.scorePercent !== "number") {
+        setNotice({ tone: "error", text: `${DETECTOR_NAMES[detector]} returned no numeric score for this text — nothing was assumed.` });
+        return;
+      }
+      if (side === "humanized") {
+        setDraftCheck({ text, detector, pct: s.scorePercent, meaning: s.scoreMeaning });
+      } else {
+        // A real run on the saved version belongs in report history too.
+        const run: ReportRun = {
+          id: crypto.randomUUID(), checkedAt: data.detection.checkedAt,
+          versionId: data.detection.baseVersionId, contentHash: data.detection.contentHash,
+          detectors: [detector], detection: data.detection,
+        };
+        persistReportRun(documentId, run);
+        setReportRuns(readReportRuns(documentId));
+      }
+    } finally { setChecking(null); }
+  }
+
+  const checkButton = (side: "original" | "humanized", text: string) => (
+    <button type="button" onClick={() => checkAi(text, side)}
+      disabled={!canCheck}
+      title={detection?.configured ? `Run one ${checkDetector ? DETECTOR_NAMES[checkDetector] : ""} check (billed)` : "Ryne detection is not configured on the server."}
+      className="px-2 py-0.5 text-[11px] font-medium border border-dvivid-border rounded-button bg-white hover:border-dvivid-primary hover:text-dvivid-primary disabled:opacity-50 whitespace-nowrap">
+      {checking === side ? "Checking…" : "Check AI"}
+    </button>
+  );
 
   async function humanize() {
     if (running) return;
@@ -245,11 +329,33 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, o
           ]} />
       </div>
 
+      {/* before/after score comparison — only when BOTH sides hold a
+          genuine score for the exact text shown */}
+      {origScore && humBadge && (
+        <div className="px-4 sm:px-6 pt-3 -mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-dvivid-text-secondary" role="status">
+          <span>
+            <b className="text-dvivid-text-primary">{DETECTOR_NAMES[origScore.detector]} {Math.round(origScore.scorePercent!)}%</b>
+            <span className="text-dvivid-text-muted"> (original) → </span>
+            <b className="text-dvivid-text-primary">{humBadge.label} {Math.round(humBadge.pct)}%</b>
+            <span className="text-dvivid-text-muted"> (rewrite) · </span>
+            <b className={humBadge.pct <= origScore.scorePercent! ? "text-dvivid-success" : "text-dvivid-warning"}>
+              {humBadge.pct <= origScore.scorePercent! ? "−" : "+"}{Math.abs(Math.round(humBadge.pct - origScore.scorePercent!))} pts
+            </b>
+          </span>
+          <span className="text-dvivid-text-muted">AI detection scores are estimates — a lower score does not guarantee the text won&apos;t be flagged.</span>
+        </div>
+      )}
+
       <div className="grid lg:grid-cols-2 gap-4 p-4 sm:p-6">
         {/* LEFT: original */}
         <div className={`${view === "original" ? "flex" : "hidden"} lg:flex flex-col min-w-0 border border-dvivid-border rounded-card`}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-dvivid-border-light bg-dvivid-surface-alt rounded-t-card">
-            <h2 className="text-sm font-semibold text-dvivid-text-primary">Original SOP <span className="font-normal text-dvivid-text-muted">· v{version.versionNumber}</span></h2>
+          <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-dvivid-border-light bg-dvivid-surface-alt rounded-t-card">
+            <h2 className="text-sm font-semibold text-dvivid-text-primary truncate">Original SOP <span className="font-normal text-dvivid-text-muted">· v{version.versionNumber}</span></h2>
+            <span className="shrink-0">
+              {origScore
+                ? <ScoreBadge label={DETECTOR_NAMES[origScore.detector]} percent={origScore.scorePercent!} />
+                : checkButton("original", version.content)}
+            </span>
           </div>
           <div className="px-4 py-4 overflow-auto max-h-[60vh] lg:max-h-[62vh]" tabIndex={0} aria-label="Original text">
             {result ? renderColumn("left") : originalBody}
@@ -267,6 +373,9 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, o
             </h2>
             {result && (
               <div className="flex items-center gap-1.5 shrink-0">
+                {humBadge
+                  ? <ScoreBadge label={humBadge.label} percent={humBadge.pct} title={humBadge.title} />
+                  : checkButton("humanized", output)}
                 <button type="button" onClick={() => { if (!editing && edited === null) setEdited(result.content); setEditing(!editing); }}
                   className="px-2.5 py-1 text-xs font-medium border border-dvivid-border rounded-button bg-white hover:border-dvivid-primary hover:text-dvivid-primary">
                   {editing ? "Done" : "Edit"}

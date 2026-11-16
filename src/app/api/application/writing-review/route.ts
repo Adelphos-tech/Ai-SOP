@@ -24,7 +24,7 @@ import {
   ryneRewriteStatus,
   listDetectorDescriptors,
 } from "@/lib/writing-review/detectors";
-import { runDetection } from "@/lib/writing-review/detection";
+import { runDetection, RYNE_MAX_CHARS } from "@/lib/writing-review/detection";
 import { runRewrite } from "@/lib/writing-review/rewrite";
 import { runDocumentHumanize } from "@/lib/writing-review/document-humanizer";
 
@@ -223,6 +223,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "A valid operationId (UUID) is required for a detection run." }, { status: 400 });
     }
+    // Optional text override: the Check-AI badge on the unsaved
+    // humanized draft sends the exact draft text; the saved version's
+    // own text is still read server-side and never trusted from the
+    // client. The result's contentHash identifies which text scored.
+    const suppliedText = typeof body.text === "string" ? body.text : null;
+    if (suppliedText !== null && (!suppliedText.trim() || suppliedText.length > RYNE_MAX_CHARS)) {
+      return NextResponse.json(
+        { error: `text must be 1–${RYNE_MAX_CHARS.toLocaleString()} characters when supplied.` }, { status: 400 });
+    }
     // Brick 2/4B-C1: server-side Ryne calls — consent + persistent
     // budget ledger + timeout + cooldown + per-detector isolation
     // enforced inside runDetection.
@@ -231,7 +240,7 @@ export async function POST(request: NextRequest) {
       detectors: Array.isArray(body.detectors) ? body.detectors : [],
       confirmPaid: body.confirmPaid === true,
       baseVersionId: current.id,
-      content: current.content,
+      content: suppliedText ?? current.content,
       operationId,
       actorId: consultant.id,
       ids: {

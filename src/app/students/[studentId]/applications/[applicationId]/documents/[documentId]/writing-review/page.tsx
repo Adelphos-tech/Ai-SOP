@@ -208,6 +208,8 @@ export default function WritingStudioPage() {
               configured={providerConfigured}
               pricing={config?.rewritePricing ?? { balancedPer1k: 0.08, titanPer1k: 0.5 }}
               apiUrl={apiUrl}
+              documentId={documentId}
+              detection={config ? { runnable: config.runnable ?? [], configured: config.configured } : null}
               onSave={onSave}
               onDirtyChange={onDirtyChange}
               restorable={restorable}

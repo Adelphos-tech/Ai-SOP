@@ -10,7 +10,7 @@ import { randomUUID } from "crypto";
 import {
   alignRewrite, countSentences, countWords, isHeading, missingDetails, planSections, wordDiff,
 } from "../src/lib/writing-review/document-structure";
-import { aggregateFindings, detectorVerdict } from "../src/lib/writing-review/report";
+import { aggregateFindings, beastModeBadge, detectorVerdict, latestVersionScore, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
 import { runDocumentHumanize } from "../src/lib/writing-review/document-humanizer";
@@ -167,6 +167,34 @@ async function main() {
     assert.equal(detectorVerdict({ detector: "GPTZERO", status: "SCORED", classification: "AI_ONLY", scorePercent: 100 }), "AI");
     assert.equal(detectorVerdict({ detector: "REILAA", status: "SCORED", classification: "HUMAN_ONLY", scorePercent: 15 }), "HUMAN");
     assert.equal(detectorVerdict({ detector: "ZEROGPT", status: "ERROR" }), null);
+  });
+
+  // ---------- compact badge helpers ----------
+  await check("primaryScore: GPTZero preferred, errors and scoreless skipped, null when none", () => {
+    const scores: any[] = [
+      { detector: "ZEROGPT", status: "ERROR" },
+      { detector: "REILAA", status: "SCORED", scorePercent: 35 },
+      { detector: "GPTZERO", status: "SCORED", scorePercent: 78 },
+    ];
+    assert.equal(primaryScore(scores)?.detector, "GPTZERO");
+    assert.equal(primaryScore(scores, ["REILAA"])?.detector, "REILAA");
+    assert.equal(primaryScore([{ detector: "ZEROGPT", status: "ERROR" }] as any), null);
+    assert.equal(primaryScore([{ detector: "REILAA", status: "SCORED" }] as any), null); // no numeric score → no badge
+  });
+
+  await check("latestVersionScore: hash must match the exact version; newest matching run wins", () => {
+    const run = (hash: string, at: string, pct: number): ReportRun => ({
+      id: at, checkedAt: at, versionId: "v", contentHash: hash, detectors: ["GPTZERO"],
+      detection: { scores: [{ detector: "GPTZERO", status: "SCORED", scorePercent: pct }] } as any,
+    });
+    const runs = [run("old-hash", "2026-01-01", 90), run("hash-x", "2026-01-02", 78), run("hash-x", "2026-01-03", 55)];
+    assert.equal(latestVersionScore(runs, "hash-x")?.scorePercent, 55);
+    assert.equal(latestVersionScore(runs, "never-checked"), null); // stale/missing → no badge, Check AI instead
+  });
+
+  await check("beastModeBadge: worst section score; undefined when provider returned none", () => {
+    assert.equal(beastModeBadge([{ aiScore: 3.1 }, { aiScore: 8.4 }, {}]), 8.4);
+    assert.equal(beastModeBadge([{}, {}]), undefined);
   });
 
   // ---------- full-document humanization ----------
