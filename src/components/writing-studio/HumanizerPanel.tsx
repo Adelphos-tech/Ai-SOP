@@ -104,11 +104,13 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, o
     if (!configured) { setNotice({ tone: "error", text: "Ryne is not configured on the server." }); return; }
     if (!plan.ok) { setNotice({ tone: "error", text: plan.reason }); return; }
     if ((edited !== null || applied) && !window.confirm("Discard the current humanized draft and generate a new one?")) return;
+    const requests = plan.ok ? plan.sections.filter(s => s.kind === "BODY").length : 0;
     if (!window.confirm(
       `Humanize the full document with Ryne ${mode === "titan" ? "Titan" : "Balanced"}?\n\n` +
       `Sends saved version v${version.versionNumber}: ${billableWords.toLocaleString()} words` +
       `${plan.sections.some(s => s.kind === "HEADING") ? " (headings are kept unchanged and not sent)" : ""}.\n` +
-      `Estimated cost: ~${fmtUsd(estimate)} (documented $${per1k}/1K words — billed by Ryne in prepaid credits).\n\n` +
+      `Estimated cost: ~${fmtUsd(estimate)} for the whole document (documented $${per1k}/1K words — billed by Ryne in prepaid credits).\n` +
+      `This one action makes ${requests} billable Ryne request${requests === 1 ? "" : "s"} — one per document section, up to 3 at a time.\n\n` +
       `Your document is not changed until you apply and save the rewrite. No AI detection is run.`)) return;
     const opKey = `${version.id}:${mode}`;
     const operationId = pendingOpRef.current?.key === opKey ? pendingOpRef.current.id : crypto.randomUUID();

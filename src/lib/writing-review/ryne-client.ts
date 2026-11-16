@@ -130,9 +130,12 @@ function sentencePercent(s: Record<string, unknown>): number | undefined {
  * Map sentence-level findings to flagged passages by resolving each
  * provider-supplied sentence against the document with safe unique
  * matching. Only sentences the provider itself marks as AI are
- * flagged: its isAI verdict when present, otherwise a per-sentence
- * probability of at least 50%. Providers often list every sentence —
- * the unflagged ones are not findings. Sentences that cannot be
+ * flagged: an explicit isAI verdict, or — when no verdict exists —
+ * a per-sentence probability of at least 50%. A sentence with
+ * neither is not a finding: providers often list every sentence,
+ * and unflagged ones must not be counted. When verdict and
+ * probability conflict, the provider's explicit verdict wins.
+ * Sentences that cannot be
  * resolved unambiguously are dropped — never anchored by guesswork.
  * Document-level responses produce no passages.
  */
@@ -150,7 +153,8 @@ export function mapSentenceFindings(
     if (!text) return;
     const isAI = typeof s.isAI === "boolean" ? s.isAI : undefined;
     const scorePercent = sentencePercent(s);
-    if (isAI === false || (isAI === undefined && scorePercent !== undefined && scorePercent < 50)) return;
+    if (isAI !== true && scorePercent === undefined) return;   // no verdict, no score → not a finding
+    if (isAI === false || (isAI === undefined && scorePercent! < 50)) return;
     const range = resolvePassageRange(content, { start: -1, end: -1, text });
     if (!range) return; // ambiguous or absent → never fabricate an anchor
     const key = `${range.start}:${range.end}`;

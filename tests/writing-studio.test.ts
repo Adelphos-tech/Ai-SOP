@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "crypto";
 import {
-  alignRewrite, countSentences, isHeading, missingDetails, planSections, wordDiff,
+  alignRewrite, countSentences, countWords, isHeading, missingDetails, planSections, wordDiff,
 } from "../src/lib/writing-review/document-structure";
 import { aggregateFindings, detectorVerdict } from "../src/lib/writing-review/report";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
@@ -102,6 +102,36 @@ async function main() {
     assert.equal(mapSentenceFindings(SOP, "ZEROGPT", res).length, 1);
   });
 
+  await check("no verdict and no probability → NOT a finding (regression)", () => {
+    const res: any = { source: "gptzero", details: { sentences: [
+      { text: sents[0].text },                     // neither verdict nor score → dropped
+      { text: sents[1].text, aiProbability: 99 },  // probability ≥50 → kept
+      { text: sents[2].text, isAI: true },         // explicit verdict → kept
+    ] } };
+    const found = mapSentenceFindings(SOP, "GPTZERO", res);
+    assert.equal(found.length, 2);
+    assert.deepEqual(found.map(p => p.text).sort(), [sents[1].text, sents[2].text].sort());
+  });
+
+  await check("conflicting verdict + probability → provider's explicit verdict wins", () => {
+    const res: any = { source: "gptzero", details: { sentences: [
+      { text: sents[0].text, isAI: false, aiProbability: 95 }, // verdict says human → dropped
+      { text: sents[1].text, isAI: true, aiProbability: 12 },  // verdict says AI → kept
+    ] } };
+    const found = mapSentenceFindings(SOP, "GPTZERO", res);
+    assert.equal(found.length, 1);
+    assert.equal(found[0].text, sents[1].text);
+    assert.equal(found[0].scorePercent, 12);
+    assert.equal(found[0].isAI, true);
+  });
+
+  await check("same sentence listed twice by one provider (different fields) → one finding", () => {
+    const res: any = { source: "gptzero", details: { sentences: [
+      { text: sents[0].text, isAI: true }, { text: sents[0].text, aiProbability: 88 },
+    ] } };
+    assert.equal(mapSentenceFindings(SOP, "GPTZERO", res).length, 1);
+  });
+
   await check("aggregation: same sentence from two detectors = ONE finding listing both", () => {
     const g: any = { details: { sentences: sents.slice(0, 2).map(s => ({ text: s.text, aiProbability: 99, isAI: true })) } };
     const z: any = { details: { sentences: sents.slice(1, 3).map(s => ({ text: s.text, score: 88 })) } };
@@ -193,6 +223,10 @@ async function main() {
     assert.equal(evs[0].requestUnit, "titan");
     assert.equal(evs[0].unitQuantity, out.result.billableWords);
     assert.ok(Math.abs(out.result.estimatedCostUsd - out.result.billableWords / 1000 * 0.5) < 1e-9);
+    // The billed/estimated quantity is EVERY sent word across all
+    // sections — the whole document, never just one section.
+    const sentWords = sent.reduce((n, b) => n + countWords(b.text), 0);
+    assert.equal(out.result.billableWords, sentWords);
   });
 
   await check("paragraph merge by provider → flagged structure change, never silent", async () => {
