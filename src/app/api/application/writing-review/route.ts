@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
       rewriteProvider: ryneRewriteStatus(),
       detectionConfig: {
         runnable: listDetectorDescriptors()
-          .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured)
+          .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured && !d.disabledReason)
           .map(d => d.detector),
         maxDetectorsPerRun: Number(process.env.RYNE_MAX_DETECTORS_PER_RUN ?? 3),
         // Per-detector billing is unverified — the UI gets the approved

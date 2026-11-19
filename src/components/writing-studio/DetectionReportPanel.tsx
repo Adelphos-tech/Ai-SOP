@@ -155,18 +155,19 @@ export default function DetectionReportPanel({ version, config, apiUrl, document
         <fieldset className="mt-4">
           <legend className="sr-only">Detectors</legend>
           <div className="flex flex-wrap gap-2">
-            {descriptors.map(d => {
-              const can = runnable.has(d.detector);
+            {/* Only verified-runnable detectors — non-API placeholders
+                (Beast Mode, Turnitin) and upstream-broken tools are
+                hidden, not shown as dead pills. */}
+            {descriptors.filter(d => runnable.has(d.detector)).map(d => {
               const on = selected.includes(d.detector);
-              const blocked = !can || (!on && selected.length >= max);
+              const blocked = !on && selected.length >= max;
               return (
-                <label key={d.detector} title={can ? undefined : d.note}
+                <label key={d.detector}
                   className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium select-none ${
                     on ? "border-dvivid-primary bg-dvivid-primary-light text-dvivid-primary"
                       : blocked ? "border-dvivid-border-light text-dvivid-text-muted" : "border-dvivid-border text-dvivid-text-primary cursor-pointer hover:border-dvivid-primary"}`}>
                   <input type="checkbox" className="accent-dvivid-primary" checked={on} disabled={blocked || running} onChange={() => toggle(d.detector)} />
                   {DETECTOR_NAMES[d.detector]}
-                  {!can && <span className="text-[10px] font-normal">{d.integration === "NONE" ? "unavailable" : d.integration === "RYNE_BEAST_MODE" ? "via Humanizer" : "not connected"}</span>}
                 </label>
               );
             })}

@@ -44,7 +44,8 @@ async function main() {
   process.env.RYNE_DAILY_BUDGET_USD = "100";
 
   assert.ok(runnableTools().includes("reilaa"));
-  assert.equal(runnableTools().length, 6);
+  assert.equal(runnableTools().length, 4); // reilaa, gptzero, zerogpt, surfer — quillbot/originality verified broken upstream (HTTP 502)
+  assert.ok(!runnableTools().includes("quillbot") && !runnableTools().includes("originality"));
 
   {
     const out = await runDetection("d-consent", baseOpts({ confirmPaid: false }));
@@ -56,7 +57,7 @@ async function main() {
 
   {
     const out = await runDetection("d-budget", baseOpts({
-      detectors: ["REILAA", "GPTZERO", "ZEROGPT", "QUILLBOT"],
+      detectors: ["REILAA", "GPTZERO", "ZEROGPT", "SURFER"],
     }));
     assert.equal(out.kind, "OVER_BUDGET"); // default budget 3
     console.log("PASS  detector budget enforced");
@@ -189,6 +190,25 @@ async function main() {
     const out = await runDetection("d-unknown", baseOpts({ detectors: ["TURNITIN", "NOT_A_DETECTOR"] }));
     assert.equal(out.kind, "CONSENT_REQUIRED"); // no runnable detector selected
     console.log("PASS  unsupported detectors cannot be billed");
+    pass++;
+  }
+
+  {
+    // Upstream-broken detectors (verified HTTP 502) are unbillable and
+    // carry an honest UNAVAILABLE status — never a hidden score.
+    let calls = 0;
+    const out = await runDetection("d-disabled", baseOpts({
+      detectors: ["QUILLBOT", "ORIGINALITY", "REILAA"],
+      fetcher: (async () => { calls++; return new Response(JSON.stringify({ source: "reilaa", aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
+    }));
+    assert.equal(out.kind, "OK");
+    assert.equal(calls, 1); // only the runnable reilaa call was made
+    if (out.kind === "OK") {
+      assert.equal(out.detection.scores.find(s => s.detector === "QUILLBOT")!.status, "UNAVAILABLE");
+      assert.equal(out.detection.scores.find(s => s.detector === "ORIGINALITY")!.status, "UNAVAILABLE");
+      assert.equal(out.detection.scores.find(s => s.detector === "REILAA")!.status, "SCORED");
+    }
+    console.log("PASS  upstream-broken detectors unbillable, honest UNAVAILABLE status");
     pass++;
   }
 

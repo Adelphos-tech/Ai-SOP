@@ -26,6 +26,10 @@ export interface DetectorDescriptor {
   /** Reilaa-style document-level vs sentence-level evidence. */
   granularity: "DOCUMENT" | "SENTENCE" | "UNKNOWN";
   configured: boolean;
+  /** Set when a documented tool is verified broken upstream — it is
+   *  kept in the registry for historical reports/labels but removed
+   *  from runnable lists and new checks. */
+  disabledReason?: string;
   note: string;
 }
 
@@ -111,7 +115,8 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
       scoreMeaning: "AI_PROBABILITY_PERCENT",
       granularity: "UNKNOWN",
       configured: ryne,
-      note: via("originality", ""),
+      disabledReason: "Removed from selector — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
+      note: "Removed — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
     },
     {
       detector: "QUILLBOT",
@@ -121,7 +126,8 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
       scoreMeaning: "AI_PROBABILITY_PERCENT",
       granularity: "UNKNOWN",
       configured: ryne,
-      note: via("quillbot", ""),
+      disabledReason: "Removed from selector — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
+      note: "Removed — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
     },
     {
       detector: "SURFER",
@@ -141,7 +147,7 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
 export function listDetectorStatuses(): DetectorScore[] {
   return listDetectorDescriptors().map(d => ({
     detector: d.detector,
-    status: d.integration === "NONE" ? "UNAVAILABLE" : d.configured ? "PENDING" : "NOT_CONNECTED",
+    status: d.integration === "NONE" || d.disabledReason ? "UNAVAILABLE" : d.configured ? "PENDING" : "NOT_CONNECTED",
     scoreMeaning: d.scoreMeaning,
     granularity: d.granularity === "UNKNOWN" ? undefined : d.granularity,
     note: d.note,

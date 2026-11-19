@@ -12,6 +12,7 @@ import {
 } from "../src/lib/writing-review/document-structure";
 import { aggregateFindings, beastModeBadge, detectorVerdict, latestVersionScore, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
+import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writing-review/detectors";
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
 import { runDocumentHumanize } from "../src/lib/writing-review/document-humanizer";
 import { getOperationEvents } from "../src/lib/writing-review/spend-ledger";
@@ -203,6 +204,33 @@ async function main() {
     assert.equal(latestVersionScore(runs, "hash-A")?.scorePercent, 100);
     // A run under a different hash never bleeds into this text's badge.
     assert.equal(latestVersionScore(runs, "hash-C"), null);
+  });
+
+  // ---------- detector selector cleanup ----------
+  await check("selector pool: only verified runnable detectors; placeholders + broken tools excluded", () => {
+    process.env.RYNE_API_KEY = "ryne_sk_test";
+    const runnable = listDetectorDescriptors()
+      .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured && !d.disabledReason)
+      .map(d => d.detector);
+    assert.deepEqual([...runnable].sort(), ["GPTZERO", "REILAA", "SURFER", "ZEROGPT"]);
+    // Registry intact — nothing deleted from descriptors or labels.
+    const all = listDetectorDescriptors().map(d => d.detector);
+    assert.ok(all.includes("TURNITIN") && all.includes("RYNE_AI") && all.includes("QUILLBOT") && all.includes("ORIGINALITY"));
+    // Broken tools carry an honest UNAVAILABLE status, not a score.
+    const statuses = listDetectorStatuses();
+    assert.equal(statuses.find(s => s.detector === "QUILLBOT")!.status, "UNAVAILABLE");
+    assert.equal(statuses.find(s => s.detector === "ORIGINALITY")!.status, "UNAVAILABLE");
+    assert.equal(statuses.find(s => s.detector === "TURNITIN")!.status, "UNAVAILABLE");
+  });
+
+  await check("backward compat: stored run for a now-disabled detector still yields its badge score", () => {
+    const run: ReportRun = {
+      id: "r1", checkedAt: "2026-01-01", versionId: "v", contentHash: "h", detectors: ["QUILLBOT"],
+      detection: { scores: [{ detector: "QUILLBOT", status: "SCORED", scorePercent: 44 }] } as any,
+    };
+    // A historical QuillBot score still renders — removal affects new checks only.
+    assert.equal(latestVersionScore([run], "h")?.scorePercent, 44);
+    assert.equal(beastModeBadge([{ aiScore: 3.2 }]), 3.2); // Beast Mode badge path untouched
   });
 
   await check("beastModeBadge: worst section score; undefined when provider returned none", () => {
