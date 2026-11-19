@@ -128,17 +128,20 @@ function cacheKey(documentKey: string, contentHash: string, detectors: string[])
  *  from the approved RYNE_UNVERIFIED_PRICE_CEILING_USD configuration,
  *  never from an invented price. */
 
-/** Runnable = documented Ryne ai-score tools only. Ryne-native score
- *  comes from Beast Mode rewrites (Brick 3); Turnitin has no endpoint. */
+/** Runnable = documented Ryne ai-score tools that are verified
+ *  reachable — entries carrying `disabledReason` (verified upstream
+ *  failures) are excluded from new checks but stay in the registry.
+ *  Ryne-native score comes from Beast Mode rewrites (Brick 3);
+ *  Turnitin has no endpoint. */
 export function runnableTools(): string[] {
   return listDetectorDescriptors()
-    .filter(d => d.integration === "RYNE_AI_SCORE" && d.ryneTool)
+    .filter(d => d.integration === "RYNE_AI_SCORE" && d.ryneTool && !d.disabledReason)
     .map(d => d.ryneTool!);
 }
 
 const TOOL_BY_DETECTOR: Record<string, string> = Object.fromEntries(
   listDetectorDescriptors()
-    .filter(d => d.ryneTool)
+    .filter(d => d.ryneTool && !d.disabledReason)
     .map(d => [d.detector, d.ryneTool!]),
 );
 
