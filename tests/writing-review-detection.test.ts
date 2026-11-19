@@ -198,13 +198,18 @@ async function main() {
     // billable call with its own honest status.
     let calls = 0;
     const tools: string[] = [];
+    const fallbacks: string[] = [];
     const out = await runDetection("d-reenabled", baseOpts({
       detectors: ["QUILLBOT", "ORIGINALITY"],
-      fetcher: (async (_u: any, init: any) => { calls++; tools.push(init?.headers?.tool); return new Response(JSON.stringify({ source: init?.headers?.tool, aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
+      fetcher: (async (_u: any, init: any) => { calls++; tools.push(init?.headers?.tool); fallbacks.push(init?.headers?.["fallback-tool"]); return new Response(JSON.stringify({ source: init?.headers?.tool, aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
     }));
     assert.equal(out.kind, "OK");
     assert.equal(calls, 2);
     assert.deepEqual(tools.sort(), ["originality", "quillbot"]);
+    // Non-reilaa tools opt out of fallback per Ryne's spec — the header
+    // only applies when reilaa fails, and passing it elsewhere could
+    // reroute/mis-score the request upstream.
+    assert.ok(fallbacks.every(f => f === "none"));
     if (out.kind === "OK") {
       assert.equal(out.detection.scores.find(s => s.detector === "QUILLBOT")!.status, "SCORED");
       assert.equal(out.detection.scores.find(s => s.detector === "ORIGINALITY")!.status, "SCORED");
