@@ -44,8 +44,8 @@ async function main() {
   process.env.RYNE_DAILY_BUDGET_USD = "100";
 
   assert.ok(runnableTools().includes("reilaa"));
-  assert.equal(runnableTools().length, 4); // reilaa, gptzero, zerogpt, surfer — quillbot/originality verified broken upstream (HTTP 502)
-  assert.ok(!runnableTools().includes("quillbot") && !runnableTools().includes("originality"));
+  assert.equal(runnableTools().length, 6);
+  assert.ok(runnableTools().includes("quillbot") && runnableTools().includes("originality"));
 
   {
     const out = await runDetection("d-consent", baseOpts({ confirmPaid: false }));
@@ -194,21 +194,22 @@ async function main() {
   }
 
   {
-    // Upstream-broken detectors (verified HTTP 502) are unbillable and
-    // carry an honest UNAVAILABLE status — never a hidden score.
+    // Re-enabled tools run like any other — each selection is one
+    // billable call with its own honest status.
     let calls = 0;
-    const out = await runDetection("d-disabled", baseOpts({
-      detectors: ["QUILLBOT", "ORIGINALITY", "REILAA"],
-      fetcher: (async () => { calls++; return new Response(JSON.stringify({ source: "reilaa", aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
+    const tools: string[] = [];
+    const out = await runDetection("d-reenabled", baseOpts({
+      detectors: ["QUILLBOT", "ORIGINALITY"],
+      fetcher: (async (_u: any, init: any) => { calls++; tools.push(init?.headers?.tool); return new Response(JSON.stringify({ source: init?.headers?.tool, aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
     }));
     assert.equal(out.kind, "OK");
-    assert.equal(calls, 1); // only the runnable reilaa call was made
+    assert.equal(calls, 2);
+    assert.deepEqual(tools.sort(), ["originality", "quillbot"]);
     if (out.kind === "OK") {
-      assert.equal(out.detection.scores.find(s => s.detector === "QUILLBOT")!.status, "UNAVAILABLE");
-      assert.equal(out.detection.scores.find(s => s.detector === "ORIGINALITY")!.status, "UNAVAILABLE");
-      assert.equal(out.detection.scores.find(s => s.detector === "REILAA")!.status, "SCORED");
+      assert.equal(out.detection.scores.find(s => s.detector === "QUILLBOT")!.status, "SCORED");
+      assert.equal(out.detection.scores.find(s => s.detector === "ORIGINALITY")!.status, "SCORED");
     }
-    console.log("PASS  upstream-broken detectors unbillable, honest UNAVAILABLE status");
+    console.log("PASS  re-enabled detectors bill one call each and score independently");
     pass++;
   }
 

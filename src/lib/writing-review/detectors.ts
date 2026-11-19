@@ -115,8 +115,7 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
       scoreMeaning: "AI_PROBABILITY_PERCENT",
       granularity: "UNKNOWN",
       configured: ryne,
-      disabledReason: "Removed from selector — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
-      note: "Removed — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
+      note: via("originality", ""),
     },
     {
       detector: "QUILLBOT",
@@ -126,8 +125,7 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
       scoreMeaning: "AI_PROBABILITY_PERCENT",
       granularity: "UNKNOWN",
       configured: ryne,
-      disabledReason: "Removed from selector — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
-      note: "Removed — Ryne's upstream provider fails (HTTP 502, verified 2026-11-19).",
+      note: via("originality", ""),
     },
     {
       detector: "SURFER",

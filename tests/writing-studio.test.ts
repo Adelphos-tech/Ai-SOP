@@ -212,23 +212,24 @@ async function main() {
     const runnable = listDetectorDescriptors()
       .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured && !d.disabledReason)
       .map(d => d.detector);
-    assert.deepEqual([...runnable].sort(), ["GPTZERO", "REILAA", "SURFER", "ZEROGPT"]);
-    // Registry intact — nothing deleted from descriptors or labels.
+    assert.deepEqual([...runnable].sort(), ["GPTZERO", "ORIGINALITY", "QUILLBOT", "REILAA", "SURFER", "ZEROGPT"]);
+    // Non-API placeholders stay in the registry/labels but never in
+    // the runnable selector pool.
     const all = listDetectorDescriptors().map(d => d.detector);
-    assert.ok(all.includes("TURNITIN") && all.includes("RYNE_AI") && all.includes("QUILLBOT") && all.includes("ORIGINALITY"));
-    // Broken tools carry an honest UNAVAILABLE status, not a score.
+    assert.ok(all.includes("TURNITIN") && all.includes("RYNE_AI"));
+    assert.ok(!runnable.includes("TURNITIN") && !runnable.includes("RYNE_AI"));
     const statuses = listDetectorStatuses();
-    assert.equal(statuses.find(s => s.detector === "QUILLBOT")!.status, "UNAVAILABLE");
-    assert.equal(statuses.find(s => s.detector === "ORIGINALITY")!.status, "UNAVAILABLE");
+    assert.equal(statuses.find(s => s.detector === "QUILLBOT")!.status, "PENDING");
+    assert.equal(statuses.find(s => s.detector === "ORIGINALITY")!.status, "PENDING");
     assert.equal(statuses.find(s => s.detector === "TURNITIN")!.status, "UNAVAILABLE");
   });
 
-  await check("backward compat: stored run for a now-disabled detector still yields its badge score", () => {
+  await check("backward compat: stored run for any detector still yields its badge score", () => {
     const run: ReportRun = {
       id: "r1", checkedAt: "2026-01-01", versionId: "v", contentHash: "h", detectors: ["QUILLBOT"],
       detection: { scores: [{ detector: "QUILLBOT", status: "SCORED", scorePercent: 44 }] } as any,
     };
-    // A historical QuillBot score still renders — removal affects new checks only.
+    // A historical detector score still renders regardless of selector state.
     assert.equal(latestVersionScore([run], "h")?.scorePercent, 44);
     assert.equal(beastModeBadge([{ aiScore: 3.2 }]), 3.2); // Beast Mode badge path untouched
   });
