@@ -168,7 +168,10 @@ async function callDetector(
       headers: {
         "Content-Type": "application/json",
         tool,                        // documented detector selector
-        "fallback-tool": "zerogpt",  // documented default fallback
+        // Per Ryne docs the fallback only applies when reilaa fails —
+        // explicitly disable it for other tools so a non-reilaa request
+        // can't be rerouted or mis-scored by a fallback provider.
+        "fallback-tool": tool === "reilaa" ? "zerogpt" : "none",
       },
       body: JSON.stringify({ text, user_id: key }), // key stays server-side
       signal: ac.signal,
