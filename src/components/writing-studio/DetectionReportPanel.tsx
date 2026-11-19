@@ -41,13 +41,17 @@ function DetectorResultCard({ s }: { s: DetectorScore }) {
         <span className={`text-[11px] font-semibold ${v ? VERDICT[v].cls : "text-dvivid-text-secondary"}`}>
           {v ? VERDICT[v].label : s.classification || "Scored"}
         </span>
+      ) : s.status === "ERROR" ? (
+        <span className="text-[11px] font-semibold text-dvivid-error">Provider not responding</span>
       ) : (
-        <span className="text-[11px] font-semibold text-dvivid-error">Error</span>
+        <span className="text-[11px] font-semibold text-dvivid-text-secondary">Unavailable</span>
       )}
       <span className="text-[10px] text-dvivid-text-muted text-center leading-tight line-clamp-3" title={s.error?.message ?? s.note}>
         {s.status === "SCORED"
           ? `${s.scoreMeaning ? MEANING[s.scoreMeaning] : ""}${s.granularity === "DOCUMENT" ? " · document-level" : ""}${s.fallback ? ` · produced by ${s.fallback.to}` : ""}`
-          : s.error?.message ?? "Check failed — not a 0% score."}
+          : s.status === "ERROR"
+            ? `${s.error?.message ?? "Check failed"} — a failed check is not a 0% score.`
+            : s.note ?? "Not run."}
       </span>
     </div>
   );
