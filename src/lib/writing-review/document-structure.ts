@@ -32,9 +32,22 @@ export function ryneUnits(text: string): number {
   return Math.max(countWords(text), Math.ceil(text.length / 10));
 }
 
-export interface SectionLimits { maxUnits: number; maxChars: number }
+export interface SectionLimits {
+  maxUnits: number;
+  maxChars: number;
+  /**
+   * Paragraph-grouping target: body paragraphs are bundled into sections
+   * up to this size (Ryne units = words, or chars/10 when larger). A single
+   * paragraph larger than the target — but within the hard limits — is sent
+   * intact as its own section. Defaults to maxUnits (no soft chunking).
+   */
+  targetUnits?: number;
+}
 /** Below Titan's documented 8,000-unit and the 40,000-char hard limits. */
 export const DEFAULT_SECTION_LIMITS: SectionLimits = { maxUnits: 6000, maxChars: 30_000 };
+
+/** Narrative-block target for the full-document humanizer: whole paragraphs grouped up to ~400 words per Ryne call. */
+export const MAX_SECTION_WORDS = 400;
 
 export interface PlannedSection {
   index: number;
@@ -73,8 +86,16 @@ export function planSections(content: string, limits: SectionLimits = DEFAULT_SE
     if (ryneUnits(p) > limits.maxUnits || p.length > limits.maxChars) {
       return { ok: false, reason: `A paragraph is too long for one provider request (${countWords(p)} words). Split it into smaller paragraphs and try again.` };
     }
+    const target = limits.targetUnits ?? limits.maxUnits;
+    if (ryneUnits(p) > target) {
+      // Never split inside a paragraph — an over-target paragraph goes out
+      // whole as its own section (it is still within the hard provider limits).
+      flush();
+      sections.push({ index: sections.length, kind: "BODY", paragraphs: [p], text: p, words: countWords(p) });
+      continue;
+    }
     const next = [...body, p].join("\n\n");
-    if (body.length && (ryneUnits(next) > limits.maxUnits || next.length > limits.maxChars)) flush();
+    if (body.length && (ryneUnits(next) > target || next.length > limits.maxChars)) flush();
     body.push(p);
   }
   flush();

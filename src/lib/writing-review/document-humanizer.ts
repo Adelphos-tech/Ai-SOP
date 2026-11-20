@@ -16,7 +16,7 @@ import {
   canonicalUnitsKey, getOperation, markUnknown, refundSpend, reserveSpend, settleSpend,
   type OperationRecord,
 } from "./spend-ledger";
-import { alignRewrite, countWords, planSections, type SectionLimits } from "./document-structure";
+import { alignRewrite, countWords, DEFAULT_SECTION_LIMITS, MAX_SECTION_WORDS, planSections, type SectionLimits } from "./document-structure";
 
 const SECTION_TIMEOUT_MS = 120_000; // Titan retries flagged drafts internally
 const SECTION_CONCURRENCY = 3;      // keeps multi-section documents inside the proxy timeout
@@ -81,7 +81,9 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
     return { kind: "CONSENT_REQUIRED", notice: "Explicit consent is required before the document is sent to Ryne." };
   }
   const mode: RewriteMode = opts.mode === "titan" ? "titan" : "balanced";
-  const plan = planSections(opts.content, opts.limits);
+  // ~400-word narrative blocks keep each Ryne call inside one coherent
+  // passage; paragraph boundaries and the hard provider caps still apply.
+  const plan = planSections(opts.content, opts.limits ?? { ...DEFAULT_SECTION_LIMITS, targetUnits: MAX_SECTION_WORDS });
   if (!plan.ok) return { kind: "TOO_LONG", notice: plan.reason };
 
   // Concurrent retries of the same submission share one run (and one charge).

@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "crypto";
 import {
-  alignRewrite, countSentences, countWords, isHeading, missingDetails, planSections, wordDiff,
+  alignRewrite, countSentences, countWords, isHeading, MAX_SECTION_WORDS, missingDetails, planSections, wordDiff,
 } from "../src/lib/writing-review/document-structure";
 import { aggregateFindings, applySpanEdits, beastModeBadge, detectorVerdict, isReportOutdated, latestVersionScore, mostlyFlagged, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
 import { runRewrite } from "../src/lib/writing-review/rewrite";
@@ -71,6 +71,39 @@ async function main() {
 
   await check("plan: a single oversized paragraph is refused, not truncated", () => {
     const plan = planSections("word ".repeat(400) + ".", { maxUnits: 100, maxChars: 100_000 });
+    assert.equal(plan.ok, false);
+  });
+
+  const BLOCK_LIMITS = { maxUnits: 6000, maxChars: 30_000, targetUnits: MAX_SECTION_WORDS };
+  const paraWords = (tag: string, n: number) => `${tag} ` + "word ".repeat(n - 1).trim() + ".";
+  const SOP990 = ["STATEMENT OF PURPOSE", paraWords("P1", 330), paraWords("P2", 330), paraWords("P3", 330)].join("\n\n");
+
+  await check("plan: ~990-word SOP splits into 3 paragraph-aligned narrative blocks", () => {
+    const plan = planSections(SOP990, BLOCK_LIMITS);
+    assert.ok(plan.ok);
+    if (!plan.ok) return;
+    assert.deepEqual(plan.sections.map(s => s.kind), ["HEADING", "BODY", "BODY", "BODY"]);
+    for (const s of plan.sections.filter(s => s.kind === "BODY")) {
+      assert.ok(s.words <= MAX_SECTION_WORDS, `section has ${s.words} words`);
+      assert.equal(s.paragraphs.length, 1); // 330-word paragraphs never share a block (330+330 > 400)
+    }
+    assert.equal(plan.sections.flatMap(s => s.paragraphs).join("\n\n"), SOP990); // nothing dropped/reordered
+    assert.equal(plan.bodyWords, 990);
+  });
+
+  await check("plan: a >400-word paragraph goes out whole as its own section, never split", () => {
+    const big = paraWords("BIG", 450);
+    const small = paraWords("SMALL", 100);
+    const plan = planSections([big, small].join("\n\n"), BLOCK_LIMITS);
+    assert.ok(plan.ok);
+    if (!plan.ok) return;
+    assert.equal(plan.sections.length, 2);
+    assert.deepEqual(plan.sections[0].paragraphs, [big]);
+    assert.equal(plan.sections[0].words, 450);
+  });
+
+  await check("plan: paragraph over the hard provider cap is still refused", () => {
+    const plan = planSections("word ".repeat(7000) + ".", BLOCK_LIMITS);
     assert.equal(plan.ok, false);
   });
 
@@ -309,6 +342,33 @@ async function main() {
     // sections — the whole document, never just one section.
     const sentWords = sent.reduce((n, b) => n + countWords(b.text), 0);
     assert.equal(out.result.billableWords, sentWords);
+  });
+
+  await check("990-word SOP → 3 Ryne calls, billed word total unchanged, heading untouched", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    sent.length = 0;
+    const opId = randomUUID();
+    const out = await runDocumentHumanize(base({ operationId: opId, content: SOP990 }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(sent.length, 3); // three narrative blocks, one call each
+    assert.ok(sent.every(b => countWords(b.text) <= MAX_SECTION_WORDS));
+    assert.ok(!sent.some(b => b.text.includes("STATEMENT OF PURPOSE"))); // heading never sent
+    assert.ok(out.result.content.startsWith("STATEMENT OF PURPOSE\n\n"));
+    assert.equal(out.result.sections.length, 4);
+    // Splitting bills the same total words as one big call would.
+    assert.equal(out.result.billableWords, 990);
+    const evs = await getOperationEvents(opId);
+    assert.equal(evs.length, 1);
+    assert.equal(evs[0].unitQuantity, 990);
+  });
+
+  await check("short SOP (≤400 words) → exactly 1 Ryne call", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    sent.length = 0;
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: SOP }));
+    assert.equal(out.kind, "OK");
+    assert.equal(sent.length, 1);
   });
 
   await check("paragraph merge by provider → flagged structure change, never silent", async () => {
