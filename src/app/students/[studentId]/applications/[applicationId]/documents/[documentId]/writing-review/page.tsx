@@ -219,7 +219,8 @@ export default function WritingStudioPage() {
           </div>
           <div hidden={studio !== "report"}>
             <DetectionReportPanel version={version} config={config} apiUrl={apiUrl} documentId={documentId}
-              hasUnsavedRewrite={dirty} demoRun={demoRun} />
+              hasUnsavedRewrite={dirty} demoRun={demoRun}
+              onSave={onSave} onOpenHumanizer={() => setStudio("humanizer")} onDirtyChange={onDirtyChange} />
           </div>
         </>
       )}
