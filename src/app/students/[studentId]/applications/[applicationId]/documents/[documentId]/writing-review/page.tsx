@@ -33,6 +33,7 @@ export default function WritingStudioPage() {
   const demo = searchParams.get("demo") === "1";
   const docHref = `/students/${studentId}/applications/${applicationId}/documents/${documentId}`;
   const apiUrl = `/api/application/writing-review?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`;
+  const pdfUrl = `/api/application/writing-review/report-pdf?documentId=${documentId}&applicationId=${applicationId}&studentId=${studentId}`;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -218,7 +219,7 @@ export default function WritingStudioPage() {
             />
           </div>
           <div hidden={studio !== "report"}>
-            <DetectionReportPanel version={version} config={config} apiUrl={apiUrl} documentId={documentId}
+            <DetectionReportPanel version={version} config={config} apiUrl={apiUrl} pdfUrl={pdfUrl} documentId={documentId}
               hasUnsavedRewrite={dirty} demoRun={demoRun}
               onSave={onSave} onOpenHumanizer={() => setStudio("humanizer")} onDirtyChange={onDirtyChange} />
           </div>

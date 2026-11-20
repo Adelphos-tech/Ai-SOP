@@ -10,7 +10,7 @@
 // ============================================================
 
 import { useEffect, useMemo, useState } from "react";
-import { PrimaryButton } from "@/components/ui";
+import { PrimaryButton, SecondaryButton } from "@/components/ui";
 import type { DetectionResult, DetectorId, DetectorScore } from "@/lib/writing-review/types";
 import { listDetectorDescriptors } from "@/lib/writing-review/detectors";
 import {
@@ -60,10 +60,12 @@ function DetectorResultCard({ s }: { s: DetectorScore }) {
   );
 }
 
-export default function DetectionReportPanel({ version, config, apiUrl, documentId, hasUnsavedRewrite, demoRun, onSave, onOpenHumanizer, onDirtyChange }: {
+export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, documentId, hasUnsavedRewrite, demoRun, onSave, onOpenHumanizer, onDirtyChange }: {
   version: StudioVersion;
   config: DetectionConfig | null;
   apiUrl: string;
+  /** report-pdf endpoint with student/application/document ids in the query string. */
+  pdfUrl: string;
   documentId: string;
   hasUnsavedRewrite: boolean;
   demoRun?: ReportRun | null;
@@ -80,6 +82,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, document
   const [activeId, setActiveId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState("");
+  const [downloading, setDownloading] = useState(false);
   const [view, setView] = useState<"list" | "doc">("list");
   const [expanded, setExpanded] = useState<string | null>(null);
   // Brick 2 — sentence fix flow. Staged replacements are keyed by
@@ -122,6 +125,37 @@ export default function DetectionReportPanel({ version, config, apiUrl, document
 
   // Staged fixes are unsaved work — reuse the page's leave-guard.
   useEffect(() => { onDirtyChange?.(fixes.size > 0); }, [fixes.size]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Downloads the active (possibly historical) run as a branded PDF.
+  // The server re-fetches the checked version's text — the client only
+  // says which run, never where highlights land.
+  async function downloadPdf() {
+    if (!active || downloading) return;
+    setDownloading(true);
+    try {
+      const res = await fetch(pdfUrl, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run: active }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setNotice(data.error || `PDF download failed (HTTP ${res.status}).`);
+        return;
+      }
+      const blob = await res.blob();
+      const dispo = res.headers.get("Content-Disposition") ?? "";
+      const m = /filename="([^"]+)"/.exec(dispo);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = m?.[1] || "AI-Detection-Report.pdf";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e: any) {
+      setNotice(e?.message || "PDF download failed");
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   // ---------- sentence fix flow ----------
 
@@ -316,9 +350,18 @@ export default function DetectionReportPanel({ version, config, apiUrl, document
               Checks saved version v{version.versionNumber}. Runs only when you click Run Report — up to {max} detectors per run.
             </p>
           </div>
-          <PrimaryButton onClick={runReport} disabled={running || !selected.length || !config?.configured}>
-            {running ? "Running report…" : "Run Report"}
-          </PrimaryButton>
+          <div className="flex items-center gap-2">
+            {active && (
+              <span title={active.id === "demo" ? "Unavailable for demo reports" : "Download a branded PDF of this report"}>
+                <SecondaryButton onClick={downloadPdf} disabled={active.id === "demo" || downloading}>
+                  {downloading ? "Downloading…" : "Download PDF"}
+                </SecondaryButton>
+              </span>
+            )}
+            <PrimaryButton onClick={runReport} disabled={running || !selected.length || !config?.configured}>
+              {running ? "Running report…" : "Run Report"}
+            </PrimaryButton>
+          </div>
         </div>
         <fieldset className="mt-4">
           <legend className="sr-only">Detectors</legend>
