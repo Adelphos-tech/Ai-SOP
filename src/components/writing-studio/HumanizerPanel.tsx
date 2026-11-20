@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PrimaryButton, SecondaryButton } from "@/components/ui";
 import {
-  countSentences, countWords, missingDetails, planSections, splitParagraphs, wordDiff, type DiffToken,
+  countSentences, countWords, DEFAULT_SECTION_LIMITS, MAX_SECTION_WORDS, missingDetails, planSections, splitParagraphs, wordDiff, type DiffToken,
 } from "@/lib/writing-review/document-structure";
 import type { DocumentHumanizeResult } from "@/lib/writing-review/document-humanizer";
 import { beastModeBadge, latestVersionScore, type ReportRun } from "@/lib/writing-review/report";
@@ -106,7 +106,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
     return () => clearInterval(iv);
   }, [running]);
 
-  const plan = useMemo(() => planSections(version.content), [version.content]);
+  const plan = useMemo(() => planSections(version.content, { ...DEFAULT_SECTION_LIMITS, targetUnits: MAX_SECTION_WORDS }), [version.content]);
   const billableWords = plan.ok ? plan.bodyWords : countWords(version.content);
   const per1k = mode === "titan" ? pricing.titanPer1k : pricing.balancedPer1k;
   const estimate = (billableWords / 1000) * per1k;
