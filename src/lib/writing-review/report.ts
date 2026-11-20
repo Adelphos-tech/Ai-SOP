@@ -122,3 +122,47 @@ export function beastModeBadge(sections: { aiScore?: number }[]): number | undef
   const nums = sections.map(s => s.aiScore).filter((n): n is number => typeof n === "number");
   return nums.length ? Math.max(...nums) : undefined;
 }
+
+// ---------- sentence-fix staging (Brick 2) ----------
+
+export interface SpanEdit { start: number; end: number; replacement: string }
+
+/** Apply staged sentence replacements to the base document by their
+ *  resolved {start,end} offsets only — never by re-searching text, so
+ *  duplicate sentences can never hit the wrong instance. Edits are
+ *  applied in descending start order; overlapping or out-of-bounds
+ *  spans are rejected before any change is made. */
+export function applySpanEdits(
+  base: string,
+  edits: SpanEdit[],
+): { ok: true; content: string } | { ok: false; error: string } {
+  for (const e of edits) {
+    if (!Number.isInteger(e.start) || !Number.isInteger(e.end) ||
+        e.start < 0 || e.end < e.start || e.end > base.length) {
+      return { ok: false, error: "Staged fix has an invalid span — reload and stage it again." };
+    }
+  }
+  const asc = [...edits].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < asc.length; i++) {
+    if (asc[i].start < asc[i - 1].end) {
+      return { ok: false, error: "Staged fixes overlap — discard one and try again." };
+    }
+  }
+  let out = base;
+  for (const e of [...edits].sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, e.start) + e.replacement + out.slice(e.end);
+  }
+  return { ok: true, content: out };
+}
+
+/** A stored run no longer describes the displayed version — every
+ *  offset and score in it is stale, so fix/save actions must not run. */
+export function isReportOutdated(run: { contentHash: string } | null | undefined, contentHash: string): boolean {
+  return !!run && run.contentHash !== contentHash;
+}
+
+/** ≥80% of unique sentences flagged — a full-document humanize is a
+ *  better next action than fixing sentences one by one. */
+export function mostlyFlagged(agg: ReportAggregate | null | undefined): boolean {
+  return !!agg && agg.totalSentences > 0 && agg.flaggedSentences / agg.totalSentences >= 0.8;
+}

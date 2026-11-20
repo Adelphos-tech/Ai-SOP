@@ -10,7 +10,8 @@ import { randomUUID } from "crypto";
 import {
   alignRewrite, countSentences, countWords, isHeading, missingDetails, planSections, wordDiff,
 } from "../src/lib/writing-review/document-structure";
-import { aggregateFindings, beastModeBadge, detectorVerdict, latestVersionScore, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
+import { aggregateFindings, applySpanEdits, beastModeBadge, detectorVerdict, isReportOutdated, latestVersionScore, mostlyFlagged, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
+import { runRewrite } from "../src/lib/writing-review/rewrite";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
 import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writing-review/detectors";
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
@@ -351,6 +352,89 @@ async function main() {
     assert.equal(out.kind, "OVER_BUDGET");
     assert.equal(sent.length, 0);
     delete process.env.RYNE_DAILY_BUDGET_USD;
+  });
+
+  // ---------- sentence fix staging (Brick 2) ----------
+  await check("applySpanEdits: multiple edits land on exact offsets regardless of order", () => {
+    const base = "Alpha beta. Second sentence here. Third one ends.";
+    const sents = segmentDocumentSentences(base); // real spans, as the UI gets them
+    assert.equal(sents.length, 3);
+    // staged map order is click order (3rd, then 1st, then 2nd) —
+    // offsets must still resolve to the right sentences.
+    const out = applySpanEdits(base, [
+      { start: sents[2].start, end: sents[2].end, replacement: "T3" },
+      { start: sents[0].start, end: sents[0].end, replacement: "A1" },
+      { start: sents[1].start, end: sents[1].end, replacement: "S2" },
+    ]);
+    assert.ok(out.ok);
+    if (out.ok) assert.equal(out.content, "A1 S2 T3");
+  });
+
+  await check("applySpanEdits: duplicate sentences are replaced strictly by span, not by text", () => {
+    const base = "Repeat me. Middle part. Repeat me.";
+    // Second "Repeat me." starts at 24 — only that instance changes.
+    const out = applySpanEdits(base, [{ start: 24, end: 34, replacement: "Changed." }]);
+    assert.ok(out.ok);
+    if (out.ok) assert.equal(out.content, "Repeat me. Middle part. Changed.");
+  });
+
+  await check("applySpanEdits: adjacent spans (end == next start) are allowed", () => {
+    const base = "AAA BBB CCC";
+    const out = applySpanEdits(base, [
+      { start: 0, end: 3, replacement: "X" },
+      { start: 4, end: 7, replacement: "Y" },
+    ]);
+    assert.ok(out.ok);
+    if (out.ok) assert.equal(out.content, "X BBB CCC".replace("BBB", "Y").replace(" CCC", " CCC") && "X Y CCC");
+    if (out.ok) assert.equal(out.content, "X Y CCC");
+  });
+
+  await check("applySpanEdits: overlapping or out-of-bounds spans are rejected, base untouched", () => {
+    const base = "Some sentence text.";
+    assert.equal(applySpanEdits(base, [
+      { start: 0, end: 8, replacement: "a" }, { start: 5, end: 10, replacement: "b" },
+    ]).ok, false);
+    assert.equal(applySpanEdits(base, [{ start: -1, end: 4, replacement: "x" }]).ok, false);
+    assert.equal(applySpanEdits(base, [{ start: 0, end: 100, replacement: "x" }]).ok, false);
+  });
+
+  await check("mostlyFlagged: ≥80% threshold only", () => {
+    const agg = (f: number, t: number) => aggregateFindings("", [], []).constructor === Object
+      ? ({ flaggedSentences: f, totalSentences: t, findings: [], documentLevelOnly: [] } as any) : null;
+    assert.equal(mostlyFlagged(agg(4, 5)), true);   // exactly 0.8
+    assert.equal(mostlyFlagged(agg(35, 36)), true); // ~0.97
+    assert.equal(mostlyFlagged(agg(3, 5)), false);
+    assert.equal(mostlyFlagged(agg(0, 0)), false);  // no division by zero
+    assert.equal(mostlyFlagged(null), false);
+  });
+
+  await check("isReportOutdated: hash mismatch marks run stale → fix/save disabled", () => {
+    assert.equal(isReportOutdated({ contentHash: "abc" }, "abc"), false);
+    assert.equal(isReportOutdated({ contentHash: "abc" }, "xyz"), true);
+    assert.equal(isReportOutdated(null, "xyz"), false);
+  });
+
+  await check("single-sentence rewrite: OK returns suggestion; provider error is honest ERROR", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    const sentence = "I want to move beyond my current role.";
+    const okOut = await runRewrite({
+      text: sentence, mode: "balanced", confirmPaid: true, operationId: randomUUID(),
+      actorId: "cons-1", ids: { studentId: "stu", applicationId: "app", documentId: "doc" },
+      fetcher: (async () => new Response(JSON.stringify({ content: "I aspire to grow beyond my present position.", aiScore: 6.2 }), { status: 200 })) as any,
+    });
+    assert.equal(okOut.kind, "OK");
+    if (okOut.kind === "OK") {
+      assert.equal(okOut.suggestion.content, "I aspire to grow beyond my present position.");
+      assert.equal(okOut.suggestion.aiScore, 6.2);
+      assert.equal(typeof okOut.suggestion.estimatedCostUsd, "number");
+    }
+    // Same operationId is deduped — a Retry must pass a fresh one.
+    const dup = await runRewrite({
+      text: sentence, mode: "balanced", confirmPaid: true, operationId: randomUUID(),
+      actorId: "cons-1", fetcher: (async () => new Response("{}", { status: 500 })) as any,
+    });
+    assert.equal(dup.kind, "ERROR");
+    if (dup.kind === "ERROR") assert.ok(dup.message.includes("500"));
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);
