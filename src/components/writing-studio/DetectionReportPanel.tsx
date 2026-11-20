@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PrimaryButton, SecondaryButton } from "@/components/ui";
 import type { DetectionResult, DetectorId, DetectorScore } from "@/lib/writing-review/types";
-import { listDetectorDescriptors } from "@/lib/writing-review/detectors";
+import { listDetectorDescriptors, getDetectorLogoPath } from "@/lib/writing-review/detectors";
 import {
   aggregateFindings, applySpanEdits, detectorVerdict, isReportOutdated, mostlyFlagged,
   type ReportRun, type SentenceFinding, type SpanEdit,
@@ -35,11 +35,24 @@ const MEANING: Record<string, string> = {
 
 export interface DetectionConfig { runnable: string[]; maxDetectorsPerRun: number; configured: boolean; reservationCeilingUsd?: number | null; rewritePricing?: { balancedPer1k: number; titanPer1k: number } }
 
+/** Bundled brand logo — decorative beside the visible detector name;
+ *  hides itself if the asset ever goes missing. */
+function DetectorLogo({ id, size }: { id: DetectorId; size: number }) {
+  return (
+    <img src={getDetectorLogoPath(id)} alt="" width={size} height={size}
+      className="object-contain shrink-0" style={{ width: size, height: size }}
+      onError={e => { e.currentTarget.style.display = "none"; }} />
+  );
+}
+
 function DetectorResultCard({ s }: { s: DetectorScore }) {
   const v = detectorVerdict(s);
   return (
     <div className="border border-dvivid-border rounded-card p-3 flex flex-col items-center gap-1.5 min-w-0 bg-white">
-      <span className="text-xs font-semibold text-dvivid-text-primary self-start truncate">{DETECTOR_NAMES[s.detector]}</span>
+      <span className="self-start flex items-center gap-1.5 min-w-0">
+        <DetectorLogo id={s.detector} size={18} />
+        <span className="text-xs font-semibold text-dvivid-text-primary truncate">{DETECTOR_NAMES[s.detector]}</span>
+      </span>
       <Gauge percent={s.status === "SCORED" ? s.scorePercent : undefined} />
       {s.status === "SCORED" ? (
         <span className={`text-[11px] font-semibold ${v ? VERDICT[v].cls : "text-dvivid-text-secondary"}`}>
@@ -145,7 +158,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
     try {
       const res = await fetch(pdfUrl, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run: active }),
+        body: JSON.stringify({ run: active, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -449,6 +462,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                     on ? "border-dvivid-primary bg-dvivid-primary-light text-dvivid-primary"
                       : blocked ? "border-dvivid-border-light text-dvivid-text-muted" : "border-dvivid-border text-dvivid-text-primary cursor-pointer hover:border-dvivid-primary"}`}>
                   <input type="checkbox" className="accent-dvivid-primary" checked={on} disabled={blocked || running} onChange={() => toggle(d.detector)} />
+                  <DetectorLogo id={d.detector} size={16} />
                   {DETECTOR_NAMES[d.detector]}
                 </label>
               );

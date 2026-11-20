@@ -1,43 +1,45 @@
 // ============================================================
 // AI Detection Report PDF — server-side pdf-lib generator.
-// Header/branding, score table, honest disclaimer, and the full
-// checked-version text with soft-red sentence highlights.
-// Pure helpers (sanitize/wrap/span-mapping) are exported for tests.
+// Student-facing percentage report: D-Vivid header, metadata card,
+// per-detector score cards with original brand logos, and the full
+// clean document text. No caution box, no sentence findings, no
+// highlights — detectors are honest signals for the student to see.
 // ============================================================
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import { aggregateFindings, detectorVerdict } from "./report";
-import type { DetectorScore, FlaggedPassage } from "./types";
-import { listDetectorDescriptors } from "./detectors";
+import { detectorVerdict } from "./report";
+import { DETECTOR_DISPLAY_NAME, getDetectorLogoFile } from "./detectors";
+import type { DetectorId, DetectorScore } from "./types";
 
 const PAGE_W = 612, PAGE_H = 792, MARGIN = 50;
-const BODY_SIZE = 11, BODY_LEAD = 15;
-const META_SIZE = 9.5, META_LEAD = 13;
-const INK = rgb(0.12, 0.12, 0.14);
-const MUTED = rgb(0.42, 0.44, 0.48);
-const ACCENT = rgb(0.13, 0.35, 0.66);
-const FLAG_BG = rgb(0.996, 0.91, 0.91); // soft red — matches UI bg-red-50
-const WARN_BG = rgb(1, 0.96, 0.85);
-const WARN_INK = rgb(0.55, 0.3, 0.02);
-const RULE = rgb(0.85, 0.86, 0.89);
+const NAVY = rgb(0.09, 0.15, 0.27);
+const SLATE = rgb(0.4, 0.45, 0.55);
+const BORDER = rgb(0.886, 0.91, 0.941);   // #E2E8F0
+const CARD_BG = rgb(0.973, 0.98, 0.988);  // #F8FAFC
+const TRACK = rgb(0.898, 0.906, 0.922);   // #E5E7EB
+const GREEN = rgb(0.086, 0.639, 0.29);    // #16A34A
+const AMBER = rgb(0.851, 0.467, 0.024);   // #D97706
+const RED = rgb(0.863, 0.149, 0.149);     // #DC2626
 
-const VERDICT_LABEL: Record<string, string> = {
-  AI: "AI-written", MIXED: "Mixed", HUMAN: "Human-like",
-};
-const MEANING_LABEL: Record<string, string> = {
-  AI_PROBABILITY_PERCENT: "AI probability",
-  RAW_MODEL_SIGNAL_PERCENT: "model signal (not a probability)",
-  CLASSIFICATION_ONLY: "classification",
-};
+export function detectorDisplayName(id: string): string {
+  return DETECTOR_DISPLAY_NAME[id as DetectorId] ?? id;
+}
+
+const SMALL_WORDS = new Set(["of", "the", "and", "for", "in", "on", "at", "to", "a", "an"]);
+export function titleCase(s: string): string {
+  return s.trim().split(/\s+/).map((w, i) =>
+    i > 0 && SMALL_WORDS.has(w.toLowerCase()) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)
+  ).join(" ");
+}
 
 // ---------- pure helpers ----------
 
 /** Map every non-WinAnsi character to a single ASCII-safe replacement
- *  — length is preserved 1:1 so flagged span offsets stay exact.
+ *  — output length equals input length so wrapped offsets stay exact.
  *  Smart punctuation gets a meaningful substitute; everything else
- *  becomes a space (zero-width) or "?" (symbolic). */
+ *  becomes a space or "?". */
 export function sanitizeForWinAnsi(text: string): string {
   const map: Record<string, string> = {
     "\u2192": ">", "\u2190": "<", "\u2194": "-", "\u2212": "-", "\u2013": "-", "\u2014": "-",
@@ -49,9 +51,8 @@ export function sanitizeForWinAnsi(text: string): string {
     "\u200B": " ", "\u200C": " ", "\u200D": " ", "\u00AD": " ", "\uFEFF": " ",
   };
   let out = "";
-  // Iterate code UNITS, not code points — a lone surrogate must map to
-  // its own "?" so an emoji can't collapse two units into one char and
-  // shift every span after it.
+  // Iterate code UNITS, not code points — a lone surrogate maps to its
+  // own "?" so an emoji can't collapse two units into one character.
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (map[ch] !== undefined) { out += map[ch]; continue; }
@@ -67,15 +68,13 @@ export function sanitizeForWinAnsi(text: string): string {
 export interface WrappedLine {
   /** Text exactly as drawn on the line (no trailing space). */
   text: string;
-  /** Offsets into the wrapped paragraph — first/last char of the
-   *  line's content, so flagged spans intersect precisely. */
+  /** Offsets into the wrapped paragraph. */
   start: number;
   end: number;
 }
 
 /** Word-wrap one paragraph while tracking character offsets. A word
- *  longer than maxWidth is broken mid-word (char-level fallback) so
- *  nothing can overflow the page margin. */
+ *  longer than maxWidth is broken mid-word so nothing overflows. */
 export function wrapWithOffsets(
   text: string,
   maxWidth: number,
@@ -98,7 +97,6 @@ export function wrapWithOffsets(
       continue;
     }
     flush();
-    // word itself may be longer than the line — break it character-wise
     let seg = "", segStart = ws;
     for (let i = 0; i < word.length; i++) {
       if (measure(seg + word[i]) > maxWidth && seg) {
@@ -113,39 +111,23 @@ export function wrapWithOffsets(
   return lines;
 }
 
-/** Map flagged {start,end} spans to per-line highlight segments.
- *  A span crossing line breaks yields one segment per covered line;
- *  spans that only touch whitespace between lines highlight nothing. */
-export function highlightSegments(
-  lines: WrappedLine[],
-  spans: { start: number; end: number }[],
-): Map<number, { start: number; end: number }[]> {
-  const out = new Map<number, { start: number; end: number }[]>();
-  lines.forEach((ln, i) => {
-    for (const s of spans) {
-      const a = Math.max(s.start, ln.start), b = Math.min(s.end, ln.end);
-      if (a < b) (out.get(i) ?? out.set(i, []).get(i)!).push({ start: a, end: b });
-    }
-  });
-  return out;
-}
-
 // ---------- input ----------
 
 export interface DetectionReportPdfInput {
   studentName: string;
-  programLine: string;    // e.g. "MS Mechanical Engineering — Stanford University"
-  documentTitle: string;
+  programLine: string;    // e.g. "MS Computer Science — Stanford University"
+  documentTitle: string;  // rendered Title-Cased in the card, uppercase in the body
   checkedVersionNumber: number;
   currentVersionNumber: number;
   checkedAt: string;      // ISO timestamp of the run
   wordCount: number;
+  /** checkedVersionId !== currentVersionId → subtle "Checked vN" note. */
   outdated: boolean;
   scores: DetectorScore[];
-  /** Authoritative checked-version text (server-fetched). */
+  /** Authoritative checked-version text (server-fetched), clean. */
   content: string;
-  /** Flagged passages from the run — re-derived server-side. */
-  passages: FlaggedPassage[];
+  /** Validated IANA zone for the header date; defaults to Asia/Kolkata. */
+  timeZone?: string;
 }
 
 export interface ReportPdfOutput { buffer: Buffer; pageCount: number }
@@ -158,147 +140,149 @@ export async function generateDetectionReportPdf(
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const ital = await pdf.embedFont(StandardFonts.HelveticaOblique);
 
-  // D-Vivid logo — graceful text fallback if the asset is missing.
-  let logo: Awaited<ReturnType<typeof pdf.embedPng>> | null = null;
-  try { logo = await pdf.embedPng(await readFile(join(process.cwd(), "public", "dvivid_logo.png"))); }
-  catch { logo = null; }
+  // D-Vivid + detector brand logos — graceful text fallback when a
+  // PNG is missing (e.g. stripped test environments).
+  const pub = (...p: string[]) => join(process.cwd(), "public", ...p);
+  const embed = async (p: string) => { try { return await pdf.embedPng(await readFile(p)); } catch { return null; } };
+  const dvLogo = await embed(pub("dvivid_logo.png"));
+  const logos = new Map<string, NonNullable<Awaited<ReturnType<typeof embed>>>>();
+  for (const s of input.scores) {
+    if (!logos.has(s.detector)) logos.set(s.detector, await embed(pub("detector-logos", getDetectorLogoFile(s.detector))) as any);
+  }
+
+  const tz = input.timeZone ?? "Asia/Kolkata";
+  let dateStr = "";
+  try {
+    dateStr = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: tz })
+      .format(new Date(input.checkedAt));
+  } catch { dateStr = new Date(input.checkedAt).toISOString().slice(0, 10); }
 
   let page = pdf.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - MARGIN;
-  const measure = (s: string, f = font, sz = BODY_SIZE) => f.widthOfTextAtSize(s, sz);
   const maxW = PAGE_W - 2 * MARGIN;
-
   const newPage = () => { page = pdf.addPage([PAGE_W, PAGE_H]); y = PAGE_H - MARGIN; };
-  const need = (h: number) => { if (y - h < MARGIN + 18) newPage(); };
-  const text = (s: string, opts: { f?: any; size?: number; x?: number; color?: any; lead?: number } = {}) => {
-    page.drawText(sanitizeForWinAnsi(s), {
-      x: opts.x ?? MARGIN, y, size: opts.size ?? META_SIZE,
-      font: opts.f ?? font, color: opts.color ?? INK,
-    });
-    y -= opts.lead ?? META_LEAD;
+  const need = (h: number) => { if (y - h < MARGIN + 20) newPage(); };
+  const right = (s: string, x: number, yy: number, f = font, size = 9.5, color = SLATE) =>
+    page.drawText(sanitizeForWinAnsi(s), { x: x - f.widthOfTextAtSize(s, size), y: yy, size, font: f, color });
+  const hrule = (yy: number, w = 0.8, color = BORDER) =>
+    page.drawRectangle({ x: MARGIN, y: yy, width: maxW, height: w, color });
+  // Rounded rect from rects + corner circles (pdf-lib drawSvgPath does
+  // not support arc commands — this is the reliable primitive path).
+  const roundedFill = (x: number, yy: number, w: number, h: number, r: number, color: any) => {
+    page.drawRectangle({ x: x + r, y: yy, width: w - 2 * r, height: h, color });
+    page.drawRectangle({ x, y: yy + r, width: w, height: h - 2 * r, color });
+    for (const [cx, cy] of [[x + r, yy + r], [x + w - r, yy + r], [x + r, yy + h - r], [x + w - r, yy + h - r]])
+      page.drawCircle({ x: cx, y: cy, size: r, color });
+  };
+  const roundedBox = (x: number, yy: number, w: number, h: number, r: number, fill: any, border: any, bw: number) => {
+    roundedFill(x, yy, w, h, r, border);
+    roundedFill(x + bw, yy + bw, w - 2 * bw, h - 2 * bw, Math.max(0.5, r - bw), fill);
   };
 
-  // ---- header ----
-  const headerH = 26;
-  if (logo) {
-    const sc = headerH / logo.height;
-    page.drawImage(logo, { x: MARGIN, y: y - 4, width: logo.width * sc, height: headerH });
+  // ---- header: logo + title left, date/words right ----
+  const logoH = 22;
+  if (dvLogo) {
+    const sc = logoH / dvLogo.height;
+    page.drawImage(dvLogo, { x: MARGIN, y: y - 18, width: dvLogo.width * sc, height: logoH });
   } else {
-    text("D-VIVID CONSULTANT", { f: bold, size: 11, color: ACCENT, lead: 16 });
+    page.drawText("D-VIVID", { x: MARGIN, y: y - 8, size: 13, font: bold, color: NAVY });
   }
-  page.drawText("AI Detection Report", { x: MARGIN + (logo ? 110 : 0), y: y - (logo ? 4 : 0), size: 15, font: bold, color: INK });
-  y -= headerH + 12;
-  page.drawRectangle({ x: MARGIN, y, width: maxW, height: 0.8, color: RULE });
-  y -= 10;
-
-  // ---- metadata ----
-  const meta: [string, string][] = [
-    ["Student", input.studentName],
-    ["Program", input.programLine],
-    ["Document", input.documentTitle],
-    ["Checked version", `v${input.checkedVersionNumber} · ${input.wordCount.toLocaleString()} words`],
-    ["Checked at", new Date(input.checkedAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })],
-  ];
-  for (const [k, v] of meta) {
-    need(META_LEAD);
-    page.drawText(`${k}:`, { x: MARGIN, y, size: META_SIZE, font: bold, color: MUTED });
-    text(v, { x: MARGIN + 95 });
-  }
-  y -= 6;
-
-  // ---- outdated banner ----
+  const titleX = MARGIN + (dvLogo ? (dvLogo.width * (logoH / dvLogo.height)) + 12 : 58);
+  page.drawText("AI Detection Report", { x: titleX, y: y - 8, size: 15, font: bold, color: NAVY });
+  right(dateStr, PAGE_W - MARGIN, y);
+  const meta2 = `${input.wordCount.toLocaleString()} words \u00B7 v${input.checkedVersionNumber}`;
+  right(meta2, PAGE_W - MARGIN, y - 14);
   if (input.outdated) {
-    need(34);
-    page.drawRectangle({ x: MARGIN, y: y - 22, width: maxW, height: 28, color: WARN_BG });
-    page.drawText(
-      `OUTDATED REPORT — checked saved version v${input.checkedVersionNumber}; current document is v${input.currentVersionNumber}.`,
-      { x: MARGIN + 8, y: y - 12, size: META_SIZE, font: bold, color: WARN_INK });
-    y -= 38;
+    const pill = `Checked v${input.checkedVersionNumber} \u00B7 current v${input.currentVersionNumber}`;
+    const pw = font.widthOfTextAtSize(pill, 8) + 12;
+    roundedBox(PAGE_W - MARGIN - pw, y - 32, pw, 14, 7, CARD_BG, BORDER, 0.6);
+    page.drawText(pill, { x: PAGE_W - MARGIN - pw + 6, y: y - 28, size: 8, font, color: SLATE });
   }
+  y -= 34;
+  hrule(y); y -= 14;
 
-  // ---- summary ----
-  const agg = aggregateFindings(input.content, input.passages, input.scores);
-  const verdicts = input.scores.map(detectorVerdict).filter(Boolean);
-  need(META_LEAD * 2);
-  text(
-    `${verdicts.filter(v => v === "AI").length} of ${verdicts.length} detector${verdicts.length === 1 ? "" : "s"} classify it as AI-written  ·  ${agg.flaggedSentences} of ${agg.totalSentences} unique sentences flagged`,
-    { f: bold, size: 10.5, lead: 18 });
+  // ---- metadata card ----
+  const label = (s: string, x: number, yy: number) =>
+    page.drawText(s.toUpperCase(), { x, y: yy, size: 7.5, font, color: SLATE });
+  const value = (s: string, x: number, yy: number) =>
+    page.drawText(sanitizeForWinAnsi(s), { x, y: yy, size: 10.5, font: bold, color: NAVY });
+  const progLines = wrapWithOffsets(sanitizeForWinAnsi(input.programLine), maxW - 32, s => bold.widthOfTextAtSize(s, 10.5));
+  const cardH = 46 + (progLines.length - 1) * 12 + (progLines.length ? 26 : 0);
+  need(cardH + 8);
+  roundedBox(MARGIN, y - cardH, maxW, cardH, 6, CARD_BG, BORDER, 0.75);
+  const colR = MARGIN + maxW / 2 + 8;
+  label("Student", MARGIN + 14, y - 18);
+  label("Document", colR, y - 18);
+  value(input.studentName, MARGIN + 14, y - 33);
+  value(titleCase(input.documentTitle), colR, y - 33);
+  label("Program", MARGIN + 14, y - 52);
+  progLines.forEach((ln, i) => value(ln.text, MARGIN + 14, y - 67 - i * 12));
+  y -= cardH + 16;
 
-  // ---- detector table ----
-  const names = new Map(listDetectorDescriptors().map(d => [d.detector, d.name]));
-  need(META_LEAD);
-  text("Detectors", { f: bold, size: 10, lead: 12 });
-  for (const s of input.scores) {
-    need(META_LEAD + 2);
-    const v = detectorVerdict(s);
-    const scoreTxt = s.status === "SCORED" && typeof s.scorePercent === "number"
-      ? `${Math.round(s.scorePercent)}%`
-      : s.status === "ERROR" ? "Error" : s.status;
-    const label = s.status === "SCORED" ? (v ? VERDICT_LABEL[v] : s.classification || "Scored")
-      : s.status === "ERROR" ? "Provider not responding" : "Unavailable";
-    const note = [
-      s.scoreMeaning ? MEANING_LABEL[s.scoreMeaning] ?? s.scoreMeaning : "",
-      s.granularity === "DOCUMENT" ? "document-level score only" : "",
-      s.fallback ? `produced by ${s.fallback.to}` : "",
-    ].filter(Boolean).join(" · ");
-    page.drawText(sanitizeForWinAnsi(names.get(s.detector) ?? s.detector), { x: MARGIN, y, size: META_SIZE, font });
-    page.drawText(scoreTxt, { x: MARGIN + 130, y, size: META_SIZE, font: bold });
-    page.drawText(sanitizeForWinAnsi(label), { x: MARGIN + 165, y, size: META_SIZE, font, color: v === "AI" ? rgb(0.7, 0.15, 0.15) : INK });
-    if (note) page.drawText(sanitizeForWinAnsi(note), { x: MARGIN + 260, y, size: 8.5, font: ital, color: MUTED });
-    y -= META_LEAD;
-    page.drawRectangle({ x: MARGIN, y: y + 4, width: maxW, height: 0.4, color: RULE });
-  }
-  y -= 8;
-
-  // ---- disclaimer ----
-  const disclaimer =
-    "AI detectors are probabilistic signals, not proof. They regularly disagree with each other " +
-    "and can flag genuine human writing or miss paraphrased AI text. Use this report as a review aid — " +
-    "a human should verify flagged sentences before any decision is made.";
-  const dLines = wrapWithOffsets(sanitizeForWinAnsi(disclaimer), maxW - 16, s => ital.widthOfTextAtSize(s, 8.5));
-  need(dLines.length * 11 + 20);
-  const boxTop = y, boxH = dLines.length * 11 + 16;
-  page.drawRectangle({ x: MARGIN, y: boxTop - boxH + 8, width: maxW, height: boxH, color: rgb(0.97, 0.97, 0.98) });
-  y -= 10;
-  for (const ln of dLines) { page.drawText(ln.text, { x: MARGIN + 8, y, size: 8.5, font: ital, color: MUTED }); y -= 11; }
-  y -= 10;
-
-  // ---- legend ----
-  need(META_LEAD + 4);
-  page.drawRectangle({ x: MARGIN, y: y - 1, width: 12, height: 9, color: FLAG_BG, borderColor: rgb(0.9, 0.6, 0.6), borderWidth: 0.5 });
-  text(" Highlighted text = flagged by a sentence-level detector", { x: MARGIN + 18, size: 8.5, color: MUTED });
-  y -= 8;
-
-  // ---- document body with highlights ----
-  const spans = agg.findings.map(f => ({ start: f.start, end: f.end }));
-  const paragraphs = input.content.split(/\n/);
-  for (const para of paragraphs) {
-    if (!para.trim()) { y -= BODY_LEAD / 2; continue; }
-    const clean = sanitizeForWinAnsi(para);
-    const lines = wrapWithOffsets(clean, maxW, s => measure(s));
-    const segs = highlightSegments(lines, spans);
-    lines.forEach((ln, i) => {
-      need(BODY_LEAD + 2);
-      for (const seg of segs.get(i) ?? []) {
-        const x0 = MARGIN + measure(ln.text.slice(0, seg.start - ln.start));
-        const w = measure(ln.text.slice(seg.start - ln.start, seg.end - ln.start));
-        page.drawRectangle({ x: x0, y: y - 3, width: Math.max(w, 4), height: BODY_SIZE + 4, color: FLAG_BG });
+  // ---- score cards row(s) ----
+  const GUTTER = 12, CARD_H = 88;
+  const perRow = Math.min(3, Math.max(1, input.scores.length));
+  const cardW = (maxW - GUTTER * (perRow - 1)) / perRow;
+  for (let row = 0; row * perRow < input.scores.length; row++) {
+    need(CARD_H + 10);
+    input.scores.slice(row * perRow, row * perRow + perRow).forEach((s, i) => {
+      const x = MARGIN + i * (cardW + GUTTER), top = y;
+      roundedBox(x, top - CARD_H, cardW, CARD_H, 6, rgb(1, 1, 1), BORDER, 0.75);
+      const logo = logos.get(s.detector);
+      const name = detectorDisplayName(s.detector);
+      let nameX = x + 10;
+      if (logo) {
+        const lh = 15, lsc = lh / logo.height;
+        page.drawImage(logo, { x: x + 10, y: top - 22, width: logo.width * lsc, height: lh });
+        nameX += logo.width * lsc + 6;
       }
-      page.drawText(ln.text, { x: MARGIN, y, size: BODY_SIZE, font, color: INK });
-      y -= BODY_LEAD;
+      page.drawText(name, { x: nameX, y: top - 18, size: 10, font: bold, color: NAVY });
+      const verdict = detectorVerdict(s);
+      const vColor = verdict === "AI" ? RED : verdict === "MIXED" ? AMBER : GREEN;
+      const vLabel = s.status !== "SCORED" ? "Unavailable"
+        : verdict === "AI" ? "AI-written" : verdict === "MIXED" ? "Mixed" : verdict === "HUMAN" ? "Human-like" : "Scored";
+      if (s.status === "SCORED" && typeof s.scorePercent === "number") {
+        page.drawText(`${Math.round(s.scorePercent)}%`, { x: x + 10, y: top - 52, size: 24, font: bold, color: NAVY });
+      } else {
+        page.drawText("Unavailable", { x: x + 10, y: top - 48, size: 15, font: bold, color: SLATE });
+      }
+      const barY = top - 64, barW = cardW - 20;
+      roundedFill(x + 10, barY, barW, 5, 2.5, TRACK);
+      if (s.status === "SCORED" && typeof s.scorePercent === "number" && s.scorePercent > 0) {
+        const fw = Math.max(5, (Math.min(100, s.scorePercent) / 100) * barW);
+        roundedFill(x + 10, barY, fw, 5, 2.5, vColor);
+      }
+      page.drawText(vLabel, { x: x + 10, y: top - 79, size: 9, font: bold, color: s.status === "SCORED" ? vColor : SLATE });
+      right("AI score", x + cardW - 10, top - 79, font, 8, SLATE);
     });
-    y -= BODY_LEAD / 3;
+    y -= CARD_H + 14;
+  }
+
+  // ---- document body (clean, unhighlighted) ----
+  hrule(y); y -= 16;
+  need(30);
+  page.drawText(sanitizeForWinAnsi(input.documentTitle.toUpperCase()), { x: MARGIN, y, size: 12, font: bold, color: NAVY });
+  y -= 20;
+  const measure = (s: string) => font.widthOfTextAtSize(s, 10.5);
+  for (const para of input.content.split(/\n/)) {
+    if (!para.trim()) { y -= 8; continue; }
+    const lines = wrapWithOffsets(sanitizeForWinAnsi(para), maxW, measure);
+    for (const ln of lines) {
+      need(16);
+      page.drawText(ln.text, { x: MARGIN, y, size: 10.5, font, color: NAVY });
+      y -= 15;
+    }
+    y -= 6;
   }
 
   // ---- footers on every page ----
   const pages = pdf.getPages();
   pages.forEach((p, i) => {
-    p.drawRectangle({ x: MARGIN, y: MARGIN - 14, width: maxW, height: 0.6, color: RULE });
-    p.drawText("D-Vivid Consultant · AI Detection Report", { x: MARGIN, y: MARGIN - 26, size: 8, font, color: MUTED });
+    p.drawRectangle({ x: MARGIN, y: MARGIN - 14, width: maxW, height: 0.6, color: BORDER });
+    p.drawText("D-Vivid Consultant \u00B7 AI Detection Report", { x: MARGIN, y: MARGIN - 26, size: 8, font, color: SLATE });
     const pg = `Page ${i + 1} of ${pages.length}`;
-    p.drawText(pg, { x: PAGE_W - MARGIN - font.widthOfTextAtSize(pg, 8), y: MARGIN - 26, size: 8, font, color: MUTED });
+    p.drawText(pg, { x: PAGE_W - MARGIN - font.widthOfTextAtSize(pg, 8), y: MARGIN - 26, size: 8, font, color: SLATE });
   });
 
   return { buffer: Buffer.from(await pdf.save()), pageCount: pages.length };

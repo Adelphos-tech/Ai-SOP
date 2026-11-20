@@ -19,8 +19,12 @@ import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation
 import { runDocumentHumanize } from "../src/lib/writing-review/document-humanizer";
 import { getOperationEvents } from "../src/lib/writing-review/spend-ledger";
 import {
-  generateDetectionReportPdf, highlightSegments, sanitizeForWinAnsi, wrapWithOffsets,
+  detectorDisplayName, generateDetectionReportPdf, sanitizeForWinAnsi, titleCase, wrapWithOffsets,
 } from "../src/lib/writing-review/report-pdf";
+import { existsSync, readdirSync, readFileSync } from "fs";
+import { join } from "path";
+import { PDFDocument } from "pdf-lib";
+import { PDFParse } from "pdf-parse";
 
 let pass = 0, fail = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -568,56 +572,82 @@ async function main() {
     assert.equal(wordPart, long);
   });
 
-  await check("highlightSegments maps single-line and multi-line spans", () => {
-    const text = "aa bb cc dd ee ff";
-    const lines = wrapWithOffsets(text, 8, s => s.length); // "aa bb cc" / "dd ee ff"
-    // span "bb" — inside line 0 only
-    const bb = text.indexOf("bb");
-    let segs = highlightSegments(lines, [{ start: bb, end: bb + 2 }]);
-    assert.deepEqual(segs.get(0), [{ start: bb, end: bb + 2 }]);
-    assert.equal(segs.get(1), undefined);
-    // span "cc dd" — crosses the line break
-    const cc = text.indexOf("cc"), dd = text.indexOf("dd");
-    segs = highlightSegments(lines, [{ start: cc, end: dd + 2 }]);
-    assert.deepEqual(segs.get(0), [{ start: cc, end: lines[0].end }]);
-    assert.deepEqual(segs.get(1), [{ start: lines[1].start, end: dd + 2 }]);
-    // unflagged span (whitespace only between lines) highlights nothing
-    segs = highlightSegments(lines, [{ start: lines[0].end, end: lines[1].start }]);
-    assert.equal(segs.size, 0);
-  });
-
   const pdfBase = {
-    studentName: "Jane Doe", programLine: "MS CS — Stanford University",
-    documentTitle: "SOP", checkedVersionNumber: 4, currentVersionNumber: 4,
+    studentName: "Jane Doe", programLine: "MS CS \u2014 Stanford University",
+    documentTitle: "statement of purpose", checkedVersionNumber: 4, currentVersionNumber: 4,
     checkedAt: "2026-02-14T10:30:00.000Z", wordCount: 12, outdated: false,
+    timeZone: "Asia/Kolkata",
     scores: [
-      { detector: "gptzero" as const, status: "SCORED" as const, scorePercent: 82, classification: "AI_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "SENTENCE" as const },
-      { detector: "reilaa" as const, status: "SCORED" as const, scorePercent: 67, classification: "MIXED", scoreMeaning: "RAW_MODEL_SIGNAL_PERCENT" as const, granularity: "DOCUMENT" as const },
-      { detector: "quillbot" as const, status: "ERROR" as const, error: { code: "HTTP" as const, message: "502" } },
+      { detector: "GPTZERO" as const, status: "SCORED" as const, scorePercent: 82, classification: "AI_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "SENTENCE" as const },
+      { detector: "REILAA" as const, status: "SCORED" as const, scorePercent: 12, classification: "HUMAN_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "DOCUMENT" as const },
+      { detector: "QUILLBOT" as const, status: "ERROR" as const, error: { code: "HTTP" as const, message: "502" } },
     ],
     content: "First sentence is fine. Second sentence was generated entirely by AI tools. Third ends the document.",
-    passages: [
-      { id: "p1", detector: "gptzero" as const, start: 22, end: 74, text: "Second sentence was generated entirely by AI tools.", scorePercent: 95 },
-    ],
   };
+  const pdfText = async (buf: Buffer) => (await new PDFParse({ data: new Uint8Array(buf) }).getText()).text;
 
-  await check("generateDetectionReportPdf emits a valid current-report PDF", async () => {
+  await check("PDF: valid current-report document with extracted text", async () => {
     const { buffer, pageCount } = await generateDetectionReportPdf(pdfBase);
-    assert.ok(buffer.subarray(0, 5).toString() === "%PDF-", "pdf magic");
+    assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");
     assert.ok(buffer.length > 2000);
     assert.ok(pageCount >= 1);
+    const text = await pdfText(buffer);
+    assert.ok(text.includes("AI Detection Report"));
+    assert.ok(text.includes("Jane Doe") && text.includes("Stanford"));
+    assert.ok(text.includes("Feb 14, 2026")); // Asia/Kolkata-local date
+    assert.ok(text.includes("82%") && text.includes("12%"));
+    assert.ok(text.includes("STATEMENT OF PURPOSE")); // uppercase body title
   });
 
-  await check("generateDetectionReportPdf renders outdated + document-level-only runs", async () => {
+  await check("PDF: no caution box, no sentence findings, no raw detector ids", async () => {
+    const text = await pdfText((await generateDetectionReportPdf(pdfBase)).buffer);
+    for (const banned of ["Reilaa", "caution", "Caution", "disclaimer", "flagged", "Highlight", "sentences", "probabilistic"])
+      assert.ok(!text.includes(banned), `PDF leaked "${banned}"`);
+    assert.ok(text.includes("Ryne AI")); // friendly display name
+    assert.ok(text.includes("Statement of Purpose")); // Title-Case in card
+  });
+
+  await check("PDF: error detector shows Unavailable, never 0%", async () => {
+    const text = await pdfText((await generateDetectionReportPdf({
+      ...pdfBase, scores: [pdfBase.scores[2]],
+    })).buffer);
+    assert.ok(text.includes("Unavailable"));
+    assert.ok(!text.includes("0%"));
+  });
+
+  await check("PDF: outdated run renders Checked-vN note; multi-page body", async () => {
+    const longContent = Array.from({ length: 90 }, (_, i) => `Paragraph ${i} of the statement of purpose with enough words to fill several lines of wrapped text output.`).join("\n\n");
     const { buffer, pageCount } = await generateDetectionReportPdf({
-      ...pdfBase, outdated: true, currentVersionNumber: 6,
-      passages: [], // Reilaa-style: document-level only, no sentence spans
-      scores: pdfBase.scores.slice(0, 2),
+      ...pdfBase, outdated: true, currentVersionNumber: 6, content: longContent,
     });
-    assert.ok(buffer.subarray(0, 5).toString() === "%PDF-");
-    assert.ok(pageCount >= 1);
-    // PDF text is extractable — OUTDATED banner made it in
-    assert.ok(buffer.includes("OUTDATED") || buffer.length > 2000);
+    assert.ok(pageCount >= 2, "long document paginates");
+    const text = await pdfText(buffer);
+    assert.ok(text.includes("Checked v4"));
+    assert.ok(text.includes("Page 2 of"));
+  });
+
+  await check("PDF: every detector maps to a display name and a bundled logo file", () => {
+    const { DETECTOR_DISPLAY_NAME, getDetectorLogoFile } = require("../src/lib/writing-review/detectors");
+    for (const { detector } of listDetectorDescriptors()) {
+      assert.ok(DETECTOR_DISPLAY_NAME[detector]?.trim(), `${detector} missing display name`);
+      const f = join(process.cwd(), "public", "detector-logos", getDetectorLogoFile(detector));
+      assert.ok(existsSync(f), `${detector} missing logo ${getDetectorLogoFile(detector)}`);
+    }
+  });
+
+  await check("PDF: every detector logo PNG embeds cleanly", async () => {
+    const dir = join(process.cwd(), "public", "detector-logos");
+    const pngs = readdirSync(dir).filter(f => f.endsWith(".png"));
+    assert.ok(pngs.length >= 7, `expected 7 logos, found ${pngs.length}`);
+    const doc = await PDFDocument.create();
+    for (const f of pngs) await doc.embedPng(readFileSync(join(dir, f))); // throws on invalid PNG
+  });
+
+  await check("PDF: friendly display names + Title-Case helpers", () => {
+    assert.equal(detectorDisplayName("REILAA"), "Ryne AI");
+    assert.equal(detectorDisplayName("QUILLBOT"), "QuillBot");
+    assert.equal(titleCase("statement of purpose"), "Statement of Purpose");
+    assert.equal(titleCase("sop for university"), "Sop for University");
   });
 
   await check("generateDetectionReportPdf survives hostile Unicode content", async () => {

@@ -165,6 +165,35 @@ export function ryneRewriteStatus(): RewriteProviderStatus {
   };
 }
 
+/** Friendly public-facing name for each detector — shared by the
+ *  live UI and the PDF generator so raw ids like `REILAA` never
+ *  leak to students. */
+export const DETECTOR_DISPLAY_NAME: Record<DetectorId, string> = {
+  RYNE_AI: "Ryne AI", TURNITIN: "Turnitin", GPTZERO: "GPTZero",
+  ZEROGPT: "ZeroGPT", REILAA: "Ryne AI", ORIGINALITY: "Originality.ai",
+  QUILLBOT: "QuillBot", SURFER: "Surfer",
+};
+
+/** Bundled brand PNG under public/detector-logos/ for each detector.
+ *  UI renders `/detector-logos/<file>`; the PDF reads the same file
+ *  from disk — one map keeps both consistent. REILAA and RYNE_AI are
+ *  the same provider, so they share the Ryne logo. */
+const DETECTOR_LOGO_FILE: Record<DetectorId, string> = {
+  RYNE_AI: "ryne.png", TURNITIN: "turnitin.png", GPTZERO: "gptzero.png",
+  ZEROGPT: "zerogpt.png", REILAA: "ryne.png", ORIGINALITY: "originality.png",
+  QUILLBOT: "quillbot.png", SURFER: "surfer.png",
+};
+
+/** Public-URL path for <img> (client) or filename resolution (server). */
+export function getDetectorLogoPath(detector: DetectorId): string {
+  return `/detector-logos/${DETECTOR_LOGO_FILE[detector] ?? "unknown.png"}`;
+}
+
+/** Bundled filename only — the server joins it to public/detector-logos/. */
+export function getDetectorLogoFile(detector: DetectorId): string {
+  return DETECTOR_LOGO_FILE[detector] ?? "unknown.png";
+}
+
 /** sha256-16 content hash — staleness is a plain hash compare against
  *  the hash of the version the check ran on. */
 export function computeContentHash(content: string): string {
