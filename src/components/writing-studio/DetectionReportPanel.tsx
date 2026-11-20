@@ -14,11 +14,13 @@ import { PrimaryButton, SecondaryButton } from "@/components/ui";
 import type { DetectionResult, DetectorId, DetectorScore } from "@/lib/writing-review/types";
 import { listDetectorDescriptors, getDetectorLogoPath } from "@/lib/writing-review/detectors";
 import {
-  aggregateFindings, applySpanEdits, detectorVerdict, isReportOutdated, mostlyFlagged,
+  aggregateFindings, applySpanEdits, detectorVerdict, isReportOutdated,
   type ReportRun, type SentenceFinding, type SpanEdit,
 } from "@/lib/writing-review/report";
 import { segmentDocumentSentences, type DocumentSentence } from "@/lib/writing-review/segmentation";
-import { runBatchFix, unstagedTargets, type BatchTarget } from "@/lib/writing-review/fix-batch";
+import {
+  batchFixBlocked, checkRewrite, isFixableFinding, runBatchFix, unstagedTargets, type BatchTarget,
+} from "@/lib/writing-review/fix-batch";
 import {
   DETECTOR_NAMES, fmtUsd, Gauge, Notice, REPORT_HISTORY_LIMIT, reportStoreKey, type StudioVersion,
 } from "./shared";
@@ -113,7 +115,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
   // Brick 3 — batch fix. `batch` is null until first use so nothing
   // renders; progress/result reuse the same slot under the header.
   const [batchConfirm, setBatchConfirm] = useState(false);
-  const [batch, setBatch] = useState<{ running: boolean; done: number; total: number; failed: BatchTarget[]; stopped: boolean } | null>(null);
+  const [batch, setBatch] = useState<{ running: boolean; done: number; total: number; failed: BatchTarget[]; rejected: number; stopped: boolean } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Tracks the LIVE version hash across renders so a mid-run save
   // (this page or elsewhere) can abort the batch on the stale base.
@@ -211,6 +213,12 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
         setRw({ busy: false, error: data.error || `Rewrite failed (HTTP ${res.status}).` });
         return;
       }
+      // Never offer a rewrite that dropped facts or broke the sentence.
+      const verdict = checkRewrite(version.content.slice(f.start, f.end), data.suggestion.content ?? "");
+      if (!verdict.ok) {
+        setRw({ busy: false, error: `Rewrite rejected — ${verdict.reason}. Retry or edit manually.` });
+        return;
+      }
       setRw({ busy: false, suggestion: data.suggestion });
     } catch (e: any) {
       setRw({ busy: false, error: e?.message || "Rewrite failed" });
@@ -264,14 +272,18 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
     return remaining.reduce((sum, t) => sum + t.text.trim().split(/\s+/).filter(Boolean).length, 0) / 1000 * per1k;
   }, [remaining, fixMode, config]);
 
+  // Mass sentence-by-sentence rewriting breaks flow — above the
+  // threshold the full-document Humanizer is the only bulk option.
+  const batchBlocked = !!agg && batchFixBlocked(agg.findings.filter(isFixableFinding).length, agg.totalSentences);
+
   async function startBatch(targets: BatchTarget[]) {
-    if (!targets.length || outdated || batch?.running) return;
+    if (!targets.length || outdated || batch?.running || batchBlocked) return;
     const baseHash = version.contentHash; // findings' base — abort if it moves
     const ac = new AbortController();
     abortRef.current = ac;
     setBatchConfirm(false);
     setAnchor(null);
-    setBatch({ running: true, done: 0, total: targets.length, failed: [], stopped: false });
+    setBatch({ running: true, done: 0, total: targets.length, failed: [], rejected: 0, stopped: false });
     const res = await runBatchFix({
       targets,
       concurrency: 2,
@@ -300,7 +312,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
         setBatch(b => b ? { ...b, done: b.done + 1 } : b);
       },
     });
-    setBatch({ running: false, done: res.staged, total: targets.length, failed: res.failed, stopped: res.stopped });
+    setBatch({ running: false, done: res.staged, total: targets.length, failed: res.failed, rejected: res.rejected, stopped: res.stopped });
   }
 
   async function runReport() {
@@ -369,7 +381,9 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
             <span key={d.detector} className="px-1.5 py-0.5 rounded bg-dvivid-error-light text-dvivid-error text-[10px] font-semibold">{DETECTOR_NAMES[d.detector]}</span>
           ))}
         </div>
-        {outdated ? (
+        {!isFixableFinding(f) ? (
+          <p className="text-xs text-dvivid-text-secondary">Headings are kept exactly as written — they are never rewritten.</p>
+        ) : outdated ? (
           <p className="text-xs text-dvivid-warning">Document changed since this report — run a fresh report before applying fixes.</p>
         ) : staged ? (
           <div className="space-y-1.5">
@@ -517,7 +531,8 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                   <span className="text-xs font-medium text-dvivid-text-secondary">{agg?.flaggedSentences ?? 0} of {agg?.totalSentences ?? 0} flagged</span>
                   {remaining.length > 0 && (
                     <button type="button"
-                      disabled={outdated || batch?.running === true}
+                      disabled={outdated || batch?.running === true || batchBlocked}
+                      title={batchBlocked ? "Too many sentences flagged — use Humanize full document to preserve flow" : undefined}
                       onClick={() => { setBatchConfirm(true); setBatch(null); }}
                       className="px-2.5 py-1 rounded-button border border-dvivid-primary text-dvivid-primary text-[11px] font-medium hover:bg-dvivid-primary-light transition-colors focus:outline-none focus-visible:shadow-focus disabled:opacity-50">
                       Fix all flagged ({remaining.length})
@@ -533,14 +548,14 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                   </div>
                 </div>
               </div>
-              {mostlyFlagged(agg) && (
+              {batchBlocked && (
                 <div className="px-4 sm:px-6 py-2 border-b border-dvivid-border-light text-xs">
                   <button type="button" onClick={onOpenHumanizer} className="text-dvivid-primary font-medium hover:underline focus:outline-none focus-visible:shadow-focus">
-                    Most sentences are flagged — Humanize full document →
+                    Too many sentences flagged — use Humanize full document to preserve flow →
                   </button>
                 </div>
               )}
-              {batchConfirm && (
+              {batchConfirm && !batchBlocked && (
                 <div className="px-4 sm:px-6 py-2.5 border-b border-dvivid-border-light flex flex-wrap items-center gap-x-3 gap-y-2 text-xs bg-dvivid-surface-alt">
                   <span className="font-medium text-dvivid-text-primary">{remaining.length} unstaged flagged sentences</span>
                   <ModeToggle />
@@ -574,7 +589,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                 <div className="px-4 sm:px-6 py-2 border-b border-dvivid-border-light flex items-center gap-2 text-xs" aria-live="polite">
                   <span className="text-dvivid-text-primary">
                     Fixed {batch.done} of {batch.total}
-                    {batch.failed.length > 0 && <> · {batch.failed.length} failed —{" "}
+                    {batch.failed.length > 0 && <> · {batch.failed.length} failed{batch.rejected > 0 ? ` (${batch.rejected} rejected by safety check)` : ""} —{" "}
                       <button type="button" onClick={() => startBatch(batch.failed)} className="text-dvivid-primary font-medium hover:underline focus:outline-none focus-visible:shadow-focus">Retry failed</button></>}
                     {batch.stopped && " · stopped"}
                   </span>

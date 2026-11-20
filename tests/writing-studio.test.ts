@@ -12,7 +12,9 @@ import {
 } from "../src/lib/writing-review/document-structure";
 import { aggregateFindings, applySpanEdits, beastModeBadge, detectorVerdict, isReportOutdated, latestVersionScore, mostlyFlagged, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
 import { runRewrite } from "../src/lib/writing-review/rewrite";
-import { runBatchFix, unstagedTargets, type BatchTarget } from "../src/lib/writing-review/fix-batch";
+import {
+  BATCH_MAX_FLAGGED, batchFixBlocked, checkRewrite, isFixableFinding, runBatchFix, unstagedTargets, type BatchTarget,
+} from "../src/lib/writing-review/fix-batch";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
 import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writing-review/detectors";
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
@@ -446,7 +448,11 @@ async function main() {
   });
 
   // ---------- batch sentence fix (Brick 3) ----------
-  const bt = (start: number, text: string): BatchTarget => ({ start, end: start + text.length, text });
+  // Real prose sentences — a bare word like "a" would read as a heading.
+  const bt = (start: number, word: string): BatchTarget => {
+    const text = `This is sentence ${word}.`;
+    return { start, end: start + text.length, text };
+  };
 
   await check("unstagedTargets: already-staged sentences are skipped, rest queued", () => {
     const findings = [bt(0, "one"), bt(10, "two"), bt(20, "three")];
@@ -463,7 +469,7 @@ async function main() {
     assert.equal(res.staged, 3);
     assert.equal(res.failed.length, 0);
     assert.equal(res.stopped, false);
-    assert.equal(staged.get(10), "R:b");
+    assert.equal(staged.get(10), "R:This is sentence b.");
   });
 
   await check("batch: Stop halts scheduling — completed stays staged, rest untouched", async () => {
@@ -538,7 +544,85 @@ async function main() {
     assert.ok(maxInflight <= 2 && maxInflight > 0);
   });
 
+  // ---------- heading protection + rewrite safety gate ----------
+  const hd = (start: number, text: string): BatchTarget => ({ start, end: start + text.length, text });
+
+  await check("headings are not fixable; prose sentences are", () => {
+    assert.equal(isFixableFinding({ text: "STATEMENT OF PURPOSE" }), false);
+    assert.equal(isFixableFinding({ text: "OBJECTIVE OF SUBMISSION" }), false);
+    assert.equal(isFixableFinding({ text: "I used MATLAB, SAGE, and REGEN 3.3 for modelling." }), true);
+  });
+
+  await check("unstagedTargets skips headings like STATEMENT OF PURPOSE", () => {
+    const findings = [hd(0, "STATEMENT OF PURPOSE"), bt(30, "one"), hd(60, "OBJECTIVE OF SUBMISSION"), bt(90, "two")];
+    assert.deepEqual(unstagedTargets(findings, new Set()).map(t => t.start), [30, 90]);
+  });
+
+  await check("runBatchFix never sends a heading to the provider", async () => {
+    const sent: string[] = [];
+    const res = await runBatchFix({
+      targets: [hd(0, "STATEMENT OF PURPOSE"), bt(30, "one")],
+      rewrite: async t => { sent.push(t.text); return { ok: true, replacement: `R:${t.text}` }; },
+      onStaged: () => {},
+    });
+    assert.deepEqual(sent, ["This is sentence one."]);
+    assert.equal(res.staged, 1);
+  });
+
+  const ORIG = "During the project, stall angle was increased from 16\u00B0 to 24\u00B0 using MATLAB and REGEN 3.3.";
+  await check("checkRewrite accepts a faithful rewrite", () => {
+    assert.deepEqual(checkRewrite(ORIG, "The project raised the stall angle from 16\u00B0 to 24\u00B0, modelled in MATLAB and REGEN 3.3."), { ok: true });
+  });
+
+  await check("checkRewrite rejects lost numbers (16° → 160) and dropped names", () => {
+    const num = checkRewrite(ORIG, "The project raised the stall angle from 160 to 240 using MATLAB and REGEN 3.3.");
+    assert.equal(num.ok, false);
+    if (!num.ok) assert.match(num.reason, /16/);
+    const name = checkRewrite(ORIG, "The project raised the stall angle from 16\u00B0 to 24\u00B0 using simulation tools.");
+    assert.equal(name.ok, false);
+    if (!name.ok) assert.match(name.reason, /MATLAB|REGEN/);
+  });
+
+  await check("checkRewrite rejects dropped ending punctuation and statement → question", () => {
+    const run = checkRewrite("I used MATLAB, SAGE, and REGEN 3.3.", "I used MATLAB, SAGE, REGEN 3.3 Working in constructing");
+    assert.equal(run.ok, false);
+    if (!run.ok) assert.match(run.reason, /ending punctuation/);
+    const q = checkRewrite("I studied how to evaluate performance.", "I studied how to keep evaluating performance?");
+    assert.equal(q.ok, false);
+    if (!q.ok) assert.match(q.reason, /question/);
+    assert.equal(checkRewrite("Why does heat move?", "What makes heat move?").ok, true);
+    assert.equal(checkRewrite("x.", "   ").ok, false);
+  });
+
+  await check("batch: corrupted rewrites are rejected honestly — never staged, counted, retryable", async () => {
+    const staged = new Map<number, string>();
+    const good = hd(0, "I used MATLAB for modelling.");
+    const bad = hd(40, "The angle rose from 16\u00B0 to 24\u00B0.");
+    const res = await runBatchFix({
+      targets: [good, bad],
+      rewrite: async t => ({ ok: true, replacement: t === bad ? "The angle rose from 160 to 240" : "I relied on MATLAB for modelling." }),
+      onStaged: (t, r) => staged.set(t.start, r),
+    });
+    assert.equal(res.staged, 1);
+    assert.equal(res.rejected, 1);
+    assert.deepEqual(res.failed.map(t => t.start), [40]);
+    assert.ok(!staged.has(40)); // nothing corrupted, nothing fabricated
+  });
+
+  await check("batch threshold blocks mass sentence-by-sentence runs (>=50% or >20 flagged)", () => {
+    assert.equal(batchFixBlocked(5, 40), false);  // targeted cleanup stays enabled
+    assert.equal(batchFixBlocked(19, 40), false);
+    assert.equal(batchFixBlocked(20, 40), true);  // exactly 50%
+    assert.equal(batchFixBlocked(BATCH_MAX_FLAGGED, 100), false);
+    assert.equal(batchFixBlocked(BATCH_MAX_FLAGGED + 1, 100), true); // >20 even under 50%
+    assert.equal(batchFixBlocked(55, 60), true);  // the v2 incident
+    assert.equal(batchFixBlocked(0, 0), false);
+  });
+
   // ---------- PDF detection report ----------
+
+  // CP1252 glyphs above U+00FF that pdf-lib's WinAnsi encoding accepts.
+  const WINANSI_HIGH = "\u20AC\u201A\u0192\u201E\u2026\u2020\u2021\u02C6\u2030\u0160\u2039\u0152\u017D\u2018\u2019\u201C\u201D\u2022\u2013\u2014\u02DC\u2122\u0161\u203A\u0153\u017E\u0178";
 
   await check("sanitizeForWinAnsi maps Unicode safely and preserves length", () => {
     const raw = "It\u2019s a \u201Cgreat\u201D plan \u2192 move \u2212 one \u200Bstep \u00A0ok \uD83D\uDE80";
@@ -546,11 +630,26 @@ async function main() {
     assert.equal(out.length, raw.length); // 1:1 — flagged span offsets stay aligned
     for (const ch of out) {
       const cp = ch.codePointAt(0)!;
-      assert.ok(cp >= 0x20 && cp <= 0xff, `unsafe char ${cp}`);
-      assert.ok(![0x81, 0x8d, 0x8f, 0x90, 0x9d].includes(cp));
+      assert.ok((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WINANSI_HIGH.includes(ch), `unsafe char ${cp}`);
     }
     assert.ok(!out.includes("\u2192") && out.includes(">"));
   });
+
+  await check("sanitizeForWinAnsi keeps WinAnsi-native symbols (16° to 24°, ±, ×, …, dashes, quotes)", () => {
+    const raw = "stall angle 16\u00B0 to 24\u00B0, \u00B10.5 \u00D7 2 \u00F7 3 \u00B7 \u2022 \u2026 \u2013 \u2014 \u2018a\u2019 \u201Cb\u201D";
+    assert.equal(sanitizeForWinAnsi(raw), raw);
+    assert.equal(sanitizeForWinAnsi("16\u00B0 to 24\u00B0"), "16\u00B0 to 24\u00B0"); // never "16o"/"160"
+  });
+
+  await check("sanitizeForWinAnsi still replaces true non-WinAnsi symbols 1:1", () => {
+    const raw = "\u2192\u2212\u03B1\u2264\u2713\uD83D\uDE80\u200B";
+    const out = sanitizeForWinAnsi(raw);
+    assert.equal(out.length, raw.length);
+    assert.equal(out[0], ">");
+    assert.equal(out[1], "-");
+    assert.ok([...out.slice(2)].every(c => c === "?" || c === " "));
+  });
+
 
   await check("wrapWithOffsets keeps exact offsets and wraps at width", () => {
     const text = "the quick brown fox";
@@ -597,6 +696,15 @@ async function main() {
     assert.ok(text.includes("Feb 14, 2026")); // Asia/Kolkata-local date
     assert.ok(text.includes("82%") && text.includes("12%"));
     assert.ok(text.includes("STATEMENT OF PURPOSE")); // uppercase body title
+  });
+
+  await check("PDF: degree signs and WinAnsi symbols render verbatim without encoding errors", async () => {
+    const content = "During the project, stall angle was increased from 16\u00B0 to 24\u00B0 \u2014 a \u201Cbig\u201D step \u2026 \u00B10.5\u00D72. Arrows \u2192 and emoji \uD83D\uDE80 stay safe.";
+    const { buffer } = await generateDetectionReportPdf({ ...pdfBase, content, studentName: "Ren\u00E9e O\u2019Neil" });
+    const text = await pdfText(buffer);
+    assert.ok(text.includes("16\u00B0 to 24\u00B0"), "degree signs preserved");
+    assert.ok(!/16o to 24o|160 to 240/.test(text));
+    assert.ok(text.includes("\u00B10.5\u00D72"));
   });
 
   await check("PDF: no caution box, no sentence findings, no raw detector ids", async () => {

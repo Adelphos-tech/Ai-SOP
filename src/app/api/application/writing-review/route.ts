@@ -27,6 +27,7 @@ import {
 import { runDetection, RYNE_MAX_CHARS } from "@/lib/writing-review/detection";
 import { runRewrite } from "@/lib/writing-review/rewrite";
 import { runDocumentHumanize } from "@/lib/writing-review/document-humanizer";
+import { isFixableFinding } from "@/lib/writing-review/fix-batch";
 
 async function loadReviewContext(request: NextRequest) {
   // Brick 4A: real session auth — requireConsultantSession() is a
@@ -182,6 +183,11 @@ export async function POST(request: NextRequest) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
         return NextResponse.json(
           { error: "A valid operationId (UUID) is required for a rewrite." }, { status: 400 });
+      }
+      // Headings are structure, not prose — refused before any paid call.
+      if (!isFixableFinding({ text: passageText })) {
+        return NextResponse.json(
+          { error: "Headings are kept exactly as written and cannot be rewritten." }, { status: 400 });
       }
       const mode = body.mode === "titan" ? "titan" : "balanced";
       const out = await runRewrite({
