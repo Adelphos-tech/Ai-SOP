@@ -10,7 +10,8 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { detectorVerdict } from "./report";
-import type { DetectorScore } from "./types";
+import { DETECTOR_DISPLAY_NAME, getDetectorLogoFile } from "./detectors";
+import type { DetectorId, DetectorScore } from "./types";
 
 const PAGE_W = 612, PAGE_H = 792, MARGIN = 50;
 const NAVY = rgb(0.09, 0.15, 0.27);
@@ -22,13 +23,8 @@ const GREEN = rgb(0.086, 0.639, 0.29);    // #16A34A
 const AMBER = rgb(0.851, 0.467, 0.024);   // #D97706
 const RED = rgb(0.863, 0.149, 0.149);     // #DC2626
 
-/** Friendly public-facing detector names — never raw ids. */
-const DISPLAY_NAMES: Record<string, string> = {
-  gptzero: "GPTZero", zerogpt: "ZeroGPT", reilaa: "Ryne AI",
-  surfer: "Surfer", quillbot: "QuillBot", originality: "Originality.ai",
-};
 export function detectorDisplayName(id: string): string {
-  return DISPLAY_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+  return DETECTOR_DISPLAY_NAME[id as DetectorId] ?? id;
 }
 
 const SMALL_WORDS = new Set(["of", "the", "and", "for", "in", "on", "at", "to", "a", "an"]);
@@ -152,7 +148,7 @@ export async function generateDetectionReportPdf(
   const dvLogo = await embed(pub("dvivid_logo.png"));
   const logos = new Map<string, NonNullable<Awaited<ReturnType<typeof embed>>>>();
   for (const s of input.scores) {
-    if (!logos.has(s.detector)) logos.set(s.detector, await embed(pub("detector-logos", `${s.detector}.png`)) as any);
+    if (!logos.has(s.detector)) logos.set(s.detector, await embed(pub("detector-logos", getDetectorLogoFile(s.detector))) as any);
   }
 
   const tz = input.timeZone ?? "Asia/Kolkata";

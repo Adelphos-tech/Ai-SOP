@@ -21,7 +21,7 @@ import { getOperationEvents } from "../src/lib/writing-review/spend-ledger";
 import {
   detectorDisplayName, generateDetectionReportPdf, sanitizeForWinAnsi, titleCase, wrapWithOffsets,
 } from "../src/lib/writing-review/report-pdf";
-import { readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { PDFDocument } from "pdf-lib";
 import { PDFParse } from "pdf-parse";
@@ -578,9 +578,9 @@ async function main() {
     checkedAt: "2026-02-14T10:30:00.000Z", wordCount: 12, outdated: false,
     timeZone: "Asia/Kolkata",
     scores: [
-      { detector: "gptzero" as const, status: "SCORED" as const, scorePercent: 82, classification: "AI_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "SENTENCE" as const },
-      { detector: "reilaa" as const, status: "SCORED" as const, scorePercent: 12, classification: "HUMAN_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "DOCUMENT" as const },
-      { detector: "quillbot" as const, status: "ERROR" as const, error: { code: "HTTP" as const, message: "502" } },
+      { detector: "GPTZERO" as const, status: "SCORED" as const, scorePercent: 82, classification: "AI_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "SENTENCE" as const },
+      { detector: "REILAA" as const, status: "SCORED" as const, scorePercent: 12, classification: "HUMAN_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "DOCUMENT" as const },
+      { detector: "QUILLBOT" as const, status: "ERROR" as const, error: { code: "HTTP" as const, message: "502" } },
     ],
     content: "First sentence is fine. Second sentence was generated entirely by AI tools. Third ends the document.",
   };
@@ -626,17 +626,26 @@ async function main() {
     assert.ok(text.includes("Page 2 of"));
   });
 
+  await check("PDF: every detector maps to a display name and a bundled logo file", () => {
+    const { DETECTOR_DISPLAY_NAME, getDetectorLogoFile } = require("../src/lib/writing-review/detectors");
+    for (const { detector } of listDetectorDescriptors()) {
+      assert.ok(DETECTOR_DISPLAY_NAME[detector]?.trim(), `${detector} missing display name`);
+      const f = join(process.cwd(), "public", "detector-logos", getDetectorLogoFile(detector));
+      assert.ok(existsSync(f), `${detector} missing logo ${getDetectorLogoFile(detector)}`);
+    }
+  });
+
   await check("PDF: every detector logo PNG embeds cleanly", async () => {
     const dir = join(process.cwd(), "public", "detector-logos");
     const pngs = readdirSync(dir).filter(f => f.endsWith(".png"));
-    assert.ok(pngs.length >= 6, `expected 6 logos, found ${pngs.length}`);
+    assert.ok(pngs.length >= 7, `expected 7 logos, found ${pngs.length}`);
     const doc = await PDFDocument.create();
     for (const f of pngs) await doc.embedPng(readFileSync(join(dir, f))); // throws on invalid PNG
   });
 
   await check("PDF: friendly display names + Title-Case helpers", () => {
-    assert.equal(detectorDisplayName("reilaa"), "Ryne AI");
-    assert.equal(detectorDisplayName("quillbot"), "QuillBot");
+    assert.equal(detectorDisplayName("REILAA"), "Ryne AI");
+    assert.equal(detectorDisplayName("QUILLBOT"), "QuillBot");
     assert.equal(titleCase("statement of purpose"), "Statement of Purpose");
     assert.equal(titleCase("sop for university"), "Sop for University");
   });
