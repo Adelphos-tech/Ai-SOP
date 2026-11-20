@@ -169,6 +169,32 @@ async function main() {
   assert(writerPrompt.system.includes("The Writer's factual world consists ONLY of the authorized evidence"), "Writer says factual world is ONLY authorized evidence");
 
   // ============================================================
+  console.log("\n--- D2. Narrative + human-cadence rules are ON by default ---");
+  // ============================================================
+  {
+    const prevFlag = process.env.EXPERIMENT_WRITER_NARRATIVE;
+    delete process.env.EXPERIMENT_WRITER_NARRATIVE;
+    const w = buildGenericWriterPrompt({}, studentFacts, [baseRC], approvedFaculty, "instructions", evidencePackets as any).system;
+    const c = buildGenericLanguageCalibratorPrompt(writerOutput, { level: "Natural Professional", tone: "Professional" } as any).system;
+    if (prevFlag !== undefined) process.env.EXPERIMENT_WRITER_NARRATIVE = prevFlag;
+    assert(w.includes("NARRATIVE QUALITY RULES") && !w.includes("(experiment)"), "Writer: narrative rules enabled without EXPERIMENT_WRITER_NARRATIVE");
+    assert(w.includes("the requirement wins"), "Writer: narrative rules never override required topics/facts/limits");
+    for (const [name, prompt] of [["Writer", w], ["Calibrator", c]] as const) {
+      assert(prompt.includes("HUMAN WRITING CADENCE RULES"), `${name}: cadence rules present`);
+      assert(prompt.includes("I structured... I developed... I implemented..."), `${name}: forbids repeated subject-verb openings`);
+      assert(prompt.includes("formulaic summary sentence"), `${name}: breaks rigid paragraph closings`);
+      for (const banned of ["Moreover", "Furthermore", "Additionally", "In conclusion", "delve", "testament", "tapestry", "pivotal", "foster", "honed my skills", "stemmed from"])
+        assert(prompt.includes(`"${banned}"`), `${name}: bans "${banned}"`);
+      assert(prompt.includes("Never invent a detail"), `${name}: specifics must come from input, never invented`);
+      assert(prompt.includes("ZERO Markdown or LaTeX") && prompt.includes("never $7.89/10$"), `${name}: plain-text / no-LaTeX rule`);
+    }
+    // Existing hard rules untouched.
+    assert(w.includes("Use ONLY the facts provided in the evidence packets"), "Writer: fact rule intact");
+    assert(w.includes("Word and character constraints are exact"), "Writer: word-limit rule intact");
+    assert(c.includes("STRICT CLAIM PRESERVATION") && c.includes("Apply these by REWORDING only"), "Calibrator: claim preservation intact; cadence = rewording only");
+  }
+
+  // ============================================================
   console.log("\n--- E. Prompt-injection boundary appears in all six prompts ---");
   // ============================================================
   assert(plannerPrompt.system.includes("SECURITY / DATA BOUNDARY"), "Planner has security boundary");

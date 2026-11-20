@@ -71,6 +71,17 @@ export function sanitizeForWinAnsi(text: string): string {
   return out;
 }
 
+/** The saved SOP often starts with its own heading ("STATEMENT OF
+ *  PURPOSE"). When that first non-empty line matches the document
+ *  title (case/spacing/punctuation-insensitive) it is dropped from the
+ *  body so the PDF doesn't print the heading twice. */
+export function stripLeadingTitle(title: string, content: string): string {
+  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const m = /^\s*([^\n]*)(?:\n|$)/.exec(content);
+  if (!m || !norm(title) || norm(m[1]) !== norm(title)) return content;
+  return content.slice(m[0].length).replace(/^\s*\n/, "");
+}
+
 export interface WrappedLine {
   /** Text exactly as drawn on the line (no trailing space). */
   text: string;
@@ -271,7 +282,7 @@ export async function generateDetectionReportPdf(
   page.drawText(sanitizeForWinAnsi(input.documentTitle.toUpperCase()), { x: MARGIN, y, size: 12, font: bold, color: NAVY });
   y -= 20;
   const measure = (s: string) => font.widthOfTextAtSize(s, 10.5);
-  for (const para of input.content.split(/\n/)) {
+  for (const para of stripLeadingTitle(input.documentTitle, input.content).split(/\n/)) {
     if (!para.trim()) { y -= 8; continue; }
     const lines = wrapWithOffsets(sanitizeForWinAnsi(para), maxW, measure);
     for (const ln of lines) {
