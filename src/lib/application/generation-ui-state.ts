@@ -45,6 +45,9 @@ export interface PollDecision {
   clearGenerating: boolean;
   /** Reload document + versions (terminal success reconciliation). */
   refreshDocument: boolean;
+  /** Drop any client-side "Generation failed" banner — the server
+   * proves the run is alive or succeeded. */
+  clearError: boolean;
 }
 
 /**
@@ -74,7 +77,7 @@ export function decidePollAction(args: {
   const { status, generationId, startedAt, generating, liveGenerationId, lastSubmitAt } = args;
 
   if (isCompletedStatus(status)) {
-    return { updateLive: true, clearGenerating: true, refreshDocument: true };
+    return { updateLive: true, clearGenerating: true, refreshDocument: true, clearError: true };
   }
 
   if (status === "FAILED" || status === "CANCELLED") {
@@ -84,13 +87,23 @@ export function decidePollAction(args: {
     if (generating && (differentRun || predatesSubmit)) {
       // Previous run's tombstone — the new run may not have persisted
       // yet. Ignore it and keep polling.
-      return { updateLive: false, clearGenerating: false, refreshDocument: false };
+      return { updateLive: false, clearGenerating: false, refreshDocument: false, clearError: false };
     }
-    return { updateLive: true, clearGenerating: true, refreshDocument: false };
+    return { updateLive: true, clearGenerating: true, refreshDocument: false, clearError: false };
   }
 
   // Active, IDLE, or unknown — always update the live status.
-  return { updateLive: true, clearGenerating: false, refreshDocument: false };
+  return { updateLive: true, clearGenerating: false, refreshDocument: false, clearError: isActiveStatus(status) };
+}
+
+/**
+ * True when a generate POST failed at the transport layer (proxy
+ * 502/504, HTML error page) rather than with a structured app error.
+ * The server-side run may still be alive — reconcile via the status
+ * poll instead of declaring failure.
+ */
+export function isTransportFailure(status: number, data: Record<string, unknown>): boolean {
+  return (status === 502 || status === 504) && !data.error && !data.code;
 }
 
 /**

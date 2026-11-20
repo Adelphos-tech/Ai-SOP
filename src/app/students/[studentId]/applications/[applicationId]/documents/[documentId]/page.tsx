@@ -13,7 +13,7 @@ import { WorkflowStepper } from "@/components/ui/WorkflowStepper";
 import { GenerationProgressCard } from "@/components/generation/GenerationProgressCard";
 import { DocumentRichEditor } from "@/components/documents/DocumentRichEditor";
 import { createSingleFlightSubmitter, requestGenerate, resolveVersionContent } from "@/lib/application/generate-client";
-import { decidePollAction } from "@/lib/application/generation-ui-state";
+import { decidePollAction, isTransportFailure } from "@/lib/application/generation-ui-state";
 
 interface Document {
   id: string;
@@ -293,6 +293,7 @@ export default function DocumentWorkspacePage() {
         });
         if (!decision.updateLive) return;
         setLiveStatus(data);
+        if (decision.clearError) setGenerationError("");
         if (decision.clearGenerating) setGenerating(false);
         if (decision.refreshDocument) {
           await loadDocument();
@@ -327,6 +328,13 @@ export default function DocumentWorkspacePage() {
       const res = await submitGenerate({ studentId, applicationId, documentId });
       const data = res.data;
       if (data.status === "cancelled") {
+        await loadDocument();
+        return;
+      }
+      if (data.status === "started" || isTransportFailure(res.status, data)) {
+        // 202 — run accepted; the pipeline continues server-side and the
+        // status poll tracks it to terminal. A body-less proxy 502/504
+        // is treated the same: the run may well be alive.
         await loadDocument();
         return;
       }
