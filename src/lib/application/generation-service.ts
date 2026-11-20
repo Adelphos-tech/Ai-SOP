@@ -58,6 +58,7 @@ import {
 import { computeContractSemanticHash } from "@/lib/requirements/generation-contract";
 import { randomUUID } from "crypto";
 import { startDetached } from "@/lib/application/generation-start";
+import { stripInlineLatexMath } from "@/lib/ai/plain-text";
 
 // Build version identifier for observability
 const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID || `build-${Date.now()}`;
@@ -456,7 +457,9 @@ async function generateApplicationDocumentInner(
   try {
     version = await createDocumentVersion({
       documentId,
-      content: result.finalText,
+      // Strip stray inline LaTeX math around numbers ($7.89/10$) — the
+      // model sometimes emits it despite the plain-text prompt rule.
+      content: stripInlineLatexMath(result.finalText),
       contentFormat: "MARKDOWN",
       createdByType: "AI_GENERATED",
       model,

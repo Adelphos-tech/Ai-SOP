@@ -21,8 +21,9 @@ import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation
 import { runDocumentHumanize } from "../src/lib/writing-review/document-humanizer";
 import { getOperationEvents } from "../src/lib/writing-review/spend-ledger";
 import {
-  detectorDisplayName, generateDetectionReportPdf, sanitizeForWinAnsi, titleCase, wrapWithOffsets,
+  detectorDisplayName, generateDetectionReportPdf, sanitizeForWinAnsi, stripLeadingTitle, titleCase, wrapWithOffsets,
 } from "../src/lib/writing-review/report-pdf";
+import { stripInlineLatexMath } from "../src/lib/ai/plain-text";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { PDFDocument } from "pdf-lib";
@@ -705,6 +706,30 @@ async function main() {
     assert.ok(text.includes("16\u00B0 to 24\u00B0"), "degree signs preserved");
     assert.ok(!/16o to 24o|160 to 240/.test(text));
     assert.ok(text.includes("\u00B10.5\u00D72"));
+  });
+
+  await check("stripInlineLatexMath: unwraps numeric inline math, keeps real currency", () => {
+    assert.equal(stripInlineLatexMath("CGPA of $7.89/10$ and $9.2$ in labs"), "CGPA of 7.89/10 and 9.2 in labs");
+    assert.equal(stripInlineLatexMath("a $30\\%$ gain, $2 \\times 3$ grid"), "a 30% gain, 2 \u00D7 3 grid");
+    for (const money of ["a $50,000 grant", "fees of $500 and $600", "between $50 - $60", "from $5-$10", "costs $1,200.50."])
+      assert.equal(stripInlineLatexMath(money), money, money);
+    assert.equal(stripInlineLatexMath("keep $a+b$ as-is"), "keep $a+b$ as-is"); // non-numeric math untouched
+  });
+
+  await check("stripLeadingTitle drops a body heading that repeats the title, nothing else", () => {
+    assert.equal(stripLeadingTitle("Statement of Purpose ", "STATEMENT OF PURPOSE\n\nMy interest began early."), "My interest began early.");
+    assert.equal(stripLeadingTitle("statement of purpose", "  Statement  of  Purpose:\nBody."), "Body.");
+    const other = "Purpose of Statement\n\nBody.";
+    assert.equal(stripLeadingTitle("Statement of Purpose", other), other); // different heading kept
+    const noHead = "Statement of purpose writing taught me a lot.\n\nMore.";
+    assert.equal(stripLeadingTitle("Statement of Purpose", noHead), noHead); // a sentence, not the heading
+  });
+
+  await check("PDF: body starting with the title does not print STATEMENT OF PURPOSE twice", async () => {
+    const content = "STATEMENT OF PURPOSE\n\nMy interest in mechanical engineering begins with a question.\n\nSecond paragraph.";
+    const text = await pdfText((await generateDetectionReportPdf({ ...pdfBase, content })).buffer);
+    assert.equal(text.match(/STATEMENT OF PURPOSE/g)?.length, 1);
+    assert.ok(text.includes("My interest in mechanical engineering"));
   });
 
   await check("PDF: no caution box, no sentence findings, no raw detector ids", async () => {

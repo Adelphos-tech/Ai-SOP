@@ -1,6 +1,7 @@
 import { LanguageProfile } from "../../types";
 import { ResponseComponent } from "@/lib/requirements/generation-contract-types";
 import { withSafetyBlock } from "../prompt-safety-block";
+import { HUMAN_CADENCE_RULES, PLAIN_TEXT_RULE } from "./human-cadence";
 import { resolveLengthContext, describeLengthContext, wordsOf } from "../../length-context";
 
 /**
@@ -64,6 +65,10 @@ STRICT CLAIM PRESERVATION (Phase 38):
 - You are NOT a factual/compliance problem solver. Those belong to Quality Reviewer / Finalizer.
 - Do NOT remove claims to fix compliance issues. Do NOT add claims to fill topic gaps.
 
+${HUMAN_CADENCE_RULES}
+- Apply these by REWORDING only — never by deleting, merging away, or adding claims.
+
+${PLAIN_TEXT_RULE}
 ${lengthSection}
 LANGUAGE PROFILE:
 - Test: ${ep.testType || "Not specified"}

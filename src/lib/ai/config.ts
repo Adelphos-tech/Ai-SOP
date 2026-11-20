@@ -110,5 +110,5 @@ export function getMaxCompletionTokensForStage(stage: StageName): number {
  */
 export function getPromptVersionHash(): string {
   // Version tag — update when any prompt template changes
-  return "prompt-v12-2026-09-09";
+  return "prompt-v13-2026-11-20";
 }
