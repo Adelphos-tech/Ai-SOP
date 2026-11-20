@@ -7,13 +7,15 @@
 //
 // This route is a thin transport adapter. All generation logic
 // lives in the shared server-only function:
-//   generateApplicationDocument()
+//   startApplicationDocumentGeneration() — responds 202 once the run
+//   is accepted; the pipeline continues detached and the client tracks
+//   it via /api/application/document/generation-status.
 //
 // No HTTP self-fetch to another route in the same process.
 // ============================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { generateApplicationDocument, releaseGenerationLock } from "@/lib/application/generation-service";
+import { startApplicationDocumentGeneration, releaseGenerationLock } from "@/lib/application/generation-service";
 import { classifyGenerationError } from "@/lib/application/generation-errors";
 import { randomUUID } from "crypto";
 import {
@@ -59,7 +61,7 @@ export async function POST(req: NextRequest) {
 
     const requestId = (req.headers.get("x-request-id") || randomUUID()) as string;
 
-    const result = await generateApplicationDocument({
+    const result = await startApplicationDocumentGeneration({
       studentId: body.studentId,
       applicationId: body.applicationId,
       documentId: body.documentId,

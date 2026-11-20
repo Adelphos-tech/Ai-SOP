@@ -57,6 +57,7 @@ import {
 } from "@/lib/requirements/generation-contract-types";
 import { computeContractSemanticHash } from "@/lib/requirements/generation-contract";
 import { randomUUID } from "crypto";
+import { startDetached } from "@/lib/application/generation-start";
 
 // Build version identifier for observability
 const BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID || `build-${Date.now()}`;
@@ -69,6 +70,9 @@ export interface GenerateDocumentInput {
   /** Restart-recovery: resume an existing active run instead of
    * creating a new one (skips lock acquisition + run creation). */
   resumeRunId?: string;
+  /** Called once the run row is persisted and the pipeline is about
+   * to start — lets the transport respond without awaiting the run. */
+  onAccepted?: (generationId: string) => void;
 }
 
 export interface GenerateDocumentResult {
@@ -335,6 +339,7 @@ async function generateApplicationDocumentInner(
   }
 
   // ===== RUN SIX-STAGE PIPELINE =====
+  input.onAccepted?.(generationId);
   const result = await runApplicationPipeline(pipelineInput);
 
   // ===== CANCELLED — authoritative stop, release lock =====
@@ -772,6 +777,33 @@ export function buildGenerationArtifacts(ctx: DocumentGenerationContext, profile
     languageProfile,
     contract,
   };
+}
+
+/**
+ * Request-path entry point: responds 202 as soon as the run is
+ * accepted instead of holding the HTTP request open for the whole
+ * pipeline (which outlives nginx/client timeouts). Pre-pipeline
+ * outcomes (blocked, 409, 503) are still returned synchronously.
+ */
+export function startApplicationDocumentGeneration(
+  input: Omit<GenerateDocumentInput, "onAccepted" | "resumeRunId">,
+): Promise<GenerateDocumentResult> {
+  return startDetached<GenerateDocumentResult>(
+    (onAccepted) => generateApplicationDocument({ ...input, onAccepted }),
+    (generationId) => ({
+      ok: true,
+      status: 202,
+      body: { status: "started", generationId, documentId: input.documentId },
+    }),
+    (e) => {
+      emitEvent("generation_background_error", {
+        requestId: input.requestId,
+        documentId: input.documentId,
+        detail: e instanceof Error ? e.message : String(e),
+      }, "error");
+      void releaseGenerationLock(input.documentId);
+    },
+  );
 }
 
 export async function releaseGenerationLock(documentId: string): Promise<void> {
