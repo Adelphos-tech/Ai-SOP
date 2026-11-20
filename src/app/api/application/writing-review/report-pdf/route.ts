@@ -92,9 +92,14 @@ export async function POST(request: NextRequest) {
     const outdated = body.run.versionId !== doc.currentVersionId || body.run.contentHash !== contentHash;
 
     // Findings re-derived inside the generator on authoritative
-    // checked text — the client picks which run, never where
-    // highlights land.
+    // The PDF is a clean percentage report — no flagged-sentence
+    // data leaves the server, so no findings are derived at all.
     const scores = body.run.detection.scores.filter((s: any) => body.run.detectors.includes(s.detector));
+    let timeZone: string | undefined;
+    if (typeof body.timeZone === "string" && body.timeZone.length <= 64) {
+      try { new Intl.DateTimeFormat("en-US", { timeZone: body.timeZone }); timeZone = body.timeZone; }
+      catch { /* invalid zone — generator falls back to Asia/Kolkata */ }
+    }
 
     const release = await exportLimiter.acquire();
     try {
@@ -110,7 +115,7 @@ export async function POST(request: NextRequest) {
         outdated,
         scores,
         content,
-        passages: body.run.detection.passages,
+        timeZone,
       });
       const date = new Date(body.run.checkedAt);
       const stamp = Number.isNaN(+date) ? "report" : date.toISOString().slice(0, 10);

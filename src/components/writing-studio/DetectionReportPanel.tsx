@@ -145,7 +145,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
     try {
       const res = await fetch(pdfUrl, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run: active }),
+        body: JSON.stringify({ run: active, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
