@@ -9,7 +9,7 @@
 // document changes — never re-run automatically.
 // ============================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PrimaryButton, SecondaryButton } from "@/components/ui";
 import type { DetectionResult, DetectorId, DetectorScore } from "@/lib/writing-review/types";
 import { listDetectorDescriptors } from "@/lib/writing-review/detectors";
@@ -18,6 +18,7 @@ import {
   type ReportRun, type SentenceFinding, type SpanEdit,
 } from "@/lib/writing-review/report";
 import { segmentDocumentSentences, type DocumentSentence } from "@/lib/writing-review/segmentation";
+import { runBatchFix, unstagedTargets, type BatchTarget } from "@/lib/writing-review/fix-batch";
 import {
   DETECTOR_NAMES, fmtUsd, Gauge, Notice, REPORT_HISTORY_LIMIT, reportStoreKey, type StudioVersion,
 } from "./shared";
@@ -32,7 +33,7 @@ const MEANING: Record<string, string> = {
   CLASSIFICATION_ONLY: "classification",
 };
 
-export interface DetectionConfig { runnable: string[]; maxDetectorsPerRun: number; configured: boolean; reservationCeilingUsd?: number | null }
+export interface DetectionConfig { runnable: string[]; maxDetectorsPerRun: number; configured: boolean; reservationCeilingUsd?: number | null; rewritePricing?: { balancedPer1k: number; titanPer1k: number } }
 
 function DetectorResultCard({ s }: { s: DetectorScore }) {
   const v = detectorVerdict(s);
@@ -96,6 +97,15 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
   const [editText, setEditText] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState("");
+  // Brick 3 — batch fix. `batch` is null until first use so nothing
+  // renders; progress/result reuse the same slot under the header.
+  const [batchConfirm, setBatchConfirm] = useState(false);
+  const [batch, setBatch] = useState<{ running: boolean; done: number; total: number; failed: BatchTarget[]; stopped: boolean } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  // Tracks the LIVE version hash across renders so a mid-run save
+  // (this page or elsewhere) can abort the batch on the stale base.
+  const hashRef = useRef(version.contentHash);
+  hashRef.current = version.contentHash;
 
   useEffect(() => { setSelected((config?.runnable ?? []).slice(0, max)); }, [config, max]);
   useEffect(() => {
@@ -227,6 +237,59 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
     }
   }
 
+  // ---------- batch fix (Brick 3) ----------
+
+  const stagedStarts = useMemo(() => new Set(fixes.keys()), [fixes]);
+  const remaining = useMemo(
+    () => (agg ? unstagedTargets(agg.findings, stagedStarts) : []) as BatchTarget[],
+    [agg, stagedStarts],
+  );
+  const estBatchUsd = useMemo(() => {
+    const per1k = fixMode === "titan"
+      ? (config?.rewritePricing?.titanPer1k ?? 0.5)
+      : (config?.rewritePricing?.balancedPer1k ?? 0.08);
+    return remaining.reduce((sum, t) => sum + t.text.trim().split(/\s+/).filter(Boolean).length, 0) / 1000 * per1k;
+  }, [remaining, fixMode, config]);
+
+  async function startBatch(targets: BatchTarget[]) {
+    if (!targets.length || outdated || batch?.running) return;
+    const baseHash = version.contentHash; // findings' base — abort if it moves
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setBatchConfirm(false);
+    setAnchor(null);
+    setBatch({ running: true, done: 0, total: targets.length, failed: [], stopped: false });
+    const res = await runBatchFix({
+      targets,
+      concurrency: 2,
+      signal: ac.signal,
+      shouldAbort: () => hashRef.current !== baseHash,
+      rewrite: async (t, signal) => {
+        const res = await fetch(apiUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "rewrite",
+            passageText: version.content.slice(t.start, t.end),
+            mode: fixMode,
+            confirmPaid: true,
+            operationId: crypto.randomUUID(),
+          }),
+          signal,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.suggestion?.content) {
+          return { ok: false as const, error: data.error || `Rewrite failed (HTTP ${res.status}).` };
+        }
+        return { ok: true as const, replacement: data.suggestion.content };
+      },
+      onStaged: (t, replacement) => {
+        setFixes(prev => new Map(prev).set(t.start, { start: t.start, end: t.end, replacement }));
+        setBatch(b => b ? { ...b, done: b.done + 1 } : b);
+      },
+    });
+    setBatch({ running: false, done: res.staged, total: targets.length, failed: res.failed, stopped: res.stopped });
+  }
+
   async function runReport() {
     if (running || !selected.length) return;
     if (hasUnsavedRewrite && !window.confirm("You have an unsaved humanized draft. The report checks the SAVED version only. Continue?")) return;
@@ -266,6 +329,21 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
   const findingByStart = new Map(agg?.findings.map((f, i) => [f.start, { f, n: i + 1 }]) ?? []);
   const keyOf = (start: number) => `f${start}`;
 
+  /** Compact Balanced | Titan switch shared by the per-sentence
+   *  fix bar and the batch-fix confirm strip. */
+  function ModeToggle() {
+    return (
+      <div className="inline-flex p-0.5 rounded-button border border-dvivid-border bg-white" role="group" aria-label="Rewrite mode">
+        {(["balanced", "titan"] as const).map(m => (
+          <button key={m} type="button" onClick={() => setFixMode(m)} aria-pressed={fixMode === m}
+            className={`px-2 py-0.5 rounded-[5px] text-[11px] font-medium capitalize ${fixMode === m ? "bg-dvivid-primary text-white" : "text-dvivid-text-secondary"}`}>
+            {m}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
   /** Compact inline action bar anchored under a clicked flagged
    *  sentence — shared by the List row and the Document view. */
   function FixBar({ f }: { f: SentenceFinding }) {
@@ -295,14 +373,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
               </label>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex p-0.5 rounded-button border border-dvivid-border bg-white" role="group" aria-label="Rewrite mode">
-                {(["balanced", "titan"] as const).map(m => (
-                  <button key={m} type="button" onClick={() => setFixMode(m)} aria-pressed={fixMode === m}
-                    className={`px-2 py-0.5 rounded-[5px] text-[11px] font-medium capitalize ${fixMode === m ? "bg-dvivid-primary text-white" : "text-dvivid-text-secondary"}`}>
-                    {m}
-                  </button>
-                ))}
-              </div>
+              <ModeToggle />
               <button type="button" className={`${btn} border-dvivid-primary bg-dvivid-primary text-white`} disabled={!consent || rw.busy} onClick={() => rewriteSentence(f)}>
                 {rw.busy ? "Rewriting…" : rw.suggestion ? "Retry" : "Rewrite with AI"}
               </button>
@@ -430,6 +501,14 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                 <h3 className="text-sm font-semibold text-dvivid-text-primary">Findings (unique sentences)</h3>
                 <div className="flex items-center gap-3">
                   <span className="text-xs font-medium text-dvivid-text-secondary">{agg?.flaggedSentences ?? 0} of {agg?.totalSentences ?? 0} flagged</span>
+                  {remaining.length > 0 && (
+                    <button type="button"
+                      disabled={outdated || batch?.running === true}
+                      onClick={() => { setBatchConfirm(true); setBatch(null); }}
+                      className="px-2.5 py-1 rounded-button border border-dvivid-primary text-dvivid-primary text-[11px] font-medium hover:bg-dvivid-primary-light transition-colors focus:outline-none focus-visible:shadow-focus disabled:opacity-50">
+                      Fix all flagged ({remaining.length})
+                    </button>
+                  )}
                   <div className="inline-flex p-0.5 bg-dvivid-surface-alt border border-dvivid-border rounded-button" role="group" aria-label="Findings view">
                     {(["list", "doc"] as const).map(v => (
                       <button key={v} type="button" onClick={() => setView(v)} aria-pressed={view === v}
@@ -445,6 +524,48 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                   <button type="button" onClick={onOpenHumanizer} className="text-dvivid-primary font-medium hover:underline focus:outline-none focus-visible:shadow-focus">
                     Most sentences are flagged — Humanize full document →
                   </button>
+                </div>
+              )}
+              {batchConfirm && (
+                <div className="px-4 sm:px-6 py-2.5 border-b border-dvivid-border-light flex flex-wrap items-center gap-x-3 gap-y-2 text-xs bg-dvivid-surface-alt">
+                  <span className="font-medium text-dvivid-text-primary">{remaining.length} unstaged flagged sentences</span>
+                  <ModeToggle />
+                  <span className="text-dvivid-text-muted">est. {fmtUsd(estBatchUsd)} total</span>
+                  {!consent && (
+                    <label className="flex items-center gap-1.5 text-dvivid-text-secondary cursor-pointer">
+                      <input type="checkbox" className="accent-dvivid-primary" checked={consent} onChange={e => setConsent(e.target.checked)} />
+                      Allow sending sentences to Ryne AI — billed per rewrite.
+                    </label>
+                  )}
+                  <button type="button" disabled={!consent || outdated} onClick={() => startBatch(remaining)}
+                    className="px-2.5 py-1 rounded-button bg-dvivid-primary text-white text-[11px] font-medium transition-colors focus:outline-none focus-visible:shadow-focus disabled:opacity-50">
+                    Start fixing ({remaining.length})
+                  </button>
+                  <button type="button" onClick={() => setBatchConfirm(false)}
+                    className="text-[11px] text-dvivid-text-muted hover:text-dvivid-text-primary focus:outline-none focus-visible:shadow-focus">
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {batch?.running && (
+                <div className="px-4 sm:px-6 py-2 border-b border-dvivid-border-light flex items-center gap-3 text-xs" aria-live="polite">
+                  <span className="font-medium text-dvivid-text-primary">Fixing {batch.done} of {batch.total}…</span>
+                  <button type="button" onClick={() => abortRef.current?.abort()}
+                    className="px-2.5 py-0.5 rounded-button border border-dvivid-border text-[11px] font-medium text-dvivid-error hover:bg-dvivid-error-light focus:outline-none focus-visible:shadow-focus">
+                    Stop
+                  </button>
+                </div>
+              )}
+              {batch && !batch.running && (
+                <div className="px-4 sm:px-6 py-2 border-b border-dvivid-border-light flex items-center gap-2 text-xs" aria-live="polite">
+                  <span className="text-dvivid-text-primary">
+                    Fixed {batch.done} of {batch.total}
+                    {batch.failed.length > 0 && <> · {batch.failed.length} failed —{" "}
+                      <button type="button" onClick={() => startBatch(batch.failed)} className="text-dvivid-primary font-medium hover:underline focus:outline-none focus-visible:shadow-focus">Retry failed</button></>}
+                    {batch.stopped && " · stopped"}
+                  </span>
+                  <button type="button" onClick={() => setBatch(null)} aria-label="Dismiss batch result"
+                    className="ml-auto text-dvivid-text-muted hover:text-dvivid-text-primary focus:outline-none focus-visible:shadow-focus">×</button>
                 </div>
               )}
               {!agg?.findings.length ? (
@@ -520,7 +641,7 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                       className="px-3 py-1.5 rounded-button bg-dvivid-primary text-white text-xs font-medium transition-colors focus:outline-none focus-visible:shadow-focus disabled:opacity-50">
                       {saving ? "Saving…" : `Save as new version (v${version.versionNumber + 1})`}
                     </button>
-                    <button type="button" onClick={() => { setFixes(new Map()); setAnchor(null); }}
+                    <button type="button" onClick={() => { setFixes(new Map()); setAnchor(null); setBatch(null); }}
                       className="text-xs text-dvivid-text-secondary hover:text-dvivid-error focus:outline-none focus-visible:shadow-focus">
                       Discard
                     </button>

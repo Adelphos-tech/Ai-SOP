@@ -12,6 +12,7 @@ import {
 } from "../src/lib/writing-review/document-structure";
 import { aggregateFindings, applySpanEdits, beastModeBadge, detectorVerdict, isReportOutdated, latestVersionScore, mostlyFlagged, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
 import { runRewrite } from "../src/lib/writing-review/rewrite";
+import { runBatchFix, unstagedTargets, type BatchTarget } from "../src/lib/writing-review/fix-batch";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
 import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writing-review/detectors";
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
@@ -438,6 +439,99 @@ async function main() {
     });
     assert.equal(dup.kind, "ERROR");
     if (dup.kind === "ERROR") assert.ok(dup.message.includes("500"));
+  });
+
+  // ---------- batch sentence fix (Brick 3) ----------
+  const bt = (start: number, text: string): BatchTarget => ({ start, end: start + text.length, text });
+
+  await check("unstagedTargets: already-staged sentences are skipped, rest queued", () => {
+    const findings = [bt(0, "one"), bt(10, "two"), bt(20, "three")];
+    assert.deepEqual(unstagedTargets(findings, new Set([10])).map(t => t.start), [0, 20]);
+  });
+
+  await check("batch: every success is staged individually, no fabrication", async () => {
+    const staged = new Map<number, string>();
+    const res = await runBatchFix({
+      targets: [bt(0, "a"), bt(10, "b"), bt(20, "c")],
+      rewrite: async t => ({ ok: true, replacement: `R:${t.text}` }),
+      onStaged: (t, r) => staged.set(t.start, r),
+    });
+    assert.equal(res.staged, 3);
+    assert.equal(res.failed.length, 0);
+    assert.equal(res.stopped, false);
+    assert.equal(staged.get(10), "R:b");
+  });
+
+  await check("batch: Stop halts scheduling — completed stays staged, rest untouched", async () => {
+    const ac = new AbortController();
+    const staged = new Map<number, string>();
+    let calls = 0;
+    const res = await runBatchFix({
+      targets: [bt(0, "a"), bt(10, "b"), bt(20, "c")],
+      concurrency: 1,
+      signal: ac.signal,
+      rewrite: async t => { calls++; return { ok: true, replacement: `R:${t.text}` }; },
+      onStaged: (t, r) => { staged.set(t.start, r); ac.abort(); }, // user hits Stop after first lands
+    });
+    assert.equal(res.stopped, true);
+    assert.equal(res.staged, 1);
+    assert.equal(calls, 1); // b and c were never billed
+  });
+
+  await check("batch: version drift mid-run aborts and discards late results", async () => {
+    let drifted = false;
+    const staged = new Map<number, string>();
+    const res = await runBatchFix({
+      targets: [bt(0, "a"), bt(10, "b")],
+      concurrency: 1,
+      shouldAbort: () => drifted,
+      rewrite: async t => { drifted = true; return { ok: true, replacement: `R:${t.text}` }; },
+      onStaged: (t, r) => staged.set(t.start, r),
+    });
+    assert.equal(res.stopped, true);
+    assert.equal(staged.size, 0); // drifted result discarded, never staged
+  });
+
+  await check("batch: outdated/drift guard blocks the run entirely (zero calls)", async () => {
+    let calls = 0;
+    const res = await runBatchFix({
+      targets: [bt(0, "a")],
+      shouldAbort: () => true,
+      rewrite: async () => { calls++; return { ok: true as const, replacement: "x" }; },
+      onStaged: () => {},
+    });
+    assert.equal(res.stopped, true);
+    assert.equal(calls, 0);
+  });
+
+  await check("batch: partial failure keeps successes and exposes failed targets for retry", async () => {
+    const staged = new Map<number, string>();
+    const res = await runBatchFix({
+      targets: [bt(0, "a"), bt(10, "b"), bt(20, "c")],
+      rewrite: async t => t.start === 10
+        ? { ok: false, error: "Ryne returned HTTP 502" }
+        : { ok: true, replacement: `R:${t.text}` },
+      onStaged: (t, r) => staged.set(t.start, r),
+    });
+    assert.equal(res.staged, 2);
+    assert.deepEqual(res.failed.map(t => t.start), [10]);
+    assert.ok(!staged.has(10)); // nothing fabricated for the failure
+  });
+
+  await check("batch: concurrency is bounded (never more than 2 in flight)", async () => {
+    let inflight = 0, maxInflight = 0;
+    await runBatchFix({
+      targets: [bt(0, "a"), bt(1, "b"), bt(2, "c"), bt(3, "d"), bt(4, "e")],
+      concurrency: 2,
+      rewrite: async t => {
+        inflight++; maxInflight = Math.max(maxInflight, inflight);
+        await new Promise(r => setTimeout(r, 5));
+        inflight--;
+        return { ok: true, replacement: t.text };
+      },
+      onStaged: () => {},
+    });
+    assert.ok(maxInflight <= 2 && maxInflight > 0);
   });
 
   // ---------- PDF detection report ----------
