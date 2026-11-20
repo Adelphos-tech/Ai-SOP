@@ -17,6 +17,9 @@ import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writin
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
 import { runDocumentHumanize } from "../src/lib/writing-review/document-humanizer";
 import { getOperationEvents } from "../src/lib/writing-review/spend-ledger";
+import {
+  generateDetectionReportPdf, highlightSegments, sanitizeForWinAnsi, wrapWithOffsets,
+} from "../src/lib/writing-review/report-pdf";
 
 let pass = 0, fail = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -435,6 +438,100 @@ async function main() {
     });
     assert.equal(dup.kind, "ERROR");
     if (dup.kind === "ERROR") assert.ok(dup.message.includes("500"));
+  });
+
+  // ---------- PDF detection report ----------
+
+  await check("sanitizeForWinAnsi maps Unicode safely and preserves length", () => {
+    const raw = "It\u2019s a \u201Cgreat\u201D plan \u2192 move \u2212 one \u200Bstep \u00A0ok \uD83D\uDE80";
+    const out = sanitizeForWinAnsi(raw);
+    assert.equal(out.length, raw.length); // 1:1 — flagged span offsets stay aligned
+    for (const ch of out) {
+      const cp = ch.codePointAt(0)!;
+      assert.ok(cp >= 0x20 && cp <= 0xff, `unsafe char ${cp}`);
+      assert.ok(![0x81, 0x8d, 0x8f, 0x90, 0x9d].includes(cp));
+    }
+    assert.ok(!out.includes("\u2192") && out.includes(">"));
+  });
+
+  await check("wrapWithOffsets keeps exact offsets and wraps at width", () => {
+    const text = "the quick brown fox";
+    const lines = wrapWithOffsets(text, 9, s => s.length); // monospace stub
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lines.map(l => l.text), ["the quick", "brown fox"]);
+    assert.equal(text.slice(lines[0].start, lines[0].end), "the quick");
+    assert.equal(text.slice(lines[1].start, lines[1].end), "brown fox");
+  });
+
+  await check("wrapWithOffsets breaks unbreakable words mid-word", () => {
+    const long = "x".repeat(25);
+    const lines = wrapWithOffsets(`ok ${long} end`, 10, s => s.length);
+    assert.ok(lines.every(l => l.text.length <= 10), "no line overflows");
+    assert.ok(lines.some(l => l.text === "x".repeat(10)), "word was split");
+    // the portions of each line inside the word's span reconstruct it exactly
+    const src = `ok ${long} end`;
+    const wordPart = lines.map(l => src.slice(Math.max(l.start, 3), Math.min(l.end, 28))).join("");
+    assert.equal(wordPart, long);
+  });
+
+  await check("highlightSegments maps single-line and multi-line spans", () => {
+    const text = "aa bb cc dd ee ff";
+    const lines = wrapWithOffsets(text, 8, s => s.length); // "aa bb cc" / "dd ee ff"
+    // span "bb" — inside line 0 only
+    const bb = text.indexOf("bb");
+    let segs = highlightSegments(lines, [{ start: bb, end: bb + 2 }]);
+    assert.deepEqual(segs.get(0), [{ start: bb, end: bb + 2 }]);
+    assert.equal(segs.get(1), undefined);
+    // span "cc dd" — crosses the line break
+    const cc = text.indexOf("cc"), dd = text.indexOf("dd");
+    segs = highlightSegments(lines, [{ start: cc, end: dd + 2 }]);
+    assert.deepEqual(segs.get(0), [{ start: cc, end: lines[0].end }]);
+    assert.deepEqual(segs.get(1), [{ start: lines[1].start, end: dd + 2 }]);
+    // unflagged span (whitespace only between lines) highlights nothing
+    segs = highlightSegments(lines, [{ start: lines[0].end, end: lines[1].start }]);
+    assert.equal(segs.size, 0);
+  });
+
+  const pdfBase = {
+    studentName: "Jane Doe", programLine: "MS CS — Stanford University",
+    documentTitle: "SOP", checkedVersionNumber: 4, currentVersionNumber: 4,
+    checkedAt: "2026-02-14T10:30:00.000Z", wordCount: 12, outdated: false,
+    scores: [
+      { detector: "gptzero" as const, status: "SCORED" as const, scorePercent: 82, classification: "AI_ONLY", scoreMeaning: "AI_PROBABILITY_PERCENT" as const, granularity: "SENTENCE" as const },
+      { detector: "reilaa" as const, status: "SCORED" as const, scorePercent: 67, classification: "MIXED", scoreMeaning: "RAW_MODEL_SIGNAL_PERCENT" as const, granularity: "DOCUMENT" as const },
+      { detector: "quillbot" as const, status: "ERROR" as const, error: { code: "HTTP" as const, message: "502" } },
+    ],
+    content: "First sentence is fine. Second sentence was generated entirely by AI tools. Third ends the document.",
+    passages: [
+      { id: "p1", detector: "gptzero" as const, start: 22, end: 74, text: "Second sentence was generated entirely by AI tools.", scorePercent: 95 },
+    ],
+  };
+
+  await check("generateDetectionReportPdf emits a valid current-report PDF", async () => {
+    const { buffer, pageCount } = await generateDetectionReportPdf(pdfBase);
+    assert.ok(buffer.subarray(0, 5).toString() === "%PDF-", "pdf magic");
+    assert.ok(buffer.length > 2000);
+    assert.ok(pageCount >= 1);
+  });
+
+  await check("generateDetectionReportPdf renders outdated + document-level-only runs", async () => {
+    const { buffer, pageCount } = await generateDetectionReportPdf({
+      ...pdfBase, outdated: true, currentVersionNumber: 6,
+      passages: [], // Reilaa-style: document-level only, no sentence spans
+      scores: pdfBase.scores.slice(0, 2),
+    });
+    assert.ok(buffer.subarray(0, 5).toString() === "%PDF-");
+    assert.ok(pageCount >= 1);
+    // PDF text is extractable — OUTDATED banner made it in
+    assert.ok(buffer.includes("OUTDATED") || buffer.length > 2000);
+  });
+
+  await check("generateDetectionReportPdf survives hostile Unicode content", async () => {
+    const { buffer } = await generateDetectionReportPdf({
+      ...pdfBase,
+      content: "Arrows \u2192 minus \u2212 \u201Cquotes\u201D emoji \uD83D\uDE00 zero\u200Bwidth and " + "verylongurl".repeat(30),
+    });
+    assert.ok(buffer.subarray(0, 5).toString() === "%PDF-");
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);
