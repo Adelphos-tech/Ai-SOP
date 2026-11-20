@@ -36,16 +36,22 @@ export function titleCase(s: string): string {
 
 // ---------- pure helpers ----------
 
+/** Characters above U+00FF that WinAnsi (CP1252) encodes natively —
+ *  smart quotes, dashes, ellipsis, bullet, euro, trademark, etc. They
+ *  render as-is; only genuinely unencodable characters are replaced. */
+const WINANSI_EXTRA = new Set(
+  "\u20AC\u201A\u0192\u201E\u2026\u2020\u2021\u02C6\u2030\u0160\u2039\u0152\u017D" +
+  "\u2018\u2019\u201C\u201D\u2022\u2013\u2014\u02DC\u2122\u0161\u203A\u0153\u017E\u0178",
+);
+
 /** Map every non-WinAnsi character to a single ASCII-safe replacement
  *  — output length equals input length so wrapped offsets stay exact.
- *  Smart punctuation gets a meaningful substitute; everything else
- *  becomes a space or "?". */
+ *  WinAnsi-native symbols (°, ±, ×, ÷, ·, •, …, curly quotes, en/em
+ *  dashes) pass through untouched; arrows and minus get a meaningful
+ *  substitute; everything else becomes a space or "?". */
 export function sanitizeForWinAnsi(text: string): string {
   const map: Record<string, string> = {
-    "\u2192": ">", "\u2190": "<", "\u2194": "-", "\u2212": "-", "\u2013": "-", "\u2014": "-",
-    "\u201C": '"', "\u201D": '"', "\u201E": '"', "\u2018": "'", "\u2019": "'", "\u201A": "'",
-    "\u2026": ".", "\u2022": "-", "\u00B7": "-", "\u00D7": "x", "\u00F7": "/", "\u00B1": "+",
-    "\u00AB": '"', "\u00BB": '"', "\u00A9": "c", "\u00AE": "R", "\u2122": "T", "\u00B0": "o",
+    "\u2192": ">", "\u2190": "<", "\u2194": "-", "\u2212": "-",
     "\u00A0": " ", "\u2000": " ", "\u2001": " ", "\u2002": " ", "\u2003": " ", "\u2004": " ",
     "\u2005": " ", "\u2006": " ", "\u2007": " ", "\u2008": " ", "\u2009": " ", "\u200A": " ",
     "\u200B": " ", "\u200C": " ", "\u200D": " ", "\u00AD": " ", "\uFEFF": " ",
@@ -58,8 +64,8 @@ export function sanitizeForWinAnsi(text: string): string {
     if (map[ch] !== undefined) { out += map[ch]; continue; }
     const cp = ch.charCodeAt(0);
     if (cp < 0x20 && ch !== "\n" && ch !== "\t") { out += " "; continue; }
-    if (cp === 0x81 || cp === 0x8d || cp === 0x8f || cp === 0x90 || cp === 0x9d) { out += " "; continue; }
-    if (cp > 0xff) { out += /^\s$/.test(ch) ? " " : "?"; continue; }
+    if (cp >= 0x7f && cp <= 0x9f) { out += " "; continue; } // C1 controls — not printable glyphs
+    if (cp > 0xff && !WINANSI_EXTRA.has(ch)) { out += /^\s$/.test(ch) ? " " : "?"; continue; }
     out += ch;
   }
   return out;
