@@ -18,7 +18,10 @@ import {
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
 import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writing-review/detectors";
 import { segmentDocumentSentences } from "../src/lib/writing-review/segmentation";
-import { runDocumentHumanize } from "../src/lib/writing-review/document-humanizer";
+import { runDocumentHumanize, sectionIssues } from "../src/lib/writing-review/document-humanizer";
+import {
+  applyProofreadPatches, EDIT_BUDGET_SHARE, patchCost, PATCH_MAX_WORDS, proofreadHumanizedText,
+} from "../src/lib/writing-review/post-humanize-proofread";
 import { getOperationEvents } from "../src/lib/writing-review/spend-ledger";
 import {
   detectorDisplayName, generateDetectionReportPdf, sanitizeForWinAnsi, stripLeadingTitle, titleCase, wrapWithOffsets,
@@ -416,6 +419,138 @@ async function main() {
     assert.equal(out.result.corruptionWarnings.length, 1);
     assert.equal(out.result.corruptionWarnings[0].retried, true);
     assert.match(out.result.corruptionWarnings[0].reason, /enrolled/);
+  });
+
+  // ---------- section retention guard ----------
+  delete process.env.OPENAI_API_KEY; // the proofreader must never reach the network in tests
+  const FACTS = [
+    "I trained a Random Forest model on 93,507 labelled records collected for NetraGuj during my final year.",
+    "The model cut false alarms by 30 percent and ran on a single laptop at the district office.",
+  ].join("\n\n");
+  const dropFacts = (t: string) => t.replace("Random Forest ", "").replace("93,507 ", "many ").replace("30 percent", "a lot");
+
+  await check("sectionIssues: >25% shrinkage, 2+ dropped paragraphs and 2+ lost facts are each detected", () => {
+    const s = { text: FACTS, paragraphs: FACTS.split("\n\n"), words: countWords(FACTS) };
+    assert.deepEqual(sectionIssues(s, FACTS), []);
+    assert.deepEqual(sectionIssues(s, FACTS.split("\n\n")[0]).map(i => i.kind), ["shrinkage"]);
+    assert.deepEqual(sectionIssues(s, dropFacts(FACTS)).map(i => i.kind), ["missing_facts"]);
+    const three = { text: "A one is here.\n\nB two is here.\n\nC three is here.", paragraphs: ["A one is here.", "B two is here.", "C three is here."], words: 12 };
+    assert.match(sectionIssues(three, "A one is here, B two is here, C three is here.")[0].reason, /dropped 2 of 3 paragraphs/);
+  });
+
+  await check("humanizer: dropped metrics (93,507, Random Forest) trigger one retry and the faithful retry is kept", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    sent.length = 0;
+    let calls = 0;
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: FACTS,
+      fetcher: echo({ body: t => ({ content: ++calls === 1 ? dropFacts(t) : t }) }) }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(sent.length, 2);
+    assert.ok(out.result.content.includes("93,507") && out.result.content.includes("Random Forest"));
+    assert.deepEqual(out.result.corruptionWarnings, []);
+    assert.equal(out.result.retryBillableWords, countWords(FACTS));
+  });
+
+  await check("humanizer: shrunken section retried; a worse retry is discarded and the issue is surfaced", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    sent.length = 0;
+    let calls = 0;
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: FACTS,
+      fetcher: echo({ body: t => ({ content: ++calls === 1
+        ? t.split("\n\n")[0]                                        // 1 issue: shrinkage
+        : `As requested, ${dropFacts(t).split("\n\n")[0]}` }) }) })); // 3 issues: chat leak, shrinkage, lost facts
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(sent.length, 2); // never more than one retry
+    assert.ok(!out.result.content.includes("As requested"));
+    assert.ok(out.result.content.includes("93,507"));
+    assert.deepEqual(out.result.corruptionWarnings.map(w => [w.kind, w.retried]), [["shrinkage", true]]);
+  });
+
+  // ---------- post-humanizer proofreader ----------
+  const FILLER = Array.from({ length: 12 }, (_, i) => `Sentence ${i + 1} describes ordinary coursework and project work clearly.`).join(" ");
+  const ORIGINAL_DOC = `I led the team that built the tracker. Items are filtered or rejected by the model. I earned a CGPA of 9.3/10 in my diploma. ${FILLER}`;
+  const HUMANIZED_DOC = `I lead the team that built the tracker. Items are filter/rejected by the model. I earned a percentage of 9.3/10 in my diploma. ${FILLER}`;
+  const MICRO = [
+    { find: "I lead the team", replace: "I led the team", category: "tense" },
+    { find: "are filter/rejected", replace: "are filtered or rejected", category: "grammar" },
+    { find: "a percentage of 9.3/10", replace: "a CGPA of 9.3/10", category: "fact_restore" },
+  ];
+
+  await check("proofreader: valid micro-patches (I lead → I led, filter/rejected, percentage → CGPA) are applied", async () => {
+    const r = await proofreadHumanizedText({ originalText: ORIGINAL_DOC, humanizedText: HUMANIZED_DOC, source: async () => MICRO });
+    assert.equal(r.status, "APPLIED");
+    assert.equal(r.applied.length, 3);
+    assert.ok(r.text.startsWith("I led the team that built the tracker. Items are filtered or rejected by the model. I earned a CGPA of 9.3/10"));
+    assert.ok(r.text.endsWith(FILLER)); // everything else byte-for-byte identical
+    assert.equal(patchCost("I lead the team", "I led the team"), 1);
+  });
+
+  await check("proofreader guards: >14-word patch, ambiguous/missing match, new fact, LaTeX and heading edits are rejected", () => {
+    const long = { find: "I lead the team that built the tracker. Items are filter/rejected by the model. I earned", replace: "I led a group.", category: "grammar" };
+    assert.ok(long.find.split(" ").length > PATCH_MAX_WORDS);
+    const blocks = [{ text: "STATEMENT OF PURPOSE", editable: false }, { text: HUMANIZED_DOC, editable: true }];
+    const r = applyProofreadPatches(blocks, [
+      long,
+      { find: "describes ordinary coursework", replace: "covers ordinary coursework", category: "grammar" }, // 12 matches → ambiguous
+      { find: "not in the text", replace: "x", category: "grammar" },
+      { find: "the tracker", replace: "the Stanford tracker", category: "fact_restore" },                    // new proper noun
+      { find: "9.3/10 in", replace: "$9.3/10$ in", category: "punctuation" },                                // new LaTeX
+      { find: "STATEMENT OF PURPOSE", replace: "Statement of Purpose", category: "grammar" },                 // heading
+      { find: "x", replace: "y", category: "style" },                                                          // bad category
+    ], ORIGINAL_DOC);
+    assert.deepEqual(r.applied, []);
+    assert.equal(r.skipped, 7);
+    assert.deepEqual(r.blocks, blocks);
+  });
+
+  await check("proofreader guard: cumulative edits are capped at 8% of document words", () => {
+    const L = "abcdefghij";
+    const words = Array.from({ length: 100 }, (_, i) => `t${L[Math.floor(i / 10)]}${L[i % 10]}x`); // 100 distinct, non-overlapping tokens
+    const text = words.join(" ") + ".";
+    const patches = words.map(w => ({ find: w, replace: w.replace("x", "y"), category: "grammar" }));
+    const r = applyProofreadPatches([{ text, editable: true }], patches, text);
+    assert.equal(r.applied.length, Math.floor(100 * EDIT_BUDGET_SHARE));
+    assert.ok(r.applied.length <= 8);
+  });
+
+  await check("humanizer: proofread patches land in content AND sections; summary returned for the Studio badge", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: `STATEMENT OF PURPOSE\n\n${ORIGINAL_DOC}`,
+      fetcher: echo({ body: () => ({ content: HUMANIZED_DOC }) }), proofreader: async () => MICRO }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(out.result.proofreadStatus, "APPLIED");
+    assert.equal(out.result.proofreadPatchesApplied, 3);
+    assert.deepEqual(out.result.proofreadSummary.map(p => p.category), ["tense", "grammar", "fact_restore"]);
+    assert.ok(out.result.content.startsWith("STATEMENT OF PURPOSE\n\nI led the team"));
+    assert.equal(out.result.sections[1].rewritten[0], out.result.content.split("\n\n")[1]);
+  });
+
+  await check("humanizer: proofreader failure is fail-open — humanization still succeeds with the cleaned text", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: SOP,
+      fetcher: echo({ body: t => ({ content: t.replace(/\. /g, ".  ") }) }),
+      proofreader: async () => { throw new Error("timeout"); } }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(out.result.proofreadStatus, "FAILED");
+    assert.equal(out.result.proofreadPatchesApplied, 0);
+    assert.ok(!/ {2}/.test(out.result.content));
+    assert.equal(out.result.content, SOP); // echoed text, cleaned, untouched by the proofreader
+  });
+
+  await check("proofreader kill switch: DISABLE_POST_HUMANIZE_PROOFREAD=true skips the call entirely", async () => {
+    process.env.DISABLE_POST_HUMANIZE_PROOFREAD = "true";
+    let called = false;
+    const r = await proofreadHumanizedText({ originalText: ORIGINAL_DOC, humanizedText: HUMANIZED_DOC, source: async () => { called = true; return MICRO; } });
+    delete process.env.DISABLE_POST_HUMANIZE_PROOFREAD;
+    assert.equal(r.status, "DISABLED");
+    assert.equal(called, false);
+    assert.equal(r.text, HUMANIZED_DOC);
+    const none = await proofreadHumanizedText({ originalText: ORIGINAL_DOC, humanizedText: HUMANIZED_DOC });
+    assert.equal(none.status, "NOT_CONFIGURED"); // no OPENAI_API_KEY → unchanged, no network
   });
 
   await check("paragraph merge by provider → flagged structure change, never silent", async () => {

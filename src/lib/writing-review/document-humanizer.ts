@@ -16,7 +16,11 @@ import {
   canonicalUnitsKey, getOperation, markUnknown, refundSpend, reserveSpend, settleSpend,
   type OperationRecord,
 } from "./spend-ledger";
-import { alignRewrite, countWords, DEFAULT_SECTION_LIMITS, MAX_SECTION_WORDS, planSections, type SectionLimits } from "./document-structure";
+import {
+  alignRewrite, countWords, DEFAULT_SECTION_LIMITS, MAX_SECTION_WORDS, missingDetails, planSections, splitParagraphs,
+  type PlannedSection, type SectionLimits,
+} from "./document-structure";
+import { proofreadBlocks, type ProofreadPatch, type ProofreadPatchSource, type ProofreadStatus } from "./post-humanize-proofread";
 import { severeCorruption } from "./fix-batch";
 import { collapseHorizontalWhitespace, stripInlineLatexMath } from "../ai/plain-text";
 
@@ -34,8 +38,33 @@ export interface HumanizedSection {
   aiScore?: number;
 }
 
-/** A section whose rewrite still shows a severe corruption (after one retry, when it could be booked). */
-export interface CorruptionWarning { sectionIndex: number; reason: string; retried: boolean }
+export type SectionIssueKind = "corruption" | "shrinkage" | "missing_facts";
+/** A section whose rewrite still shows a problem (after one retry, when it could be booked). */
+export interface CorruptionWarning { sectionIndex: number; kind: SectionIssueKind; reason: string; retried: boolean }
+
+/** A rewrite may shrink a section by at most 25%. */
+export const SECTION_SHRINK_MAX_SHARE = 0.25;
+/** Dropping this many numbers / proper terms from a section counts as lost facts. */
+export const SECTION_MISSING_FACTS_MIN = 2;
+
+/** Every quality problem a section rewrite shows against its original. */
+export function sectionIssues(s: Pick<PlannedSection, "text" | "paragraphs" | "words">, rewrite: string):
+  Array<{ kind: SectionIssueKind; reason: string }> {
+  const issues: Array<{ kind: SectionIssueKind; reason: string }> = [];
+  const severe = severeCorruption(s.text, rewrite);
+  if (severe) issues.push({ kind: "corruption", reason: severe });
+  const words = countWords(rewrite), paragraphs = splitParagraphs(rewrite).length;
+  if (words < s.words * (1 - SECTION_SHRINK_MAX_SHARE)) {
+    issues.push({ kind: "shrinkage", reason: `the rewrite shrank the section from ${s.words} to ${words} words` });
+  } else if (s.paragraphs.length >= 2 && paragraphs <= s.paragraphs.length - 2) {
+    issues.push({ kind: "shrinkage", reason: `the rewrite dropped ${s.paragraphs.length - paragraphs} of ${s.paragraphs.length} paragraphs` });
+  }
+  const lost = missingDetails(s.text, rewrite, 50).filter(t => !/^I['’]/.test(t));
+  if (lost.length >= SECTION_MISSING_FACTS_MIN) {
+    issues.push({ kind: "missing_facts", reason: `the rewrite dropped details (${lost.slice(0, 6).join(", ")})` });
+  }
+  return issues;
+}
 
 export interface DocumentHumanizeResult {
   mode: RewriteMode;
@@ -51,6 +80,10 @@ export interface DocumentHumanizeResult {
   corruptionWarnings: CorruptionWarning[];
   /** Extra words billed by corruption retries (each booked as its own ledger operation). */
   retryBillableWords: number;
+  /** Post-humanizer surgical proofreader — patches applied after the deterministic guards. */
+  proofreadStatus: ProofreadStatus;
+  proofreadPatchesApplied: number;
+  proofreadSummary: ProofreadPatch[];
 }
 
 export type DocumentHumanizeOutcome =
@@ -70,6 +103,8 @@ export interface DocumentHumanizeOptions {
   signal?: AbortSignal;
   fetcher?: typeof fetch;
   limits?: SectionLimits;
+  /** Proofreader transport override (tests); defaults to the OpenAI patch source. */
+  proofreader?: ProofreadPatchSource;
 }
 
 export function estimateDocumentCostUsd(words: number, mode: RewriteMode): number {
@@ -179,13 +214,18 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
         const s = body[cursor++];
         let call = await callRyneHumanizer({ text: s.text, mode, key, signal: opts.signal, fetcher: opts.fetcher, timeoutMs: SECTION_TIMEOUT_MS });
         if (!call.ok) { failure ??= call; return; }
-        let reason = severeCorruption(s.text, call.content);
+        // At most one retry per section; keep whichever attempt has fewer problems.
+        let issues = sectionIssues(s, call.content);
         let retried = false;
-        if (reason && !opts.signal?.aborted) {
+        if (issues.length && !opts.signal?.aborted) {
           const again = await retryOnce(s);
-          if (again) { retried = true; call = again; reason = severeCorruption(s.text, again.content); }
+          if (again) {
+            retried = true;
+            const againIssues = sectionIssues(s, again.content);
+            if (againIssues.length < issues.length) { call = again; issues = againIssues; }
+          }
         }
-        if (reason) corruptionWarnings.push({ sectionIndex: s.index, reason, retried });
+        for (const i of issues) corruptionWarnings.push({ sectionIndex: s.index, ...i, retried });
         const aligned = alignRewrite(s.paragraphs, call.content);
         Object.assign(sections[s.index], { rewritten: aligned.paragraphs.map(cleanParagraph), structureChanged: aligned.structureChanged, aiScore: call.aiScore });
       }
@@ -208,6 +248,10 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
     const settled = await settleSpend(event.id, { outcome: "OK" }).catch(() => false);
     if (!settled) await markUnknown(event.id, "SETTLEMENT_FAILED").catch(() => {});
 
+    // Surgical proofread of the joined, cleaned draft. Fail-open; headings are never editable.
+    const slots = sections.flatMap(s => s.rewritten.map((text, p) => ({ s, p, text, editable: s.kind === "BODY" })));
+    const proof = await proofreadBlocks({ originalText: opts.content, blocks: slots, signal: opts.signal, source: opts.proofreader });
+    proof.blocks.forEach((b, i) => { if (b.text !== slots[i].text) slots[i].s.rewritten[slots[i].p] = b.text; });
     const content = sections.map(s => s.rewritten.join("\n\n")).join("\n\n");
     return {
       kind: "OK",
@@ -220,6 +264,9 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
         structureWarnings: sections.filter(s => s.structureChanged).length,
         corruptionWarnings: corruptionWarnings.sort((a, b) => a.sectionIndex - b.sectionIndex),
         retryBillableWords,
+        proofreadStatus: proof.status,
+        proofreadPatchesApplied: proof.applied.length,
+        proofreadSummary: proof.applied,
       },
     };
   })().finally(() => inFlight.delete(fk));
