@@ -165,9 +165,11 @@ async function generatePdf(content: string): Promise<{ buffer: Buffer; pageCount
 /**
  * Generate a DOCX from plain text content.
  * Professional simple formatting: 12pt body, paragraph spacing.
+ * Runs of spaces/tabs collapse to one space and trailing spaces are
+ * trimmed per line, so double spaces never reach the .docx.
  */
-async function generateDocx(content: string): Promise<Buffer> {
-  const paragraphs = content.split(/\n/);
+export async function generateDocx(content: string): Promise<Buffer> {
+  const paragraphs = content.split(/\n/).map(l => l.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+$/, ""));
 
   const docChildren: Paragraph[] = paragraphs.map(
     (text) =>

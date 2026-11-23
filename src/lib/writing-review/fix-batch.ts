@@ -60,15 +60,65 @@ export type RewriteCheck = { ok: true } | { ok: false; reason: string };
 
 const terminalMark = (s: string) => /([.!?])["'”’)\]]*\s*$/.exec(s)?.[1] ?? null;
 
+const ABBREVIATION = /^(?:e\.g|i\.e|etc|vs|approx|cf|al|fig|esp|incl)$/i;
+/** "word. lowercase" junctions — a period followed by a lowercase word,
+ *  skipping abbreviations (e.g. / i.e. / etc.), dotted acronyms and
+ *  ellipses. Keyed so only junctions NEW in a rewrite count. */
+function midSentenceBreaks(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/(\S+)\.[ \t]+([a-z][a-z'’-]*)/g)) {
+    const prev = m[1].replace(/^[("'“‘[]+/, "");
+    if (ABBREVIATION.test(prev) || prev.endsWith(".") || /\.\w/.test(prev)) continue;
+    out.add(`${prev.toLowerCase()}. ${m[2]}`);
+  }
+  return out;
+}
+
+const CHAT_LEAKS = [
+  /with the information (?:you['’]ve|you have) (?:given|provided)/i,
+  /here(?: is|['’]s) the rewritten/i,
+  /\bas requested\b/i,
+];
+const ENROLLED_IN_MASTERS = /\benrolled (?:in|for) (?:a|the) masters?\b/i;
+
+/**
+ * Severe corruptions a provider rewrite can introduce — checked for the
+ * single-sentence path (via checkRewrite) and per section by the
+ * full-document Humanizer. Only patterns ABSENT from the original count.
+ * Returns the reason, or null when none is found.
+ */
+export function severeCorruption(original: string, rewrite: string): string | null {
+  const before = midSentenceBreaks(original);
+  const broken = [...midSentenceBreaks(rewrite)].find(k => !before.has(k));
+  if (broken) return `the rewrite broke a sentence mid-way ("${broken}")`;
+  const leak = CHAT_LEAKS.map(re => rewrite.match(re)).find((m, i) => m && !CHAT_LEAKS[i].test(original));
+  if (leak) return `the rewrite contains a chat-assistant phrase ("${leak[0]}")`;
+  if (ENROLLED_IN_MASTERS.test(rewrite) && !/\benrolled\b/i.test(original)) {
+    return "the rewrite claims the applicant is already enrolled in a master's program";
+  }
+  return null;
+}
+
+const IRREGULAR_PAST = "built|made|led|wrote|ran|took|got|began|found|saw|taught|grew|became|chose|did|won|spent|kept|brought|thought|felt|met|held|gave|went|sought|understood|learnt";
+const SUBJECTLESS_START = new RegExp(`^(?:\\w+ly\\s+|(?:then|also|later|soon|eventually|previously)\\s+)?(?:\\w+ed|${IRREGULAR_PAST})\\b`);
+/** "I recently created…" rewritten as "Recently created…" — the subject vanished. */
+function droppedSubject(original: string, rewrite: string): boolean {
+  return /^I\s/.test(original.trim()) && !/\bI\b/.test(rewrite) && SUBJECTLESS_START.test(rewrite.trim().toLowerCase());
+}
+
 /**
  * Safety gate before a provider rewrite may be staged. Rejects — never
  * repairs — a rewrite that drops numbers/names/acronyms from the
- * original, loses the sentence's ending punctuation, or turns a
- * statement into a question.
+ * original, loses the sentence's ending punctuation, turns a statement
+ * into a question, introduces a severe corruption (mid-sentence break,
+ * chat phrase, applicant→enrolled flip) or drops the leading "I".
  */
 export function checkRewrite(original: string, replacement: string): RewriteCheck {
   const rewritten = replacement.trim();
   if (!rewritten) return { ok: false, reason: "the rewrite was empty" };
+  const severe = severeCorruption(original, rewritten);
+  if (severe) return { ok: false, reason: severe };
+  if (droppedSubject(original, rewritten)) return { ok: false, reason: 'the rewrite dropped the sentence\'s subject ("I")' };
   const lost = missingDetails(original, rewritten).filter(t => !/^I['’]/.test(t));
   if (lost.length) return { ok: false, reason: `the rewrite dropped details (${lost.slice(0, 4).join(", ")})` };
   const before = terminalMark(original), after = terminalMark(rewritten);

@@ -555,6 +555,11 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
                   </button>
                 </div>
               )}
+              {remaining.length > 0 && !batchBlocked && (
+                <p className="px-4 sm:px-6 py-2 border-b border-dvivid-border-light text-[11px] text-dvivid-text-secondary">
+                  Only a few sentences left? Edit them manually — stacking bulk sentence rewrites on an already-humanized draft breaks grammar and flow.
+                </p>
+              )}
               {batchConfirm && !batchBlocked && (
                 <div className="px-4 sm:px-6 py-2.5 border-b border-dvivid-border-light flex flex-wrap items-center gap-x-3 gap-y-2 text-xs bg-dvivid-surface-alt">
                   <span className="font-medium text-dvivid-text-primary">{remaining.length} unstaged flagged sentences</span>
