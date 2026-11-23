@@ -237,7 +237,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
       const warnings = [
         r.structureWarnings ? `Ryne changed the paragraph structure in ${r.structureWarnings} section(s) — those are shown as whole blocks.` : "",
         r.corruptionWarnings?.length
-          ? `${r.corruptionWarnings.length} section(s) may be corrupted: ${r.corruptionWarnings.map(w => `section ${w.sectionIndex + 1} — ${w.reason}${w.retried ? " (still present after one retry)" : ""}`).join("; ")}. Fix these passages before applying.`
+          ? `${r.corruptionWarnings.length} issue(s) to check: ${r.corruptionWarnings.map(w => `section ${w.sectionIndex + 1} — ${w.reason}${w.retried ? " (still present after one retry)" : ""}`).join("; ")}. Fix these passages before applying.`
           : "",
       ].filter(Boolean);
       setNotice(warnings.length ? { tone: "warning", text: `${warnings.join(" ")} Review before applying.` } : null);
@@ -407,6 +407,12 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
           <div className={`flex items-center justify-between gap-2 px-4 py-3 border-b rounded-t-card ${result ? "bg-dvivid-success-light/60 border-green-100" : "bg-dvivid-surface-alt border-dvivid-border-light"}`}>
             <h2 className="text-sm font-semibold text-dvivid-text-primary truncate">
               Humanized SOP {result && <span className="font-normal text-dvivid-text-muted">· Ryne {result.mode === "titan" ? "Titan" : "Balanced"}{edited !== null ? " · edited" : ""}</span>}
+              {result && result.proofreadPatchesApplied > 0 && (
+                <span className="ml-2 align-middle inline-flex px-1.5 py-0.5 rounded-sm bg-dvivid-surface-alt border border-dvivid-border-light text-[10px] font-normal text-dvivid-text-secondary"
+                  title={result.proofreadSummary.map(p => `${p.category}: "${p.find}" → "${p.replace}"`).join("\n")}>
+                  {result.proofreadPatchesApplied} grammar/fact fix{result.proofreadPatchesApplied === 1 ? "" : "es"} applied automatically
+                </span>
+              )}
             </h2>
             {result && (
               <div className="flex items-center gap-1.5 shrink-0">
