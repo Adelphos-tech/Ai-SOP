@@ -23,6 +23,10 @@ import {
 
 type Mode = "balanced" | "titan";
 
+/** Full-length drafts default to Titan; the consultant can still switch. */
+export const TITAN_DEFAULT_MIN_WORDS = 500;
+export const defaultHumanizerMode = (words: number): Mode => words > TITAN_DEFAULT_MIN_WORDS ? "titan" : "balanced";
+
 interface Pair { key: string; left: string; right: string; linked: boolean; heading: boolean; warn: boolean }
 
 function buildPairs(original: string, result: DocumentHumanizeResult | null, edited: string | null): Pair[] {
@@ -69,7 +73,8 @@ export interface HumanizerPanelProps {
 }
 
 export default function HumanizerPanel({ version, configured, pricing, apiUrl, documentId, detection, onSave, onDirtyChange, restorable, onRestore, onVersionDrift }: HumanizerPanelProps) {
-  const [mode, setMode] = useState<Mode>("balanced");
+  const [mode, setMode] = useState<Mode>(() => defaultHumanizerMode(countWords(version.content)));
+  const [modeChosen, setModeChosen] = useState(false);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [result, setResult] = useState<DocumentHumanizeResult | null>(null);
@@ -108,6 +113,8 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
 
   const plan = useMemo(() => planSections(version.content, { ...DEFAULT_SECTION_LIMITS, targetUnits: MAX_SECTION_WORDS }), [version.content]);
   const billableWords = plan.ok ? plan.bodyWords : countWords(version.content);
+  const longDraft = countWords(version.content) > TITAN_DEFAULT_MIN_WORDS;
+  useEffect(() => { if (!modeChosen) setMode(longDraft ? "titan" : "balanced"); }, [longDraft, modeChosen]);
   const per1k = mode === "titan" ? pricing.titanPer1k : pricing.balancedPer1k;
   const estimate = (billableWords / 1000) * per1k;
   const output = edited ?? result?.content ?? "";
@@ -227,9 +234,13 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
       if (!res.ok) { setNotice({ tone: "error", text: data.error || `Humanizing failed (HTTP ${res.status}).` }); return; }
       const r = data.result as DocumentHumanizeResult;
       setResult(r); setEdited(null); setApplied(false); setView("humanized");
-      setNotice(r.structureWarnings
-        ? { tone: "warning", text: `Ryne changed the paragraph structure in ${r.structureWarnings} section(s) — those are shown as whole blocks. Review them before applying.` }
-        : null);
+      const warnings = [
+        r.structureWarnings ? `Ryne changed the paragraph structure in ${r.structureWarnings} section(s) — those are shown as whole blocks.` : "",
+        r.corruptionWarnings?.length
+          ? `${r.corruptionWarnings.length} section(s) may be corrupted: ${r.corruptionWarnings.map(w => `section ${w.sectionIndex + 1} — ${w.reason}${w.retried ? " (still present after one retry)" : ""}`).join("; ")}. Fix these passages before applying.`
+          : "",
+      ].filter(Boolean);
+      setNotice(warnings.length ? { tone: "warning", text: `${warnings.join(" ")} Review before applying.` } : null);
     } catch (e: any) {
       setNotice(e?.name === "AbortError"
         ? { tone: "warning", text: "Cancelled. If Ryne had already started, the request may still be billed." }
@@ -302,16 +313,18 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
       <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6 py-4 border-b border-dvivid-border-light">
         <label className="flex items-center gap-2 text-sm font-medium text-dvivid-text-primary">
           <span className="whitespace-nowrap">Humanizer model</span>
-          <select value={mode} onChange={e => setMode(e.target.value as Mode)} disabled={running}
+          <select value={mode} onChange={e => { setMode(e.target.value as Mode); setModeChosen(true); }} disabled={running}
             className="border border-dvivid-border rounded-input px-3 py-2 text-sm bg-white focus:outline-none focus-visible:shadow-focus">
-            <option value="balanced">Balanced (Recommended) · ${pricing.balancedPer1k}/1K</option>
-            <option value="titan">Titan · ${pricing.titanPer1k}/1K</option>
+            <option value="balanced">Balanced{longDraft ? "" : " (Recommended)"} · ${pricing.balancedPer1k}/1K</option>
+            <option value="titan">Titan{longDraft ? " (Recommended)" : ""} · ${pricing.titanPer1k}/1K</option>
           </select>
         </label>
         <p className="hidden md:block text-xs text-dvivid-text-secondary max-w-sm">
-          {mode === "titan"
-            ? "Strongest rewrite for strict detectors. English only."
-            : "Keeps your structure and phrasing while making it read more naturally."}
+          {longDraft && mode === "titan"
+            ? `Titan is recommended for full-length SOPs (over ${TITAN_DEFAULT_MIN_WORDS} words).`
+            : mode === "titan"
+              ? "Strongest rewrite for strict detectors. English only."
+              : "Keeps your structure and phrasing while making it read more naturally."}
         </p>
         <div className="ml-auto flex items-center gap-3 text-xs text-dvivid-text-secondary">
           <span>Words: <b className="text-dvivid-text-primary">{stats.ow.toLocaleString()}</b></span>
@@ -321,10 +334,15 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
 
       <div className="px-4 sm:px-6 pt-4 space-y-2" aria-live="polite">
         {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
-        {applied && (
+        {result && !applied && (
           <Notice tone="info" role="status">
+            Review the rewrite, then apply and <span className="font-semibold">save this humanized version before running AI Detection</span> — reports only check saved versions.
+          </Notice>
+        )}
+        {applied && (
+          <Notice tone="warning" role="status">
             <span className="font-semibold">Rewrite applied to your working draft — not saved yet.</span>{" "}
-            Save it as a new version, or undo to keep the original.
+            Save this humanized version before running AI Detection, or undo to keep the original.
           </Notice>
         )}
         {restorable && !result && (
@@ -469,7 +487,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
           </>}
           {result && applied && <>
             <SecondaryButton onClick={() => setApplied(false)} disabled={saving} className="flex-1 sm:flex-none">Undo Apply</SecondaryButton>
-            <PrimaryButton onClick={save} disabled={saving || !output.trim()} className="flex-1 sm:flex-none">{saving ? "Saving…" : "Save as New Version"}</PrimaryButton>
+            <PrimaryButton onClick={save} disabled={saving || !output.trim()} className="flex-1 sm:flex-none ring-2 ring-dvivid-primary/40 ring-offset-1">{saving ? "Saving…" : "Save as New Version"}</PrimaryButton>
           </>}
           {!result && (
             <PrimaryButton onClick={humanize} disabled={running || !configured || !plan.ok} className="w-full sm:w-auto">

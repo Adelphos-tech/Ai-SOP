@@ -18,3 +18,9 @@ export function stripInlineLatexMath(text: string): string {
   return text.replace(INLINE_NUMERIC_MATH, (_m, body: string) =>
     body.replace(/\\%/g, "%").replace(/\\times/g, "×"));
 }
+
+/** Collapse runs of spaces/tabs inside each line and trim the line's
+ *  ends. Newlines (and so paragraph breaks) are left untouched. */
+export function collapseHorizontalWhitespace(text: string): string {
+  return text.split("\n").map(l => l.replace(/[ \t]{2,}/g, " ").trim()).join("\n");
+}

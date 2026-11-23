@@ -13,7 +13,7 @@ import {
 import { aggregateFindings, applySpanEdits, beastModeBadge, detectorVerdict, isReportOutdated, latestVersionScore, mostlyFlagged, primaryScore, type ReportRun } from "../src/lib/writing-review/report";
 import { runRewrite } from "../src/lib/writing-review/rewrite";
 import {
-  BATCH_MAX_FLAGGED, batchFixBlocked, checkRewrite, isFixableFinding, runBatchFix, unstagedTargets, type BatchTarget,
+  BATCH_MAX_FLAGGED, batchFixBlocked, checkRewrite, isFixableFinding, runBatchFix, severeCorruption, unstagedTargets, type BatchTarget,
 } from "../src/lib/writing-review/fix-batch";
 import { mapSentenceFindings } from "../src/lib/writing-review/ryne-client";
 import { listDetectorDescriptors, listDetectorStatuses } from "../src/lib/writing-review/detectors";
@@ -24,6 +24,8 @@ import {
   detectorDisplayName, generateDetectionReportPdf, sanitizeForWinAnsi, stripLeadingTitle, titleCase, wrapWithOffsets,
 } from "../src/lib/writing-review/report-pdf";
 import { stripInlineLatexMath } from "../src/lib/ai/plain-text";
+import { generateDocx } from "../src/lib/application/document-export";
+import JSZip from "jszip";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { PDFDocument } from "pdf-lib";
@@ -371,6 +373,51 @@ async function main() {
     assert.equal(sent.length, 1);
   });
 
+  await check("humanizer hygiene: double spaces collapsed, numeric LaTeX unwrapped, currency kept, headings intact", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: WITH_HEADINGS,
+      fetcher: echo({ body: t => ({ content: t.split("\n\n").map(p => `  My CGPA was $9.2/10$  and I saved $50,000.  ${p}  `).join("\n\n") }) }) }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.ok(!/ {2}/.test(out.result.content), "no double spaces remain");
+    assert.ok(out.result.content.includes("9.2/10") && !out.result.content.includes("$9.2/10$"));
+    assert.ok(out.result.content.includes("$50,000"));
+    const paras = out.result.content.split("\n\n");
+    assert.equal(paras[0], "Introduction");
+    assert.ok(paras.every(p => p === p.trim()));
+    assert.equal(out.result.sections[1].rewritten[0], paras[1]); // sections carry the same cleaned text
+    assert.deepEqual(out.result.corruptionWarnings, []);
+  });
+
+  await check("humanizer: corrupted section (chat leak) is retried once and the clean retry is used", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    sent.length = 0;
+    let calls = 0;
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: SOP,
+      fetcher: echo({ body: t => (++calls === 1
+        ? { content: t.split("\n\n").map(p => `With the information you've given me, ${p}`).join("\n\n") }
+        : { content: t }) }) }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(sent.length, 2);
+    assert.ok(!/information you've given/.test(out.result.content));
+    assert.deepEqual(out.result.corruptionWarnings, []);
+    assert.equal(out.result.retryBillableWords, countWords(SOP));
+  });
+
+  await check("humanizer: enrolled-in-Masters flip that survives the retry is flagged, not hidden", async () => {
+    (globalThis.__MOCK_DB as any) = {};
+    sent.length = 0;
+    const out = await runDocumentHumanize(base({ operationId: randomUUID(), content: SOP,
+      fetcher: echo({ body: t => ({ content: t.replace("I want to join", "I recently enrolled in a Masters of Science and want to join") }) }) }));
+    assert.equal(out.kind, "OK");
+    if (out.kind !== "OK") return;
+    assert.equal(sent.length, 2); // first attempt + exactly one retry
+    assert.equal(out.result.corruptionWarnings.length, 1);
+    assert.equal(out.result.corruptionWarnings[0].retried, true);
+    assert.match(out.result.corruptionWarnings[0].reason, /enrolled/);
+  });
+
   await check("paragraph merge by provider → flagged structure change, never silent", async () => {
     const out = await runDocumentHumanize(base({ content: SOP, fetcher: echo({ body: t => ({ content: t.replace(/\n\n/g, " ") }) }) }));
     assert.equal(out.kind, "OK");
@@ -644,6 +691,35 @@ async function main() {
     if (!name.ok) assert.match(name.reason, /MATLAB|REGEN/);
   });
 
+  await check("checkRewrite rejects the Rathin Dave corruption patterns", () => {
+    const frag = checkRewrite("I want to find potential solutions to address this through memory management.",
+      "I want to find potential solutions to address this. through the utilization of memory management.");
+    assert.equal(frag.ok, false);
+    if (!frag.ok) assert.match(frag.reason, /mid-way/);
+    const chat = checkRewrite("I would then evaluate whether these recommendations fit my goals.",
+      "With the information you've given me, I would then evaluate whether these recommendations fit my goals.");
+    assert.equal(chat.ok, false);
+    if (!chat.ok) assert.match(chat.reason, /chat-assistant/);
+    const enrolled = checkRewrite("I am applying to a Master of Science in Computer Science.",
+      "I recently enrolled in a Masters of Science in Computer Science.");
+    assert.equal(enrolled.ok, false);
+    if (!enrolled.ok) assert.match(enrolled.reason, /enrolled/);
+    const subject = checkRewrite("I recently created a local version of this assistant using Qwen and Ollama.",
+      "Recently created a local version of this assistant using Qwen and Ollama.");
+    assert.equal(subject.ok, false);
+    if (!subject.ok) assert.match(subject.reason, /subject/);
+  });
+
+  await check("checkRewrite / severeCorruption accept clean rewrites and pre-existing patterns", () => {
+    assert.equal(checkRewrite("I recently created a local version of this assistant using Qwen and Ollama.",
+      "I recently built a local version of this assistant with Qwen and Ollama.").ok, true);
+    assert.equal(checkRewrite("I used tools, e.g. MATLAB, during the project.", "I relied on tools, e.g. MATLAB, during the project.").ok, true);
+    assert.equal(checkRewrite("I studied in the U.S. for one semester.", "I spent one semester studying in the U.S. as an exchange student.").ok, true);
+    assert.equal(checkRewrite("Motivated by this, I developed a new pipeline.", "Driven by this, I developed a new pipeline.").ok, true);
+    assert.equal(severeCorruption("I enrolled in a Masters course last year.", "Last year I enrolled in a Masters course."), null);
+    assert.equal(severeCorruption("As requested by my manager, I led the audit.", "As requested by my manager, I ran the audit."), null);
+  });
+
   await check("checkRewrite rejects dropped ending punctuation and statement → question", () => {
     const run = checkRewrite("I used MATLAB, SAGE, and REGEN 3.3.", "I used MATLAB, SAGE, REGEN 3.3 Working in constructing");
     assert.equal(run.ok, false);
@@ -849,6 +925,15 @@ async function main() {
       content: "Arrows \u2192 minus \u2212 \u201Cquotes\u201D emoji \uD83D\uDE00 zero\u200Bwidth and " + "verylongurl".repeat(30),
     });
     assert.ok(buffer.subarray(0, 5).toString() === "%PDF-");
+  });
+
+  await check("generateDocx: double spaces and trailing spaces never reach the .docx", async () => {
+    const buf = await generateDocx("STATEMENT OF PURPOSE\n\nI built  a system.   It worked\t\twell.   \nSecond  line.");
+    const xml = await (await JSZip.loadAsync(buf)).file("word/document.xml")!.async("string");
+    const runs = [...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]);
+    assert.ok(runs.includes("I built a system. It worked well."), JSON.stringify(runs));
+    assert.ok(runs.includes("Second line."));
+    assert.ok(runs.every(r => !/ {2}|\t| $/.test(r)));
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -17,6 +17,8 @@ import {
   type OperationRecord,
 } from "./spend-ledger";
 import { alignRewrite, countWords, DEFAULT_SECTION_LIMITS, MAX_SECTION_WORDS, planSections, type SectionLimits } from "./document-structure";
+import { severeCorruption } from "./fix-batch";
+import { collapseHorizontalWhitespace, stripInlineLatexMath } from "../ai/plain-text";
 
 const SECTION_TIMEOUT_MS = 120_000; // Titan retries flagged drafts internally
 const SECTION_CONCURRENCY = 3;      // keeps multi-section documents inside the proxy timeout
@@ -32,6 +34,9 @@ export interface HumanizedSection {
   aiScore?: number;
 }
 
+/** A section whose rewrite still shows a severe corruption (after one retry, when it could be booked). */
+export interface CorruptionWarning { sectionIndex: number; reason: string; retried: boolean }
+
 export interface DocumentHumanizeResult {
   mode: RewriteMode;
   versionId: string;
@@ -43,6 +48,9 @@ export interface DocumentHumanizeResult {
   /** Documented per-word price × billable words — an estimate, not a provider-confirmed charge. */
   estimatedCostUsd: number;
   structureWarnings: number;
+  corruptionWarnings: CorruptionWarning[];
+  /** Extra words billed by corruption retries (each booked as its own ledger operation). */
+  retryBillableWords: number;
 }
 
 export type DocumentHumanizeOutcome =
@@ -69,6 +77,16 @@ export function estimateDocumentCostUsd(words: number, mode: RewriteMode): numbe
 }
 
 const inFlight = new Map<string, Promise<DocumentHumanizeOutcome>>();
+
+/** Deterministic UUID-shaped id derived from an operation id — a retry
+ *  of the same section in the same operation maps to the same ledger row. */
+function derivedOperationId(base: string, tag: string): string {
+  const h = createHash("sha256").update(`${base}:${tag}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h[16], 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/** Provider output hygiene: collapsed spaces, trimmed lines, numeric inline LaTeX unwrapped. */
+const cleanParagraph = (p: string) => stripInlineLatexMath(collapseHorizontalWhitespace(p)).trim();
 
 export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promise<DocumentHumanizeOutcome> {
   if (opts.signal?.aborted) return { kind: "CANCELLED" };
@@ -136,13 +154,40 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
     const body = plan.sections.filter(s => s.kind === "BODY");
     let failure: { code: string; message: string; retryable: boolean } | null = null;
     let cursor = 0;
+    const corruptionWarnings: CorruptionWarning[] = [];
+    let retryBillableWords = 0;
+    // One extra paid attempt for a corrupted section, booked as its own
+    // ledger operation so budget caps and spend records include it. If it
+    // cannot be booked or fails, the first rewrite stays and is flagged.
+    const retryOnce = async (s: (typeof body)[number]) => {
+      const reservation = await reserveSpend({
+        operationId: derivedOperationId(opts.operationId, `retry:${s.index}`), kind: "HUMANIZER",
+        units: [{ unit: mode, quantity: s.words }],
+        actorId: opts.actorId ?? null,
+        ids: { ...opts.ids, versionId: opts.versionId },
+      }).catch(() => null);
+      if (reservation?.kind !== "RESERVED") return null;
+      const ev = reservation.events[0];
+      const call = await callRyneHumanizer({ text: s.text, mode, key, signal: opts.signal, fetcher: opts.fetcher, timeoutMs: SECTION_TIMEOUT_MS });
+      if (!call.ok) { await markUnknown(ev.id, `RETRY_${call.code}`).catch(() => {}); return null; }
+      if (!(await settleSpend(ev.id, { outcome: "OK_RETRY" }).catch(() => false))) await markUnknown(ev.id, "SETTLEMENT_FAILED").catch(() => {});
+      retryBillableWords += s.words;
+      return call;
+    };
     const worker = async () => {
       while (!failure && cursor < body.length) {
         const s = body[cursor++];
-        const call = await callRyneHumanizer({ text: s.text, mode, key, signal: opts.signal, fetcher: opts.fetcher, timeoutMs: SECTION_TIMEOUT_MS });
+        let call = await callRyneHumanizer({ text: s.text, mode, key, signal: opts.signal, fetcher: opts.fetcher, timeoutMs: SECTION_TIMEOUT_MS });
         if (!call.ok) { failure ??= call; return; }
+        let reason = severeCorruption(s.text, call.content);
+        let retried = false;
+        if (reason && !opts.signal?.aborted) {
+          const again = await retryOnce(s);
+          if (again) { retried = true; call = again; reason = severeCorruption(s.text, again.content); }
+        }
+        if (reason) corruptionWarnings.push({ sectionIndex: s.index, reason, retried });
         const aligned = alignRewrite(s.paragraphs, call.content);
-        Object.assign(sections[s.index], { rewritten: aligned.paragraphs, structureChanged: aligned.structureChanged, aiScore: call.aiScore });
+        Object.assign(sections[s.index], { rewritten: aligned.paragraphs.map(cleanParagraph), structureChanged: aligned.structureChanged, aiScore: call.aiScore });
       }
     };
     await Promise.all(Array.from({ length: Math.min(SECTION_CONCURRENCY, body.length) }, worker));
@@ -171,8 +216,10 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
         originalWords: countWords(opts.content),
         rewrittenWords: countWords(content),
         billableWords: words,
-        estimatedCostUsd: estimateDocumentCostUsd(words, mode),
+        estimatedCostUsd: estimateDocumentCostUsd(words + retryBillableWords, mode),
         structureWarnings: sections.filter(s => s.structureChanged).length,
+        corruptionWarnings: corruptionWarnings.sort((a, b) => a.sectionIndex - b.sectionIndex),
+        retryBillableWords,
       },
     };
   })().finally(() => inFlight.delete(fk));

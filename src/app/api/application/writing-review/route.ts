@@ -27,7 +27,7 @@ import {
 import { runDetection, RYNE_MAX_CHARS } from "@/lib/writing-review/detection";
 import { runRewrite } from "@/lib/writing-review/rewrite";
 import { runDocumentHumanize } from "@/lib/writing-review/document-humanizer";
-import { isFixableFinding } from "@/lib/writing-review/fix-batch";
+import { checkRewrite, isFixableFinding } from "@/lib/writing-review/fix-batch";
 
 async function loadReviewContext(request: NextRequest) {
   // Brick 4A: real session auth — requireConsultantSession() is a
@@ -206,7 +206,9 @@ export async function POST(request: NextRequest) {
       });
       switch (out.kind) {
         case "OK":
-          return NextResponse.json({ suggestion: out.suggestion });
+          // Same safety gate the Studio applies before staging — returned
+          // so any caller sees a corrupted rewrite flagged, not just the UI.
+          return NextResponse.json({ suggestion: out.suggestion, safety: checkRewrite(passageText, out.suggestion.content ?? "") });
         case "NOT_CONFIGURED":
         case "CONSENT_REQUIRED":
           return NextResponse.json({ error: out.notice }, { status: 400 });
