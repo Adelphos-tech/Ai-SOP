@@ -105,7 +105,17 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
   // each finding's resolved start offset and committed in ONE save.
   const [fixes, setFixes] = useState<Map<number, SpanEdit>>(new Map());
   const [anchor, setAnchor] = useState<number | null>(null);
-  const [fixMode, setFixMode] = useState<"balanced" | "titan">("balanced");
+  const [fixMode, setFixMode] = useState<string>("balanced");
+  const [fixModels, setFixModels] = useState<Array<{ id: string; label: string; pricePer1kUsd: number }>>([
+    { id: "balanced", label: "Balanced", pricePer1kUsd: 0.08 },
+    { id: "titan", label: "Titan", pricePer1kUsd: 0.5 },
+  ]);
+  useEffect(() => {
+    fetch("/api/writing-review/models")
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d.models) && d.models.length) setFixModels(d.models); })
+      .catch(() => { /* offline — verified defaults stay */ });
+  }, []);
   const [consent, setConsent] = useState(false);
   const [rw, setRw] = useState<{ busy: boolean; suggestion?: { content: string; aiScore?: number; aiScoreUnavailable?: boolean; estimatedCostUsd: number }; error?: string }>({ busy: false });
   const [editing, setEditing] = useState(false);
@@ -266,9 +276,8 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
     [agg, stagedStarts],
   );
   const estBatchUsd = useMemo(() => {
-    const per1k = fixMode === "titan"
-      ? (config?.rewritePricing?.titanPer1k ?? 0.5)
-      : (config?.rewritePricing?.balancedPer1k ?? 0.08);
+    const per1k = fixModels.find(m => m.id === fixMode)?.pricePer1kUsd
+      ?? (config?.rewritePricing?.titanPer1k ?? 0.5);
     return remaining.reduce((sum, t) => sum + t.text.trim().split(/\s+/).filter(Boolean).length, 0) / 1000 * per1k;
   }, [remaining, fixMode, config]);
 
@@ -359,10 +368,10 @@ export default function DetectionReportPanel({ version, config, apiUrl, pdfUrl, 
   function ModeToggle() {
     return (
       <div className="inline-flex p-0.5 rounded-button border border-dvivid-border bg-white" role="group" aria-label="Rewrite mode">
-        {(["balanced", "titan"] as const).map(m => (
-          <button key={m} type="button" onClick={() => setFixMode(m)} aria-pressed={fixMode === m}
-            className={`px-2 py-0.5 rounded-[5px] text-[11px] font-medium capitalize ${fixMode === m ? "bg-dvivid-primary text-white" : "text-dvivid-text-secondary"}`}>
-            {m}
+        {fixModels.map(m => (
+          <button key={m.id} type="button" onClick={() => setFixMode(m.id)} aria-pressed={fixMode === m.id}
+            className={`px-2 py-0.5 rounded-[5px] text-[11px] font-medium ${fixMode === m.id ? "bg-dvivid-primary text-white" : "text-dvivid-text-secondary"}`}>
+            {m.label}
           </button>
         ))}
       </div>

@@ -11,7 +11,7 @@
 
 import { createHash } from "crypto";
 import { paidCallsEnabled } from "./detection";
-import { callRyneHumanizer, REWRITE_PRICE_PER_1K_USD, type RewriteMode } from "./rewrite";
+import { callRyneHumanizer, type RewriteMode } from "./rewrite";
 import {
   canonicalUnitsKey, getOperation, markUnknown, refundSpend, reserveSpend, settleSpend,
   type OperationRecord,
@@ -22,6 +22,7 @@ import {
 } from "./document-structure";
 import { proofreadBlocks, type ProofreadPatch, type ProofreadPatchSource, type ProofreadStatus } from "./post-humanize-proofread";
 import { severeCorruption } from "./fix-batch";
+import { normalizeRyneModel, ryneModelPricePer1k } from "./ryne-models";
 import { collapseHorizontalWhitespace, stripInlineLatexMath } from "../ai/plain-text";
 
 const SECTION_TIMEOUT_MS = 120_000; // Titan retries flagged drafts internally
@@ -108,7 +109,7 @@ export interface DocumentHumanizeOptions {
 }
 
 export function estimateDocumentCostUsd(words: number, mode: RewriteMode): number {
-  return (words / 1000) * REWRITE_PRICE_PER_1K_USD[mode];
+  return (words / 1000) * ryneModelPricePer1k(mode);
 }
 
 const inFlight = new Map<string, Promise<DocumentHumanizeOutcome>>();
@@ -133,7 +134,7 @@ export async function runDocumentHumanize(opts: DocumentHumanizeOptions): Promis
   if (!opts.confirmPaid) {
     return { kind: "CONSENT_REQUIRED", notice: "Explicit consent is required before the document is sent to Ryne." };
   }
-  const mode: RewriteMode = opts.mode === "titan" ? "titan" : "balanced";
+  const mode = normalizeRyneModel(opts.mode);
   // ~400-word narrative blocks keep each Ryne call inside one coherent
   // passage; paragraph boundaries and the hard provider caps still apply.
   const plan = planSections(opts.content, opts.limits ?? { ...DEFAULT_SECTION_LIMITS, targetUnits: MAX_SECTION_WORDS });

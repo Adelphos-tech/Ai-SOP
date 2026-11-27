@@ -19,6 +19,7 @@
 
 import { randomUUID } from "crypto";
 import { getDbPool } from "@/lib/application/db";
+import { ryneModelSpec } from "./ryne-models";
 
 // ---------- pricing configuration ----------
 
@@ -53,10 +54,19 @@ const PRICE_BOOK: Record<string, PriceSpec> = {
   surfer:      { unit: "REQUEST", unitPriceUsd: null,         verified: false, source: "no-quote-recorded" },
   balanced:    { unit: "WORD",    unitPriceUsd: 0.00008,      verified: false, source: "ryne-docs-quoted-unverified" }, // ~$0.08/1K
   titan:       { unit: "WORD",    unitPriceUsd: 0.0005,       verified: false, source: "ryne-docs-quoted-unverified" }, // ~$0.50/1K
+  apex:        { unit: "WORD",    unitPriceUsd: 0.0005,       verified: false, source: "ryne-docs-quoted-unverified" }, // ~$0.50/1K
+}
+
+/** Any humanizer model the registry knows but the static book does not
+ *  (env extras, auto-discovered modes) is priced from the registry —
+ *  word-billed, unverified quote. Unknown units stay unpriced. */
+function registryPriceSpec(unit: string): PriceSpec | null {
+  const m = ryneModelSpec(unit);
+  return m ? { unit: "WORD", unitPriceUsd: m.pricePer1kUsd / 1000, verified: false, source: "ryne-model-registry" } : null;
 };
 
 export function priceSpec(unit: string): PriceSpec | null {
-  return PRICE_BOOK[unit] ?? null;
+  return PRICE_BOOK[unit] ?? registryPriceSpec(unit);
 }
 
 // ---------- budget configuration ----------
@@ -208,7 +218,7 @@ type Estimate =
   | { ok: false; reason: string };
 
 export function estimateFor(unit: string, quantity = 1): Estimate {
-  const spec = PRICE_BOOK[unit];
+  const spec = priceSpec(unit);
   if (!spec) return { ok: false, reason: `unknown billable unit "${unit}"` };
   const qty = spec.unit === "REQUEST" ? 1 : Math.max(0, quantity);
   const quoted = spec.unitPriceUsd == null ? null : spec.unitPriceUsd * qty;

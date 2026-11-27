@@ -262,15 +262,15 @@ async function main() {
     const runnable = listDetectorDescriptors()
       .filter(d => d.integration === "RYNE_AI_SCORE" && d.configured && !d.disabledReason)
       .map(d => d.detector);
-    assert.deepEqual([...runnable].sort(), ["GPTZERO", "ORIGINALITY", "QUILLBOT", "REILAA", "SURFER", "ZEROGPT"]);
+    assert.deepEqual([...runnable].sort(), ["GPTZERO", "REILAA", "SURFER", "ZEROGPT"]);
     // Non-API placeholders stay in the registry/labels but never in
     // the runnable selector pool.
     const all = listDetectorDescriptors().map(d => d.detector);
     assert.ok(all.includes("TURNITIN") && all.includes("RYNE_AI"));
     assert.ok(!runnable.includes("TURNITIN") && !runnable.includes("RYNE_AI"));
     const statuses = listDetectorStatuses();
-    assert.equal(statuses.find(s => s.detector === "QUILLBOT")!.status, "PENDING");
-    assert.equal(statuses.find(s => s.detector === "ORIGINALITY")!.status, "PENDING");
+    assert.equal(statuses.find(s => s.detector === "QUILLBOT")!.status, "UNAVAILABLE");
+    assert.equal(statuses.find(s => s.detector === "ORIGINALITY")!.status, "UNAVAILABLE");
     assert.equal(statuses.find(s => s.detector === "TURNITIN")!.status, "UNAVAILABLE");
   });
 
