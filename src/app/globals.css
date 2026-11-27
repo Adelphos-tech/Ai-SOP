@@ -61,3 +61,39 @@ button, a, input, select, textarea {
 .document-prosemirror ol { list-style: decimal; padding-left: 1.5em; margin: 0.5em 0; }
 .document-prosemirror blockquote { border-left: 3px solid #DCE3EE; padding-left: 1em; margin: 0.75em 0; color: #5B6B85; }
 .document-prosemirror:focus { outline: none; }
+
+/* Inline AI rewrite — persistent selection highlight, generating shimmer, reveal sweep */
+.document-prosemirror .ir-sel {
+  background-color: rgba(37, 99, 235, 0.16);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.10);
+}
+.document-prosemirror .ir-loading {
+  background-image: linear-gradient(100deg,
+    rgba(37, 99, 235, 0.16) 30%,
+    rgba(96, 165, 250, 0.45) 50%,
+    rgba(37, 99, 235, 0.16) 70%);
+  background-size: 200% 100%;
+  border-radius: 2px;
+  animation: ir-shimmer 1.1s linear infinite;
+}
+@keyframes ir-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -80% 0; }
+}
+.document-prosemirror .ir-reveal {
+  border-radius: 2px;
+  animation: ir-reveal 1.2s ease-out forwards;
+}
+@keyframes ir-reveal {
+  from { background-color: rgba(16, 185, 129, 0.30); }
+  to { background-color: rgba(16, 185, 129, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .document-prosemirror .ir-loading {
+    animation: none;
+    background-image: none;
+    background-color: rgba(37, 99, 235, 0.16);
+  }
+  .document-prosemirror .ir-reveal { animation-duration: 0.01s; }
+}

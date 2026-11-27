@@ -943,6 +943,7 @@ export default function DocumentWorkspacePage() {
                   onChange={setEditorContent}
                   readOnly={editorMode === "view"}
                   placeholder="Edit document content..."
+                  documentId={documentId}
                 />
               </div>
 
