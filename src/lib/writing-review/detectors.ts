@@ -6,6 +6,7 @@
 // ============================================================
 
 import { createHash } from "crypto";
+import { listRyneModelsSync } from "./ryne-models";
 import type {
   AnalysisSummary,
   DetectorId,
@@ -115,6 +116,9 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
       scoreMeaning: "AI_PROBABILITY_PERCENT",
       granularity: "UNKNOWN",
       configured: ryne,
+      // Verified broken upstream — kept for historical reports/labels,
+      // excluded from runnable lists and new checks.
+      disabledReason: "Disabled — the provider's endpoint returns errors and cannot produce scores.",
       note: via("originality", ""),
     },
     {
@@ -125,7 +129,10 @@ export function listDetectorDescriptors(): DetectorDescriptor[] {
       scoreMeaning: "AI_PROBABILITY_PERCENT",
       granularity: "UNKNOWN",
       configured: ryne,
-      note: via("originality", ""),
+      // Verified broken upstream — kept for historical reports/labels,
+      // excluded from runnable lists and new checks.
+      disabledReason: "Disabled — the provider's endpoint returns errors and cannot produce scores.",
+      note: via("quillbot", ""),
     },
     {
       detector: "SURFER",
@@ -158,7 +165,7 @@ export function ryneRewriteStatus(): RewriteProviderStatus {
     id: "ryne-humanizer",
     name: "Ryne AI Humanizer",
     configured,
-    supportedModes: ["balanced", "titan"],
+    supportedModes: listRyneModelsSync().map(m => m.id),
     note: configured
       ? "Connected. Rewrites are billed to prepaid Ryne credits."
       : "Not connected — RYNE_API_KEY is not configured.",

@@ -44,8 +44,8 @@ async function main() {
   process.env.RYNE_DAILY_BUDGET_USD = "100";
 
   assert.ok(runnableTools().includes("reilaa"));
-  assert.equal(runnableTools().length, 6);
-  assert.ok(runnableTools().includes("quillbot") && runnableTools().includes("originality"));
+  assert.equal(runnableTools().length, 4); // quillbot + originality disabled upstream
+  assert.ok(!runnableTools().includes("quillbot") && !runnableTools().includes("originality"));
 
   {
     const out = await runDetection("d-consent", baseOpts({ confirmPaid: false }));
@@ -194,27 +194,32 @@ async function main() {
   }
 
   {
-    // Re-enabled tools run like any other — each selection is one
-    // billable call with its own honest status.
+    // Disabled tools (verified broken upstream) are filtered out of the
+    // request — they cannot trigger a provider call or a charge, and a
+    // run that selects only disabled tools asks for consent again.
     let calls = 0;
     const tools: string[] = [];
-    const fallbacks: string[] = [];
-    const out = await runDetection("d-reenabled", baseOpts({
+    const out = await runDetection("d-disabled", baseOpts({
       detectors: ["QUILLBOT", "ORIGINALITY"],
-      fetcher: (async (_u: any, init: any) => { calls++; tools.push(init?.headers?.tool); fallbacks.push(init?.headers?.["fallback-tool"]); return new Response(JSON.stringify({ source: init?.headers?.tool, aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
+      fetcher: (async (_u: any, init: any) => { calls++; tools.push(init?.headers?.tool); return new Response(JSON.stringify({ source: init?.headers?.tool, aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
     }));
-    assert.equal(out.kind, "OK");
-    assert.equal(calls, 2);
-    assert.deepEqual(tools.sort(), ["originality", "quillbot"]);
-    // Non-reilaa tools opt out of fallback per Ryne's spec — the header
-    // only applies when reilaa fails, and passing it elsewhere could
-    // reroute/mis-score the request upstream.
-    assert.ok(fallbacks.every(f => f === "none"));
-    if (out.kind === "OK") {
-      assert.equal(out.detection.scores.find(s => s.detector === "QUILLBOT")!.status, "SCORED");
-      assert.equal(out.detection.scores.find(s => s.detector === "ORIGINALITY")!.status, "SCORED");
+    assert.equal(out.kind, "CONSENT_REQUIRED"); // nothing runnable was selected
+    assert.equal(calls, 0);
+    // A mixed selection runs only the enabled detectors.
+    const out2 = await runDetection("d-mixed-disabled", baseOpts({
+      detectors: ["QUILLBOT", "GPTZERO"],
+      fetcher: (async (_u: any, init: any) => { tools.push(init?.headers?.tool); return new Response(JSON.stringify({ source: "gptzero", aiScore: 12, classification: "HUMAN_ONLY", details: { sentences: [] } }), { status: 200 }) as any; }) as any,
+    }));
+    assert.equal(out2.kind, "OK");
+    assert.deepEqual(tools, ["gptzero"]); // quillbot never reached the provider
+    // Disabled detectors stay in the registry for legacy reports —
+    // rendered UNAVAILABLE, never fabricated as scores.
+    if (out2.kind === "OK") {
+      assert.equal(out2.detection.scores.find(s => s.detector === "QUILLBOT")!.status, "UNAVAILABLE");
+      assert.equal(out2.detection.scores.find(s => s.detector === "ORIGINALITY")!.status, "UNAVAILABLE");
+      assert.equal(out2.detection.scores.find(s => s.detector === "GPTZERO")!.status, "SCORED");
     }
-    console.log("PASS  re-enabled detectors bill one call each and score independently");
+    console.log("PASS  disabled detectors cannot trigger calls; legacy entries render gracefully");
     pass++;
   }
 

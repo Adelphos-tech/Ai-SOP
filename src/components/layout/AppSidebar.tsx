@@ -33,12 +33,18 @@ const ICONS = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6.25v11.5m0-11.5c-.75-1.2-2.25-1.75-4-1.75-1.6 0-3 .3-4 .75v11.5c1-.45 2.4-.75 4-.75 1.75 0 3.25.55 4 1.75m0-11.5c.75-1.2 2.25-1.75 4-1.75 1.6 0 3 .3 4 .75v11.5c-1-.45-2.4-.75-4-.75-1.75 0-3.25.55-4 1.75" />
     </svg>
   ),
+  humanizer: (
+    <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.5 3.5l1.7 4.3 4.3 1.7-4.3 1.7-1.7 4.3-1.7-4.3-4.3-1.7 4.3-1.7 1.7-4.3zM17.5 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z" />
+    </svg>
+  ),
 };
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/students", label: "Students", icon: ICONS.students },
   { href: "/applications", label: "Applications", icon: ICONS.applications },
   { href: "/requirements-library", label: "Requirements", icon: ICONS.requirements },
+  { href: "/humanizer", label: "Humanizer & AI Check", icon: ICONS.humanizer },
 ];
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {

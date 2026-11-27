@@ -74,7 +74,36 @@ const InlineRewriteHighlight = Extension.create({
           decorations(state) {
             const cur = IR_KEY.getState(state);
             if (!cur) return null;
-            const cls = cur.mode === "loading" ? "ir-loading" : cur.mode === "reveal" ? "ir-reveal" : "ir-sel";
+            if (cur.mode === "reveal") {
+              // Blur-to-sharp cascade: split the replaced span into ~4-word
+              // chunks, each with a stepped animation-delay for the
+              // left-to-right reveal. Chunked at word boundaries so the
+              // sweep reads as word-by-word, never mid-word.
+              const chunks: { a: number; b: number }[] = [];
+              state.doc.nodesBetween(cur.from, cur.to, (node, pos) => {
+                if (!node.isText || !node.text) return;
+                const a0 = Math.max(pos, cur!.from) - pos;
+                const b0 = Math.min(pos + node.nodeSize, cur!.to) - pos;
+                const t = node.text.slice(a0, b0);
+                const re = /\s+/g;
+                let segStart = 0, words = 0, m: RegExpExecArray | null;
+                while ((m = re.exec(t))) {
+                  if (m.index > segStart && ++words % 4 === 0) {
+                    chunks.push({ a: pos + a0 + segStart, b: pos + a0 + m.index });
+                    segStart = m.index;
+                  }
+                }
+                if (segStart < t.length) chunks.push({ a: pos + a0 + segStart, b: pos + a0 + t.length });
+              });
+              return DecorationSet.create(state.doc,
+                chunks
+                  .filter(c => c.a < c.b)
+                  .map((c, i) => Decoration.inline(c.a, c.b, {
+                    class: "ir-reveal",
+                    style: `animation-delay:${Math.min(i * 90, 1200)}ms`,
+                  })));
+            }
+            const cls = cur.mode === "loading" ? "ir-loading" : "ir-sel";
             return DecorationSet.create(state.doc, [
               Decoration.inline(cur.from, cur.to, { class: cls }),
             ]);
@@ -376,8 +405,24 @@ export function DocumentRichEditor({
                 exit={leave}
                 transition={spring}
                 onKeyDown={(e) => { if (e.key === "Escape") closeIr(editor); }}
-                className="rounded-card border border-dvivid-border bg-white shadow-xl p-3 space-y-2.5"
+                className="ir-beam-host rounded-card"
               >
+                {/* Luminous orbiting border beam + sparkles while the model works */}
+                {ir.phase === "loading" && !reduceMotion && (
+                  <>
+                    <div className="ir-beam" aria-hidden />
+                    <motion.span className="ir-sparkle" style={{ top: -7, right: 20 }}
+                      animate={{ scale: [0.5, 1.2, 0.5], opacity: [0.2, 0.95, 0.2] }}
+                      transition={{ repeat: Infinity, duration: 1.6, ease: "easeInOut" }} aria-hidden>✦</motion.span>
+                    <motion.span className="ir-sparkle" style={{ bottom: -5, left: 16 }}
+                      animate={{ scale: [0.5, 1.1, 0.5], opacity: [0.2, 0.85, 0.2] }}
+                      transition={{ repeat: Infinity, duration: 1.9, delay: 0.5, ease: "easeInOut" }} aria-hidden>✧</motion.span>
+                    <motion.span className="ir-sparkle" style={{ top: 12, left: -9 }}
+                      animate={{ scale: [0.5, 1.15, 0.5], opacity: [0.2, 0.9, 0.2] }}
+                      transition={{ repeat: Infinity, duration: 1.7, delay: 1, ease: "easeInOut" }} aria-hidden>✦</motion.span>
+                  </>
+                )}
+                <div className="ir-beam-inner rounded-card border border-dvivid-border/60 shadow-xl p-3 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-dvivid-text-primary flex items-center gap-1.5">
                     <span aria-hidden>✦</span> Rewrite with AI
@@ -472,6 +517,7 @@ export function DocumentRichEditor({
                     Rewrite
                   </button>
                 )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>

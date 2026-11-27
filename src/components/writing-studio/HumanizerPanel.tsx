@@ -21,11 +21,21 @@ import {
   readReportRuns, ScoreBadge, TabBar, Toggle, type StudioVersion,
 } from "./shared";
 
-type Mode = "balanced" | "titan";
+import type { RyneModelSpec } from "@/lib/writing-review/ryne-models";
 
-/** Full-length drafts default to Titan; the consultant can still switch. */
+type Mode = string;
+
+/** Full-length drafts default to the recommended model; the consultant can still switch. */
 export const TITAN_DEFAULT_MIN_WORDS = 500;
-export const defaultHumanizerMode = (words: number): Mode => words > TITAN_DEFAULT_MIN_WORDS ? "titan" : "balanced";
+export const defaultHumanizerMode = (words: number, recommended = "titan"): Mode =>
+  words > TITAN_DEFAULT_MIN_WORDS ? recommended : "balanced";
+
+/** Server-verified defaults — used until GET /api/writing-review/models resolves. */
+const FALLBACK_MODELS: RyneModelSpec[] = [
+  { id: "apex", label: "Apex", pricePer1kUsd: 0.5, recommended: true },
+  { id: "titan", label: "Titan", pricePer1kUsd: 0.5 },
+  { id: "balanced", label: "Balanced", pricePer1kUsd: 0.08 },
+];
 
 interface Pair { key: string; left: string; right: string; linked: boolean; heading: boolean; warn: boolean }
 
@@ -73,7 +83,8 @@ export interface HumanizerPanelProps {
 }
 
 export default function HumanizerPanel({ version, configured, pricing, apiUrl, documentId, detection, onSave, onDirtyChange, restorable, onRestore, onVersionDrift }: HumanizerPanelProps) {
-  const [mode, setMode] = useState<Mode>(() => defaultHumanizerMode(countWords(version.content)));
+  const [models, setModels] = useState<RyneModelSpec[]>(FALLBACK_MODELS);
+  const [mode, setMode] = useState<Mode>(() => defaultHumanizerMode(countWords(version.content), "apex"));
   const [modeChosen, setModeChosen] = useState(false);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -114,8 +125,17 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
   const plan = useMemo(() => planSections(version.content, { ...DEFAULT_SECTION_LIMITS, targetUnits: MAX_SECTION_WORDS }), [version.content]);
   const billableWords = plan.ok ? plan.bodyWords : countWords(version.content);
   const longDraft = countWords(version.content) > TITAN_DEFAULT_MIN_WORDS;
-  useEffect(() => { if (!modeChosen) setMode(longDraft ? "titan" : "balanced"); }, [longDraft, modeChosen]);
-  const per1k = mode === "titan" ? pricing.titanPer1k : pricing.balancedPer1k;
+  const recommendedModel = models.find(m => m.recommended)?.id ?? "titan";
+  useEffect(() => {
+    fetch("/api/writing-review/models")
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d.models) && d.models.length) setModels(d.models); })
+      .catch(() => { /* offline — verified defaults stay */ });
+  }, []);
+  useEffect(() => { if (!modeChosen) setMode(longDraft ? recommendedModel : "balanced"); }, [longDraft, modeChosen, recommendedModel]);
+  const activeModel = models.find(m => m.id === mode);
+  const modelLabel = (id?: string) => models.find(m => m.id === id)?.label ?? id ?? "";
+  const per1k = activeModel?.pricePer1kUsd ?? (mode === "titan" ? pricing.titanPer1k : pricing.balancedPer1k);
   const estimate = (billableWords / 1000) * per1k;
   const output = edited ?? result?.content ?? "";
   const pairs = useMemo(() => buildPairs(version.content, result, edited), [version.content, result, edited]);
@@ -212,7 +232,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
     if ((edited !== null || applied) && !window.confirm("Discard the current humanized draft and generate a new one?")) return;
     const requests = plan.ok ? plan.sections.filter(s => s.kind === "BODY").length : 0;
     if (!window.confirm(
-      `Humanize the full document with Ryne ${mode === "titan" ? "Titan" : "Balanced"}?\n\n` +
+      `Humanize the full document with Ryne ${modelLabel(mode)}?\n\n` +
       `Sends saved version v${version.versionNumber}: ${billableWords.toLocaleString()} words` +
       `${plan.sections.some(s => s.kind === "HEADING") ? " (headings are kept unchanged and not sent)" : ""}.\n` +
       `Estimated cost: ~${fmtUsd(estimate)} for the whole document (documented $${per1k}/1K words — billed by Ryne in prepaid credits).\n` +
@@ -315,16 +335,17 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
           <span className="whitespace-nowrap">Humanizer model</span>
           <select value={mode} onChange={e => { setMode(e.target.value as Mode); setModeChosen(true); }} disabled={running}
             className="border border-dvivid-border rounded-input px-3 py-2 text-sm bg-white focus:outline-none focus-visible:shadow-focus">
-            <option value="balanced">Balanced{longDraft ? "" : " (Recommended)"} · ${pricing.balancedPer1k}/1K</option>
-            <option value="titan">Titan{longDraft ? " (Recommended)" : ""} · ${pricing.titanPer1k}/1K</option>
+            {models.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.label}{(m.recommended ? longDraft : m.id === "balanced" && !longDraft) ? " (Recommended)" : ""}{m.autoDetected ? " — New" : ""} · ${m.pricePer1kUsd.toFixed(2)}/1K
+              </option>
+            ))}
           </select>
         </label>
         <p className="hidden md:block text-xs text-dvivid-text-secondary max-w-sm">
-          {longDraft && mode === "titan"
-            ? `Titan is recommended for full-length SOPs (over ${TITAN_DEFAULT_MIN_WORDS} words).`
-            : mode === "titan"
-              ? "Strongest rewrite for strict detectors. English only."
-              : "Keeps your structure and phrasing while making it read more naturally."}
+          {longDraft && mode === recommendedModel
+            ? `${modelLabel(mode)} is recommended for full-length SOPs (over ${TITAN_DEFAULT_MIN_WORDS} words).`
+            : activeModel?.description ?? "Keeps your structure and phrasing while making it read more naturally."}
         </p>
         <div className="ml-auto flex items-center gap-3 text-xs text-dvivid-text-secondary">
           <span>Words: <b className="text-dvivid-text-primary">{stats.ow.toLocaleString()}</b></span>
@@ -406,7 +427,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
         <div className={`${view === "humanized" ? "flex" : "hidden"} lg:flex flex-col min-w-0 border rounded-card ${result ? "border-green-200" : "border-dvivid-border"}`}>
           <div className={`flex items-center justify-between gap-2 px-4 py-3 border-b rounded-t-card ${result ? "bg-dvivid-success-light/60 border-green-100" : "bg-dvivid-surface-alt border-dvivid-border-light"}`}>
             <h2 className="text-sm font-semibold text-dvivid-text-primary truncate">
-              Humanized SOP {result && <span className="font-normal text-dvivid-text-muted">· Ryne {result.mode === "titan" ? "Titan" : "Balanced"}{edited !== null ? " · edited" : ""}</span>}
+              Humanized SOP {result && <span className="font-normal text-dvivid-text-muted">· Ryne {modelLabel(result.mode)}{edited !== null ? " · edited" : ""}</span>}
               {result && result.proofreadPatchesApplied > 0 && (
                 <span className="ml-2 align-middle inline-flex px-1.5 py-0.5 rounded-sm bg-dvivid-surface-alt border border-dvivid-border-light text-[10px] font-normal text-dvivid-text-secondary"
                   title={result.proofreadSummary.map(p => `${p.category}: "${p.find}" → "${p.replace}"`).join("\n")}>
@@ -435,7 +456,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
             {running ? (
               <div className="space-y-3" role="status">
                 <p className="text-sm text-dvivid-text-secondary">
-                  Humanizing {billableWords.toLocaleString()} words with Ryne {mode === "titan" ? "Titan" : "Balanced"}… {elapsed}s
+                  Humanizing {billableWords.toLocaleString()} words with Ryne {modelLabel(mode)}… {elapsed}s
                   <span className="block text-xs text-dvivid-text-muted">Full documents usually take 20–90 seconds.</span>
                 </p>
                 {Array.from({ length: 7 }, (_, i) => (
@@ -450,7 +471,7 @@ export default function HumanizerPanel({ version, configured, pricing, apiUrl, d
                   Ryne rewrites every paragraph while keeping the structure, names, institutions and dates. You can compare, edit and decide before anything is saved.
                 </p>
                 <PrimaryButton onClick={humanize} disabled={!configured || !plan.ok}>Humanize Document</PrimaryButton>
-                <p className="text-[11px] text-dvivid-text-muted">~{fmtUsd(estimate)} · {billableWords.toLocaleString()} words · {mode === "titan" ? "Titan" : "Balanced"}</p>
+                <p className="text-[11px] text-dvivid-text-muted">~{fmtUsd(estimate)} · {billableWords.toLocaleString()} words · {modelLabel(mode)}</p>
                 {!configured && <p className="text-xs text-dvivid-error">Ryne is not configured on the server.</p>}
               </div>
             ) : editing ? (

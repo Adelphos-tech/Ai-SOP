@@ -13,6 +13,7 @@ import {
   sanitizeMessage,
 } from "./detection";
 import { createHash, randomUUID } from "crypto";
+import { normalizeRyneModel, ryneModelPricePer1k } from "./ryne-models";
 import {
   canonicalUnitsKey,
   getOperation,
@@ -26,13 +27,14 @@ import {
 const TIMEOUT_MS = 45_000; // rewrites are slower than scoring
 const MAX_CHARS = 20_000;  // single-passage guard; well under Ryne limits
 
-/** Documented pricing: Balanced $0.08/1K words, Titan $0.50/1K words. */
-export const REWRITE_PRICE_PER_1K_USD = { balanced: 0.08, titan: 0.50 } as const;
-export type RewriteMode = keyof typeof REWRITE_PRICE_PER_1K_USD;
+/** Model ids come from the Ryne model registry (ryne-models.ts) —
+ *  verified defaults + docs auto-discovery + RYNE_EXTRA_MODELS.
+ *  Callers validate with normalizeRyneModel/isRyneModel. */
+export type RewriteMode = string;
 
 export function rewriteCostUsd(text: string, mode: RewriteMode): number {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return (words / 1000) * REWRITE_PRICE_PER_1K_USD[mode];
+  return (words / 1000) * ryneModelPricePer1k(mode);
 }
 
 export interface RewriteRequestOptions {
@@ -104,7 +106,7 @@ export async function runRewrite(opts: RewriteRequestOptions): Promise<RewriteOu
       notice: "Ryne paid calls are disabled — set RYNE_PAID_CALLS_ENABLED=1 on the server to enable rewrites. No text was sent and no charges were made.",
     };
   }
-  const mode = opts.mode === "titan" ? "titan" : "balanced";
+  const mode = normalizeRyneModel(opts.mode);
   const text = opts.text.trim();
   if (!opts.confirmPaid || !text) {
     return {

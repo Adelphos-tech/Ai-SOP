@@ -142,10 +142,14 @@ check("detector statuses are honest without credentials", () => {
   const d = listDetectorStatuses();
   const turnitin = d.find(x => x.detector === "TURNITIN")!;
   assert.equal(turnitin.status, "UNAVAILABLE");
-  d.filter(x => x.detector !== "TURNITIN").forEach(x => {
+  d.filter(x => x.detector !== "TURNITIN" && x.detector !== "QUILLBOT" && x.detector !== "ORIGINALITY").forEach(x => {
     assert.ok(["NOT_CONNECTED", "PENDING"].includes(x.status));
     assert.equal(x.scorePercent, undefined);
   });
+  // Disabled detectors (verified broken upstream) are honestly UNAVAILABLE.
+  for (const x of ["QUILLBOT", "ORIGINALITY"]) {
+    assert.equal(d.find(s => s.detector === x)!.status, "UNAVAILABLE");
+  }
 });
 
 check("analysis summary counts states, never composites a score", () => {
